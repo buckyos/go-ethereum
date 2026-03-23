@@ -40,6 +40,9 @@ import (
 
 // Register adds the engine API to the full node.
 func Register(stack *node.Node, backend *eth.Ethereum) error {
+	if !backend.BlockChain().Config().HasMergeTransition() {
+		return nil
+	}
 	log.Warn("Engine API enabled", "protocol", "eth")
 	stack.RegisterAPIs([]rpc.API{
 		{
@@ -125,6 +128,9 @@ type ConsensusAPI struct {
 // NewConsensusAPI creates a new consensus api for the given backend.
 // The underlying blockchain needs to have a valid terminal total difficulty set.
 func NewConsensusAPI(eth *eth.Ethereum) *ConsensusAPI {
+	if !eth.BlockChain().Config().HasMergeTransition() {
+		log.Warn("Engine API started on chain without merge transition")
+	}
 	if eth.BlockChain().Config().TerminalTotalDifficulty == nil {
 		log.Warn("Engine API started but chain not configured for merge yet")
 	}
@@ -576,7 +582,7 @@ func (api *ConsensusAPI) heartbeat() {
 		// Sleep a bit and retrieve the last known consensus updates
 		time.Sleep(5 * time.Second)
 
-		if api.eth.BlockChain().Config().EthPoWForkSupport {
+		if !api.eth.BlockChain().Config().HasMergeTransition() {
 			continue
 		}
 		// If the network is not yet merged/merging, don't bother scaring the user

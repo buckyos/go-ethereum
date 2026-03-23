@@ -667,6 +667,14 @@ func (c *ChainConfig) DefaultNetworkID() uint64 {
 	return 0
 }
 
+// HasMergeTransition reports whether the chain is configured to ever hand block
+// production or forkchoice control over to the Engine API / beacon path. Pure
+// PoW chains such as USDB return false and keep using the legacy consensus
+// engine directly for their full lifetime.
+func (c *ChainConfig) HasMergeTransition() bool {
+	return c != nil && (c.TerminalTotalDifficulty != nil || c.TerminalTotalDifficultyPassed)
+}
+
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.
 func (c *ChainConfig) IsTerminalPoWBlock(parentTotalDiff *big.Int, totalDiff *big.Int) bool {
 	if c.TerminalTotalDifficulty == nil {

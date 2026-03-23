@@ -1259,7 +1259,7 @@ func (w *worker) getSealingBlock(parent common.Hash, timestamp uint64, coinbase 
 // isTTDReached returns the indicator if the given block has reached the total
 // terminal difficulty for The Merge transition.
 func (w *worker) isTTDReached(header *types.Header) bool {
-	if w.chain.Config().EthPoWForkSupport {
+	if !w.chain.Config().HasMergeTransition() {
 		return false
 	}
 	td, ttd := w.chain.GetTd(header.ParentHash, header.Number.Uint64()-1), w.chain.Config().TerminalTotalDifficulty

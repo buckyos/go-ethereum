@@ -249,5 +249,11 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 		}, notify, noverify)
 		engine.(*ethash.Ethash).SetThreads(-1) // Disable CPU mining
 	}
+	// Only networks with an actual merge transition should route the engine
+	// through the beacon wrapper and Engine API semantics. Genesis-start PoW
+	// chains such as USDB keep using the legacy engine directly.
+	if !chainConfig.HasMergeTransition() {
+		return engine
+	}
 	return beacon.New(engine)
 }

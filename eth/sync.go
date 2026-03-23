@@ -253,7 +253,7 @@ func (h *handler) doSync(op *chainSyncOp) error {
 	}
 	// Run the sync cycle, and disable snap sync if we're past the pivot block
 	ttd := h.chain.Config().TerminalTotalDifficulty
-	if h.chain.Config().EthPoWForkSupport {
+	if !h.chain.Config().HasMergeTransition() {
 		ttd = nil
 	}
 	err := h.downloader.LegacySync(op.peer.ID(), op.head, op.td, ttd, op.mode)

@@ -130,3 +130,16 @@ func TestEffectiveChainIDKeepsSingleUSDBChainID(t *testing.T) {
 		t.Fatalf("usdb chain must not inherit the legacy alt chain id switch")
 	}
 }
+
+func TestHasMergeTransition(t *testing.T) {
+	if USDBChainConfig.HasMergeTransition() {
+		t.Fatalf("usdb chain must stay on the pure pow path")
+	}
+	if !SepoliaChainConfig.HasMergeTransition() {
+		t.Fatalf("sepolia must advertise merge transition support")
+	}
+	cfg := &ChainConfig{TerminalTotalDifficultyPassed: true}
+	if !cfg.HasMergeTransition() {
+		t.Fatalf("post-merge debug config must still report merge transition support")
+	}
+}
