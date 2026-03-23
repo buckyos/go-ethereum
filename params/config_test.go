@@ -96,3 +96,37 @@ func TestCheckCompatible(t *testing.T) {
 		}
 	}
 }
+
+func TestEffectiveChainIDUsesLegacyAltChainID(t *testing.T) {
+	cfg := &ChainConfig{
+		ChainID:           big.NewInt(1),
+		EthPoWForkBlock:   big.NewInt(100),
+		EthPoWForkSupport: true,
+		ChainID_ALT:       big.NewInt(10001),
+	}
+	if got := cfg.EffectiveChainID(big.NewInt(99)); got.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("unexpected pre-fork chain id: %v", got)
+	}
+	if got := cfg.EffectiveChainID(big.NewInt(100)); got.Cmp(big.NewInt(10001)) != 0 {
+		t.Fatalf("unexpected post-fork chain id: %v", got)
+	}
+	if got := cfg.DefaultNetworkID(); got != 10001 {
+		t.Fatalf("unexpected default network id: %d", got)
+	}
+}
+
+func TestEffectiveChainIDKeepsSingleUSDBChainID(t *testing.T) {
+	cfg := USDBChainConfig
+	if got := cfg.EffectiveChainID(big.NewInt(0)); got.Cmp(cfg.ChainID) != 0 {
+		t.Fatalf("unexpected genesis chain id: %v", got)
+	}
+	if got := cfg.EffectiveChainID(big.NewInt(100)); got.Cmp(cfg.ChainID) != 0 {
+		t.Fatalf("unexpected ongoing chain id: %v", got)
+	}
+	if got := cfg.DefaultNetworkID(); got != USDBNetworkID {
+		t.Fatalf("unexpected default network id: %d", got)
+	}
+	if cfg.HasEthPoWChainIDSwitch() {
+		t.Fatalf("usdb chain must not inherit the legacy alt chain id switch")
+	}
+}

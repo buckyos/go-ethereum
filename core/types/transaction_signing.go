@@ -41,7 +41,7 @@ func MakeSigner(config *params.ChainConfig, blockNumber *big.Int) Signer {
 	var signer Signer
 	switch {
 	case config.IsEthPoWFork(blockNumber):
-		signer = NewLondonSigner(config.ChainID_ALT)
+		signer = NewLondonSigner(config.EffectiveChainID(blockNumber))
 	case config.IsLondon(blockNumber):
 		signer = NewLondonSigner(config.ChainID)
 	case config.IsBerlin(blockNumber):
@@ -67,7 +67,7 @@ func LatestSigner(config *params.ChainConfig) Signer {
 
 	if config.ChainID != nil {
 		if config.EthPoWForkBlock != nil {
-			return NewLondonSigner(config.ChainID_ALT)
+			return NewLondonSigner(config.EffectiveChainID(config.EthPoWForkBlock))
 		}
 		if config.LondonBlock != nil {
 			return NewLondonSigner(config.ChainID)

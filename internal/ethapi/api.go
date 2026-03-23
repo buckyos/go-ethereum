@@ -449,7 +449,7 @@ func (s *PersonalAccountAPI) signTransaction(ctx context.Context, args *Transact
 	header, _ := s.b.HeaderByNumber(context.Background(), rpc.LatestBlockNumber)
 	chainId := s.b.ChainConfig().ChainID
 	if header != nil && s.b.ChainConfig().IsEthPoWFork(header.Number) {
-		chainId = s.b.ChainConfig().ChainID_ALT
+		chainId = s.b.ChainConfig().EffectiveChainID(header.Number)
 	}
 	return wallet.SignTxWithPassphrase(account, passwd, tx, chainId)
 }
@@ -622,7 +622,8 @@ func NewBlockChainAPI(b Backend) *BlockChainAPI {
 func (api *BlockChainAPI) ChainId() *hexutil.Big {
 	header, _ := api.b.HeaderByNumber(context.Background(), rpc.LatestBlockNumber)
 	if header != nil && api.b.ChainConfig().IsEthPoWFork(header.Number) {
-		return (*hexutil.Big)(api.b.ChainConfig().ChainID_ALT)
+		chainID := api.b.ChainConfig().EffectiveChainID(header.Number)
+		return (*hexutil.Big)(chainID)
 	}
 	return (*hexutil.Big)(api.b.ChainConfig().ChainID)
 }
@@ -1657,7 +1658,7 @@ func (s *TransactionAPI) sign(addr common.Address, tx *types.Transaction) (*type
 	header, _ := s.b.HeaderByNumber(context.Background(), rpc.LatestBlockNumber)
 	chainId := s.b.ChainConfig().ChainID
 	if header != nil && s.b.ChainConfig().IsEthPoWFork(header.Number) {
-		chainId = s.b.ChainConfig().ChainID_ALT
+		chainId = s.b.ChainConfig().EffectiveChainID(header.Number)
 	}
 	return wallet.SignTx(account, tx, chainId)
 }
@@ -1723,7 +1724,7 @@ func (s *TransactionAPI) SendTransaction(ctx context.Context, args TransactionAr
 	header, _ := s.b.HeaderByNumber(context.Background(), rpc.LatestBlockNumber)
 	chainId := s.b.ChainConfig().ChainID
 	if header != nil && s.b.ChainConfig().IsEthPoWFork(header.Number) {
-		chainId = s.b.ChainConfig().ChainID_ALT
+		chainId = s.b.ChainConfig().EffectiveChainID(header.Number)
 	}
 	signed, err := wallet.SignTx(account, tx, chainId)
 	if err != nil {

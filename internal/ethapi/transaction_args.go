@@ -122,7 +122,7 @@ func (args *TransactionArgs) setDefaults(ctx context.Context, b Backend) error {
 	header, _ := b.HeaderByNumber(context.Background(), rpc.LatestBlockNumber)
 	chainId := b.ChainConfig().ChainID
 	if header != nil && b.ChainConfig().IsEthPoWFork(header.Number) {
-		chainId = b.ChainConfig().ChainID_ALT
+		chainId = b.ChainConfig().EffectiveChainID(header.Number)
 	}
 	want := chainId
 	if args.ChainID != nil {

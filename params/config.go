@@ -612,6 +612,18 @@ func (c *ChainConfig) HasEthPoWTransitionReset() bool {
 	return c.EthPoWForkBlock != nil && c.EthPoWForkBlock.Sign() > 0
 }
 
+// HasEthPoWChainIDSwitch reports whether the chain uses the legacy ETHW
+// replay-protection switch from ChainID to ChainID_ALT at the EthPoW fork.
+// Genesis-start PoW chains such as USDB keep a single chain ID and therefore
+// must not inherit this historical transition behavior.
+func (c *ChainConfig) HasEthPoWChainIDSwitch() bool {
+	return c != nil &&
+		c.HasEthPoWTransitionReset() &&
+		c.ChainID != nil &&
+		c.ChainID_ALT != nil &&
+		c.ChainID.Cmp(c.ChainID_ALT) != 0
+}
+
 // EthPoWMinimumDifficulty returns the minimum difficulty floor to use on the
 // ETHW no-bomb path for the given chain. USDB starts from genesis with a lower
 // bootstrap floor than the legacy Ethereum/ETHW defaults.
@@ -620,6 +632,39 @@ func (c *ChainConfig) EthPoWMinimumDifficulty() *big.Int {
 		return new(big.Int).Set(USDBMinimumDifficulty)
 	}
 	return new(big.Int).Set(MinimumDifficulty)
+}
+
+// EffectiveChainID returns the chain ID that should be exposed for signing and
+// chain-aware APIs at the given block number. Legacy ETHW transition chains use
+// ChainID_ALT after the EthPoW fork, while genesis-start PoW chains keep using
+// ChainID for their entire lifetime.
+func (c *ChainConfig) EffectiveChainID(num *big.Int) *big.Int {
+	if c == nil {
+		return new(big.Int)
+	}
+	if c.HasEthPoWChainIDSwitch() && c.IsEthPoWFork(num) {
+		return new(big.Int).Set(c.ChainID_ALT)
+	}
+	if c.ChainID != nil {
+		return new(big.Int).Set(c.ChainID)
+	}
+	return new(big.Int)
+}
+
+// DefaultNetworkID returns the default p2p network identity to use when the
+// operator didn't explicitly configure one. Legacy ETHW transition chains keep
+// their historical alt-network identity; genesis-start PoW chains use ChainID.
+func (c *ChainConfig) DefaultNetworkID() uint64 {
+	if c == nil {
+		return 0
+	}
+	if c.EthPoWForkSupport && c.HasEthPoWChainIDSwitch() {
+		return c.ChainID_ALT.Uint64()
+	}
+	if c.ChainID != nil {
+		return c.ChainID.Uint64()
+	}
+	return 0
 }
 
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.
