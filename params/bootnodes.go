@@ -85,6 +85,15 @@ var KilnBootnodes = []string{
 	"enode://b74bd2e8a9f0c53f0c93bcce80818f2f19439fd807af5c7fbc3efb10130c6ee08be8f3aaec7dc0a057ad7b2a809c8f34dc62431e9b6954b07a6548cc59867884@164.92.140.200:30303",
 }
 
+// USDBBootnodes contains the bootstrap set for the standalone USDB network.
+// The initial built-in config intentionally leaves this empty until production
+// bootnodes are provisioned.
+var USDBBootnodes = []string{}
+
+// USDBV5Bootnodes contains the discovery-v5 bootstrap set for the standalone
+// USDB network. It remains empty until dedicated USDB discovery nodes exist.
+var USDBV5Bootnodes = []string{}
+
 var V5Bootnodes = []string{
 	// Teku team's bootnode
 	"enr:-KG4QOtcP9X1FbIMOe17QNMKqDxCpm14jcX5tiOE4_TyMrFqbmhPZHK_ZPG2Gxb1GE2xdtodOfx9-cgvNtxnRyHEmC0ghGV0aDKQ9aX9QgAAAAD__________4JpZIJ2NIJpcIQDE8KdiXNlY3AyNTZrMaEDhpehBDbZjM_L9ek699Y7vhUJ-eAdMyQW_Fil522Y0fODdGNwgiMog3VkcIIjKA",

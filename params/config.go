@@ -33,7 +33,12 @@ var (
 	RinkebyGenesisHash = common.HexToHash("0x6341fd3daf94b748c72ced5a5b26028f2474f5f00d824504e4fa37a75767e177")
 	GoerliGenesisHash  = common.HexToHash("0xbf7e331f7f7c1dd2e05159666b3bf8bc7a8a3a9eb1d518969eab529dd9b88c1a")
 	KilnGenesisHash    = common.HexToHash("0x51c7fe41be669f69c45c33a56982cbde405313342d9e2b00d7c91a7b284dd4f8")
+	USDBGenesisHash    = common.HexToHash("0x4548fb39b8a73ab3f3d997a6d8c2869f83fadbc9e0d84ac198d6424fbbab90b4")
 )
+
+// USDBNetworkID is the provisional network and replay-protection identifier for
+// the standalone USDB chain bootstrap configuration.
+const USDBNetworkID uint64 = 20260323
 
 // TrustedCheckpoints associates each known checkpoint with the genesis hash of
 // the chain it belongs to.
@@ -80,6 +85,31 @@ var (
 		EthPoWForkSupport:       true,
 		ChainID_ALT:             big.NewInt(10001), //10001
 		TerminalTotalDifficulty: nil,               // 58_750_000_000_000_000_000_000
+		Ethash:                  new(EthashConfig),
+	}
+
+	// USDBChainConfig contains the chain parameters for the standalone USDB
+	// proof-of-work network. The chain starts from genesis with London enabled and
+	// routes difficulty calculation through the ETHW no-bomb path by setting the
+	// EthPoW fork block to 0.
+	USDBChainConfig = &ChainConfig{
+		ChainID:                 new(big.Int).SetUint64(USDBNetworkID),
+		HomesteadBlock:          big.NewInt(0),
+		DAOForkBlock:            nil,
+		DAOForkSupport:          true,
+		EIP150Block:             big.NewInt(0),
+		EIP155Block:             big.NewInt(0),
+		EIP158Block:             big.NewInt(0),
+		ByzantiumBlock:          big.NewInt(0),
+		ConstantinopleBlock:     big.NewInt(0),
+		PetersburgBlock:         big.NewInt(0),
+		IstanbulBlock:           big.NewInt(0),
+		BerlinBlock:             big.NewInt(0),
+		LondonBlock:             big.NewInt(0),
+		EthPoWForkBlock:         big.NewInt(0),
+		EthPoWForkSupport:       true,
+		ChainID_ALT:             new(big.Int).SetUint64(USDBNetworkID),
+		TerminalTotalDifficulty: nil,
 		Ethash:                  new(EthashConfig),
 	}
 
@@ -295,6 +325,7 @@ var NetworkNames = map[string]string{
 	RinkebyChainConfig.ChainID.String(): "rinkeby",
 	GoerliChainConfig.ChainID.String():  "goerli",
 	SepoliaChainConfig.ChainID.String(): "sepolia",
+	USDBChainConfig.ChainID.String():    "usdb",
 }
 
 // TrustedCheckpoint represents a set of post-processed trie roots (CHT and

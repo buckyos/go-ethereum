@@ -23,7 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/urfave/cli/v2"
 )
 
@@ -126,5 +128,20 @@ func TestSetEthashAppliesUSDBFlags(t *testing.T) {
 	}
 	if cfg.Ethash.USDB.QueryTimeout != 6*time.Second {
 		t.Fatalf("unexpected ethash usdb timeout: %s", cfg.Ethash.USDB.QueryTimeout)
+	}
+}
+
+func TestMakeGenesisReturnsUSDBGenesis(t *testing.T) {
+	ctx := newCLIContext(t, []cli.Flag{USDBFlag}, "--usdb")
+
+	genesis := MakeGenesis(ctx)
+	if genesis == nil {
+		t.Fatalf("expected usdb genesis")
+	}
+	if genesis.Config != params.USDBChainConfig {
+		t.Fatalf("unexpected chain config: %#v", genesis.Config)
+	}
+	if want := core.DefaultUSDBGenesisBlock().ToBlock().Hash(); genesis.ToBlock().Hash() != want {
+		t.Fatalf("unexpected usdb genesis hash: have %s want %s", genesis.ToBlock().Hash(), want)
 	}
 }

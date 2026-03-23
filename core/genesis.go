@@ -160,6 +160,8 @@ func CommitGenesisState(db ethdb.Database, hash common.Hash) error {
 			genesis = DefaultGoerliGenesisBlock()
 		case params.SepoliaGenesisHash:
 			genesis = DefaultSepoliaGenesisBlock()
+		case params.USDBGenesisHash:
+			genesis = DefaultUSDBGenesisBlock()
 		}
 		if genesis != nil {
 			alloc = genesis.Alloc
@@ -234,10 +236,10 @@ func (e *GenesisMismatchError) Error() string {
 // SetupGenesisBlock writes or updates the genesis block in db.
 // The block that will be used is:
 //
-//                          genesis == nil       genesis != nil
-//                       +------------------------------------------
-//     db has no genesis |  main-net default  |  genesis
-//     db has genesis    |  from DB           |  genesis (if compatible)
+//	                     genesis == nil       genesis != nil
+//	                  +------------------------------------------
+//	db has no genesis |  main-net default  |  genesis
+//	db has genesis    |  from DB           |  genesis (if compatible)
 //
 // The stored chain configuration will be updated if it is compatible (i.e. does not
 // specify a fork block below the local head block). In case of a conflict, the
@@ -357,6 +359,8 @@ func (g *Genesis) configOrDefault(ghash common.Hash) *params.ChainConfig {
 		return params.GoerliChainConfig
 	case ghash == params.KilnGenesisHash:
 		return DefaultKilnGenesisBlock().Config
+	case ghash == params.USDBGenesisHash:
+		return params.USDBChainConfig
 	default:
 		return params.AllEthashProtocolChanges
 	}
@@ -511,6 +515,17 @@ func DefaultKilnGenesisBlock() *Genesis {
 		panic(err)
 	}
 	return g
+}
+
+// DefaultUSDBGenesisBlock returns the standalone USDB network genesis block.
+func DefaultUSDBGenesisBlock() *Genesis {
+	return &Genesis{
+		Config:     params.USDBChainConfig,
+		ExtraData:  []byte("USDB genesis"),
+		GasLimit:   30_000_000,
+		Difficulty: big.NewInt(8192),
+		Alloc:      GenesisAlloc{},
+	}
 }
 
 // DeveloperGenesisBlock returns the 'geth --dev' genesis block.
