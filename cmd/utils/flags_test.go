@@ -25,6 +25,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/urfave/cli/v2"
 )
@@ -143,5 +144,76 @@ func TestMakeGenesisReturnsUSDBGenesis(t *testing.T) {
 	}
 	if want := core.DefaultUSDBGenesisBlock().ToBlock().Hash(); genesis.ToBlock().Hash() != want {
 		t.Fatalf("unexpected usdb genesis hash: have %s want %s", genesis.ToBlock().Hash(), want)
+	}
+}
+
+func TestSetP2PConfigAppliesUSDBDefaultListenPort(t *testing.T) {
+	ctx := newCLIContext(t, []cli.Flag{
+		USDBFlag,
+		NodeKeyHexFlag,
+		NodeKeyFileFlag,
+		BootnodesFlag,
+		ListenPortFlag,
+		DiscoveryPortFlag,
+		NATFlag,
+		SyncModeFlag,
+		LightServeFlag,
+		LightMaxPeersFlag,
+		MaxPeersFlag,
+		MaxPendingPeersFlag,
+		NoDiscoverFlag,
+		DiscoveryV5Flag,
+		NetrestrictFlag,
+		DeveloperFlag,
+	}, "--usdb")
+
+	cfg := node.DefaultConfig
+	SetNodeConfig(ctx, &cfg)
+
+	if cfg.P2P.ListenAddr != ":31303" {
+		t.Fatalf("unexpected usdb default listen addr: %s", cfg.P2P.ListenAddr)
+	}
+}
+
+func TestSetP2PConfigKeepsExplicitListenPort(t *testing.T) {
+	ctx := newCLIContext(t, []cli.Flag{
+		USDBFlag,
+		NodeKeyHexFlag,
+		NodeKeyFileFlag,
+		BootnodesFlag,
+		ListenPortFlag,
+		DiscoveryPortFlag,
+		NATFlag,
+		SyncModeFlag,
+		LightServeFlag,
+		LightMaxPeersFlag,
+		MaxPeersFlag,
+		MaxPendingPeersFlag,
+		NoDiscoverFlag,
+		DiscoveryV5Flag,
+		NetrestrictFlag,
+		DeveloperFlag,
+	}, "--usdb", "--port", "32000")
+
+	cfg := node.DefaultConfig
+	SetNodeConfig(ctx, &cfg)
+
+	if cfg.P2P.ListenAddr != ":32000" {
+		t.Fatalf("unexpected explicit listen addr: %s", cfg.P2P.ListenAddr)
+	}
+}
+
+func TestSetNodeConfigKeepsConfigFileListenAddr(t *testing.T) {
+	ctx := newCLIContext(t, []cli.Flag{
+		USDBFlag,
+	}, "--usdb")
+
+	cfg := node.DefaultConfig
+	cfg.P2P.ListenAddr = ":30303"
+	cfg.P2PListenAddrConfigured = true
+	SetNodeConfig(ctx, &cfg)
+
+	if cfg.P2P.ListenAddr != ":30303" {
+		t.Fatalf("unexpected configured listen addr override: %s", cfg.P2P.ListenAddr)
 	}
 }

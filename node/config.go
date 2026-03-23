@@ -68,6 +68,12 @@ type Config struct {
 	// Configuration of peer-to-peer networking.
 	P2P p2p.Config
 
+	// P2PListenAddrConfigured reports whether P2P.ListenAddr was explicitly set
+	// by an external config source such as TOML. Network presets can use this to
+	// avoid overwriting deliberate operator choices that happen to match the
+	// legacy default port.
+	P2PListenAddrConfigured bool `toml:"-"`
+
 	// KeyStoreDir is the file system folder that contains private keys. The directory can
 	// be specified as a relative path, in which case it is resolved relative to the
 	// current directory.

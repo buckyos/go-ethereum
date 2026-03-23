@@ -18,6 +18,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -92,6 +93,14 @@ type gethConfig struct {
 	Metrics  metrics.Config
 }
 
+type gethConfigPresence struct {
+	Node struct {
+		P2P struct {
+			ListenAddr *string
+		}
+	}
+}
+
 func loadConfig(file string, cfg *gethConfig) error {
 	f, err := os.Open(file)
 	if err != nil {
@@ -101,6 +110,18 @@ func loadConfig(file string, cfg *gethConfig) error {
 
 	err = tomlSettings.NewDecoder(bufio.NewReader(f)).Decode(cfg)
 	// Add file name to errors that have a line number.
+	if _, ok := err.(*toml.LineError); ok {
+		err = errors.New(file + ", " + err.Error())
+	}
+	return err
+}
+
+func loadConfigPresence(file string, cfg *gethConfigPresence) error {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	err = tomlSettings.NewDecoder(bytes.NewReader(data)).Decode(cfg)
 	if _, ok := err.(*toml.LineError); ok {
 		err = errors.New(file + ", " + err.Error())
 	}
@@ -131,6 +152,11 @@ func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
 		if err := loadConfig(file, &cfg); err != nil {
 			utils.Fatalf("%v", err)
 		}
+		var presence gethConfigPresence
+		if err := loadConfigPresence(file, &presence); err != nil {
+			utils.Fatalf("%v", err)
+		}
+		cfg.Node.P2PListenAddrConfigured = presence.Node.P2P.ListenAddr != nil
 	}
 
 	// Apply flags.

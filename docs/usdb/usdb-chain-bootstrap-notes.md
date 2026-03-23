@@ -198,6 +198,34 @@
 
 这些组成了完整的“链身份”，不只是交易签名里的 `chainId`。
 
+### 3.3.1 第一阶段网络默认值收口
+
+第一阶段建议只收口最影响日常开发和节点隔离的默认值：
+
+- `P2P Listen Port`
+  - `--usdb` 使用独立默认端口
+  - 第一阶段固定为 `31303`
+  - 目的不是改变链身份，而是避免与本机已有 Ethereum / ETHW 节点默认端口冲突
+  - 也避免节点被误连到另一个默认运行在 `30303` 上的网络实例
+- `HTTP / WS / Auth`
+  - 第一阶段保持现有默认值
+  - 这些端口只影响本机运维与调试，不影响链身份与 p2p 隔离
+  - 如果后续经常并行运行多条链，再考虑为 `--usdb` 单独提供默认值
+- `bootnodes / DNS discovery`
+  - 第一阶段保持空集合
+  - 单机 bring-up 或少量节点联调时，可直接使用：
+    - `--bootnodes`
+    - static peers
+    - `admin.addPeer(...)`
+  - 待进入多机开发或公开测试网阶段后，再补正式 `USDBBootnodes` 和 DNS discovery
+
+也就是说，当前阶段的最小可行网络默认值策略是：
+
+- `ChainID / NetworkId / genesis hash` 已独立
+- `P2P` 默认端口独立
+- `HTTP / WS / Auth` 暂沿用通用默认值
+- `bootnodes / DNS` 暂不内置
+
 ## 3.4 genesis：默认不做预挖与预分配
 
 结论：

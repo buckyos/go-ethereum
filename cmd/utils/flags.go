@@ -71,6 +71,8 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+const usdbDefaultP2PPort = 31303
+
 // These are all the command line flags we support.
 // If you add to this list, please remember to include the
 // flag in the appropriate command definition.
@@ -1182,6 +1184,19 @@ func setListenAddress(ctx *cli.Context, cfg *p2p.Config) {
 	}
 }
 
+// applyUSDBDefaultListenAddress assigns the USDB-specific default p2p listen
+// port when the operator selected --usdb but did not explicitly configure a
+// listener via CLI or config file.
+func applyUSDBDefaultListenAddress(ctx *cli.Context, cfg *node.Config) {
+	if ctx.IsSet(ListenPortFlag.Name) || !ctx.Bool(USDBFlag.Name) {
+		return
+	}
+	if cfg.P2PListenAddrConfigured || cfg.P2P.ListenAddr != node.DefaultConfig.P2P.ListenAddr {
+		return
+	}
+	cfg.P2P.ListenAddr = fmt.Sprintf(":%d", usdbDefaultP2PPort)
+}
+
 // setNAT creates a port mapper from command line flags.
 func setNAT(ctx *cli.Context, cfg *p2p.Config) {
 	if ctx.IsSet(NATFlag.Name) {
@@ -1503,6 +1518,7 @@ func SetP2PConfig(ctx *cli.Context, cfg *p2p.Config) {
 // SetNodeConfig applies node-related command line flags to the config.
 func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 	SetP2PConfig(ctx, &cfg.P2P)
+	applyUSDBDefaultListenAddress(ctx, cfg)
 	setIPC(ctx, cfg)
 	setHTTP(ctx, cfg)
 	setGraphQL(ctx, cfg)
