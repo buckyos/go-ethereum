@@ -612,6 +612,16 @@ func (c *ChainConfig) HasEthPoWTransitionReset() bool {
 	return c.EthPoWForkBlock != nil && c.EthPoWForkBlock.Sign() > 0
 }
 
+// EthPoWMinimumDifficulty returns the minimum difficulty floor to use on the
+// ETHW no-bomb path for the given chain. USDB starts from genesis with a lower
+// bootstrap floor than the legacy Ethereum/ETHW defaults.
+func (c *ChainConfig) EthPoWMinimumDifficulty() *big.Int {
+	if c != nil && c.ChainID != nil && c.ChainID.Cmp(new(big.Int).SetUint64(USDBNetworkID)) == 0 {
+		return new(big.Int).Set(USDBMinimumDifficulty)
+	}
+	return new(big.Int).Set(MinimumDifficulty)
+}
+
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.
 func (c *ChainConfig) IsTerminalPoWBlock(parentTotalDiff *big.Int, totalDiff *big.Int) bool {
 	if c.TerminalTotalDifficulty == nil {

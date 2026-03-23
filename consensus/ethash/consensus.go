@@ -349,7 +349,7 @@ func CalcDifficulty(config *params.ChainConfig, time uint64, parent *types.Heade
 				return big.NewInt(1) // Reset difficulty for the legacy ETHW fork transition.
 			}
 		}
-		return calcDifficultyEthPoW(time, parent)
+		return calcDifficultyEthPoW(time, parent, config.EthPoWMinimumDifficulty())
 	case config.IsGrayGlacier(next):
 		return calcDifficultyEip5133(time, parent)
 	case config.IsArrowGlacier(next):
@@ -381,7 +381,7 @@ var (
 
 // calcDifficultyEthPOW creates a difficultyCalculator with the origin Proof-of-work (PoW).
 // Remain old calculations & deleted fakeBlockNumber
-func calcDifficultyEthPoW(time uint64, parent *types.Header) *big.Int {
+func calcDifficultyEthPoW(time uint64, parent *types.Header, minimumDifficulty *big.Int) *big.Int {
 	// Note, the calculations below looks at the parent number, which is 1 below
 	// the block number. Thus we remove one from the delay given
 	// https://github.com/ethereum/EIPs/issues/100.
@@ -415,8 +415,8 @@ func calcDifficultyEthPoW(time uint64, parent *types.Header) *big.Int {
 	x.Add(parent.Difficulty, x)
 
 	// minimum difficulty can ever be (before exponential factor)
-	if x.Cmp(params.MinimumDifficulty) < 0 {
-		x.Set(params.MinimumDifficulty)
+	if x.Cmp(minimumDifficulty) < 0 {
+		x.Set(minimumDifficulty)
 	}
 	return x
 }

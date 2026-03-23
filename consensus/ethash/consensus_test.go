@@ -185,12 +185,28 @@ func TestCalcDifficultySkipsEthPoWTransitionResetForGenesisChain(t *testing.T) {
 		Time:       2000,
 		Difficulty: new(big.Int).Set(params.MinimumDifficulty),
 	}
-	want := calcDifficultyEthPoW(2009, parentAtFormerRebaseHeight)
+	want := calcDifficultyEthPoW(2009, parentAtFormerRebaseHeight, config.EthPoWMinimumDifficulty())
 	if diff := CalcDifficulty(config, 2009, parentAtFormerRebaseHeight); diff.Cmp(want) != 0 {
 		t.Fatalf("unexpected difficulty for genesis-start PoW chain: have %v want %v", diff, want)
 	}
 	if want.Cmp(params.ETHWStartDifficulty) == 0 {
 		t.Fatalf("test invariant broken: expected normal difficulty path, not ETHW reset value")
+	}
+}
+
+func TestCalcDifficultyUsesUSDBMinimumDifficulty(t *testing.T) {
+	config := params.USDBChainConfig
+	parent := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1000,
+		Difficulty: new(big.Int).Set(params.USDBGenesisDifficulty),
+	}
+	diff := CalcDifficulty(config, 1009, parent)
+	if diff.Cmp(params.USDBMinimumDifficulty) < 0 {
+		t.Fatalf("unexpected USDB minimum difficulty floor: have %v want >= %v", diff, params.USDBMinimumDifficulty)
+	}
+	if diff.Cmp(params.MinimumDifficulty) >= 0 {
+		t.Fatalf("USDB chain should stay below the legacy global minimum difficulty when bootstrap difficulty is low")
 	}
 }
 

@@ -523,7 +523,7 @@ func DefaultUSDBGenesisBlock() *Genesis {
 		Config:     params.USDBChainConfig,
 		ExtraData:  []byte("USDB genesis"),
 		GasLimit:   30_000_000,
-		Difficulty: big.NewInt(8192),
+		Difficulty: new(big.Int).Set(params.USDBGenesisDifficulty),
 		Alloc:      GenesisAlloc{},
 	}
 }
