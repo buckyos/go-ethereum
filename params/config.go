@@ -604,6 +604,14 @@ func (c *ChainConfig) IsEthPoWFork(num *big.Int) bool {
 	return isForked(c.EthPoWForkBlock, num)
 }
 
+// HasEthPoWTransitionReset reports whether the chain uses the legacy ETHW fork
+// transition semantics where difficulty is force-reset at the fork block and
+// once again at fork+2048. Chains that start on the ETHW no-bomb path from
+// genesis use EthPoWForkBlock=0 and must not inherit those transition resets.
+func (c *ChainConfig) HasEthPoWTransitionReset() bool {
+	return c.EthPoWForkBlock != nil && c.EthPoWForkBlock.Sign() > 0
+}
+
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.
 func (c *ChainConfig) IsTerminalPoWBlock(parentTotalDiff *big.Int, totalDiff *big.Int) bool {
 	if c.TerminalTotalDifficulty == nil {

@@ -144,6 +144,56 @@ func TestDifficultyCalculators(t *testing.T) {
 	}
 }
 
+func TestCalcDifficultyKeepsEthPoWTransitionReset(t *testing.T) {
+	config := &params.ChainConfig{
+		EthPoWForkBlock:   big.NewInt(100),
+		EthPoWForkSupport: true,
+	}
+	parentAtForkBoundary := &types.Header{
+		Number:     big.NewInt(99),
+		Time:       1000,
+		Difficulty: new(big.Int).Set(params.MinimumDifficulty),
+	}
+	if diff := CalcDifficulty(config, 1009, parentAtForkBoundary); diff.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("unexpected transition reset difficulty at fork: have %v want 1", diff)
+	}
+
+	parentAtRebaseBoundary := &types.Header{
+		Number:     big.NewInt(2147),
+		Time:       2000,
+		Difficulty: new(big.Int).Set(params.MinimumDifficulty),
+	}
+	if diff := CalcDifficulty(config, 2009, parentAtRebaseBoundary); diff.Cmp(params.ETHWStartDifficulty) != 0 {
+		t.Fatalf("unexpected transition reset difficulty at fork+2048: have %v want %v", diff, params.ETHWStartDifficulty)
+	}
+}
+
+func TestCalcDifficultySkipsEthPoWTransitionResetForGenesisChain(t *testing.T) {
+	config := params.USDBChainConfig
+
+	parentAtFirstBlock := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1000,
+		Difficulty: big.NewInt(8192),
+	}
+	if diff := CalcDifficulty(config, 1009, parentAtFirstBlock); diff.Cmp(big.NewInt(1)) == 0 {
+		t.Fatalf("genesis-start PoW chain must not reset difficulty to 1")
+	}
+
+	parentAtFormerRebaseHeight := &types.Header{
+		Number:     big.NewInt(2047),
+		Time:       2000,
+		Difficulty: new(big.Int).Set(params.MinimumDifficulty),
+	}
+	want := calcDifficultyEthPoW(2009, parentAtFormerRebaseHeight)
+	if diff := CalcDifficulty(config, 2009, parentAtFormerRebaseHeight); diff.Cmp(want) != 0 {
+		t.Fatalf("unexpected difficulty for genesis-start PoW chain: have %v want %v", diff, want)
+	}
+	if want.Cmp(params.ETHWStartDifficulty) == 0 {
+		t.Fatalf("test invariant broken: expected normal difficulty path, not ETHW reset value")
+	}
+}
+
 func BenchmarkDifficultyCalculator(b *testing.B) {
 	x1 := makeDifficultyCalculator(big.NewInt(1000000))
 	x2 := MakeDifficultyCalculatorU256(big.NewInt(1000000))
