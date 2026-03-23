@@ -32,6 +32,8 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/usdb"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -105,6 +107,22 @@ func TestMiner(t *testing.T) {
 
 	mux.Post(downloader.FailedEvent{})
 	waitForMiningState(t, miner, true)
+}
+
+func TestMinerSetExtraAcceptsUsdbRewardPayloadV1(t *testing.T) {
+	miner := &Miner{worker: &worker{}}
+	extra := make([]byte, usdb.RewardPayloadV1Size)
+	if err := miner.SetExtra(extra); err != nil {
+		t.Fatalf("expected payload-sized extra to be accepted, got %v", err)
+	}
+}
+
+func TestMinerSetExtraRejectsExtraPastUsdbLimit(t *testing.T) {
+	miner := &Miner{worker: &worker{}}
+	extra := make([]byte, params.MaximumExtraDataSize+1)
+	if err := miner.SetExtra(extra); err == nil {
+		t.Fatalf("expected oversized extra to be rejected")
+	}
 }
 
 // TestMinerDownloaderFirstFails tests that mining is only

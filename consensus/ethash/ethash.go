@@ -18,6 +18,7 @@
 package ethash
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -35,6 +36,7 @@ import (
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -432,6 +434,18 @@ type Config struct {
 	NotifyFull bool
 
 	Log log.Logger `toml:"-"`
+
+	// USDB enables optional reward verification against a local usdb-indexer service.
+	USDB USDBConfig `toml:",omitempty"`
+}
+
+// USDBConfig configures optional USDB-backed reward verification during block finalization.
+type USDBConfig struct {
+	Enabled bool `toml:",omitempty"`
+	// RPCURL points to the local usdb-indexer JSON-RPC endpoint used by validators.
+	RPCURL string `toml:",omitempty"`
+	// QueryTimeout bounds one historical reward replay against the local USDB service.
+	QueryTimeout time.Duration `toml:",omitempty"`
 }
 
 // Ethash is a consensus engine based on proof-of-work implementing the ethash
@@ -454,8 +468,22 @@ type Ethash struct {
 	fakeFail  uint64        // Block number which fails PoW check even in fake mode
 	fakeDelay time.Duration // Time delay to sleep for before returning from verify
 
+	// usdbRewardVerifier replays one header payload into a deterministic reward input.
+	// It is only populated when USDB-backed rewards are enabled for this node.
+	usdbRewardVerifier rewardVerifier
+	// usdbRewardVerifierErr preserves verifier initialization failures so reward
+	// finalization can fail closed later without silently falling back to legacy rewards.
+	usdbRewardVerifierErr error
+
 	lock      sync.Mutex // Ensures thread safety for the in-memory caches and mining fields
 	closeOnce sync.Once  // Ensures exit channel will not be closed twice.
+}
+
+type rewardVerifier interface {
+	// ResolveReward reconstructs the miner reward input from one header payload.
+	ResolveReward(ctx context.Context, headerExtra []byte, blockNumber uint64) (*usdb.ResolvedReward, error)
+	// Close releases any verifier-owned resources such as RPC connections.
+	Close()
 }
 
 // New creates a full sized ethash PoW scheme and starts a background thread for
@@ -481,6 +509,15 @@ func New(config Config, notify []string, noverify bool) *Ethash {
 		datasets: newlru("dataset", config.DatasetsInMem, newDataset),
 		update:   make(chan struct{}),
 		hashrate: metrics.NewMeterForced(),
+	}
+	if config.USDB.Enabled {
+		verifier, err := usdb.NewRPCVerifier(config.USDB.RPCURL, config.USDB.QueryTimeout)
+		if err != nil {
+			ethash.usdbRewardVerifierErr = fmt.Errorf("failed to initialize usdb reward verifier: %w", err)
+			config.Log.Error("Failed to initialize USDB reward verifier", "err", err)
+		} else {
+			ethash.usdbRewardVerifier = verifier
+		}
 	}
 	if config.PowMode == ModeShared {
 		ethash.shared = sharedEthash
@@ -558,6 +595,9 @@ func (ethash *Ethash) Close() error {
 // StopRemoteSealer stops the remote sealer
 func (ethash *Ethash) StopRemoteSealer() error {
 	ethash.closeOnce.Do(func() {
+		if ethash.usdbRewardVerifier != nil {
+			ethash.usdbRewardVerifier.Close()
+		}
 		// Short circuit if the exit channel is not allocated.
 		if ethash.remote == nil {
 			return

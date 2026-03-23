@@ -17,6 +17,7 @@
 package miner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -32,6 +33,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
@@ -249,6 +251,21 @@ type worker struct {
 	skipSealHook func(*task) bool                   // Method to decide whether skipping the sealing.
 	fullTaskHook func()                             // Method to call before pushing the full sealing task.
 	resubmitHook func(time.Duration, time.Duration) // Method to call upon updating resubmitting interval.
+
+	// usdbPayloadBuilder builds the current reward payload that is written into header.Extra.
+	// It is only set when miner-side USDB integration is enabled.
+	usdbPayloadBuilder rewardPayloadBuilder
+	// usdbPayloadBuilderErr preserves initialization failures so block assembly can
+	// fail closed instead of falling back to stale or empty extra-data.
+	usdbPayloadBuilderErr error
+}
+
+type rewardPayloadBuilder interface {
+	// BuildCurrentPayload fetches the current USDB state and returns the encoded
+	// payload that should be committed into header.Extra for the candidate block.
+	BuildCurrentPayload(ctx context.Context) ([]byte, error)
+	// Close releases any builder-owned resources such as RPC connections.
+	Close()
 }
 
 func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, eth Backend, mux *event.TypeMux, isLocalBlock func(header *types.Header) bool, init bool) *worker {
@@ -275,6 +292,14 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
+	}
+	if config.USDB.Enabled {
+		builder, err := usdb.NewRPCPayloadBuilder(config.USDB.RPCURL, config.USDB.PassID, config.USDB.QueryTimeout)
+		if err != nil {
+			worker.usdbPayloadBuilderErr = fmt.Errorf("failed to initialize usdb payload builder: %w", err)
+		} else {
+			worker.usdbPayloadBuilder = builder
+		}
 	}
 	// Subscribe NewTxsEvent for tx pool
 	worker.txsSub = eth.TxPool().SubscribeNewTxsEvent(worker.txsCh)
@@ -387,6 +412,9 @@ func (w *worker) isRunning() bool {
 // Note the worker does not support being closed multiple times.
 func (w *worker) close() {
 	atomic.StoreInt32(&w.running, 0)
+	if w.usdbPayloadBuilder != nil {
+		w.usdbPayloadBuilder.Close()
+	}
 	close(w.exitCh)
 	w.wg.Wait()
 }
@@ -973,7 +1001,11 @@ type generateParams struct {
 // the pending transactions are not filled yet, only the empty task returned.
 func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	w.mu.RLock()
-	defer w.mu.RUnlock()
+	config := *w.config
+	builder := w.usdbPayloadBuilder
+	builderErr := w.usdbPayloadBuilderErr
+	staticExtra := common.CopyBytes(w.extra)
+	w.mu.RUnlock()
 
 	// Find the parent block for sealing task
 	parent := w.chain.CurrentBlock()
@@ -997,12 +1029,18 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	header := &types.Header{
 		ParentHash: parent.Hash(),
 		Number:     num.Add(num, common.Big1),
-		GasLimit:   core.CalcGasLimit(parent.GasLimit(), w.config.GasCeil),
+		GasLimit:   core.CalcGasLimit(parent.GasLimit(), config.GasCeil),
 		Time:       timestamp,
 		Coinbase:   genParams.coinbase,
 	}
-	if !genParams.noExtra && len(w.extra) != 0 {
-		header.Extra = w.extra
+	if !genParams.noExtra {
+		extra, err := w.resolveHeaderExtra(context.Background(), builder, builderErr, staticExtra)
+		if err != nil {
+			return nil, err
+		}
+		if len(extra) != 0 {
+			header.Extra = extra
+		}
 	}
 	// Set the randomness field from the beacon chain if it's available.
 	if genParams.random != (common.Hash{}) {
@@ -1048,6 +1086,21 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		commitUncles(w.remoteUncles)
 	}
 	return env, nil
+}
+
+func (w *worker) resolveHeaderExtra(
+	ctx context.Context,
+	builder rewardPayloadBuilder,
+	builderErr error,
+	staticExtra []byte,
+) ([]byte, error) {
+	if builder != nil {
+		return builder.BuildCurrentPayload(ctx)
+	}
+	if builderErr != nil {
+		return nil, builderErr
+	}
+	return staticExtra, nil
 }
 
 // fillTransactions retrieves the pending transactions from the txpool and fills them

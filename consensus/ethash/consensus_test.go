@@ -17,6 +17,7 @@
 package ethash
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"math/big"
@@ -27,7 +28,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/internal/usdb"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -185,4 +190,155 @@ func BenchmarkDifficultyCalculator(b *testing.B) {
 			x2(1000014, h)
 		}
 	})
+}
+
+type stubChainHeaderReader struct {
+	config *params.ChainConfig
+}
+
+func (s *stubChainHeaderReader) Config() *params.ChainConfig                 { return s.config }
+func (s *stubChainHeaderReader) CurrentHeader() *types.Header                { return nil }
+func (s *stubChainHeaderReader) GetHeader(common.Hash, uint64) *types.Header { return nil }
+func (s *stubChainHeaderReader) GetHeaderByNumber(uint64) *types.Header      { return nil }
+func (s *stubChainHeaderReader) GetHeaderByHash(common.Hash) *types.Header   { return nil }
+func (s *stubChainHeaderReader) GetTd(common.Hash, uint64) *big.Int          { return nil }
+
+type stubRewardVerifier struct {
+	resolved    *usdb.ResolvedReward
+	err         error
+	lastExtra   []byte
+	lastBlockNo uint64
+}
+
+func (s *stubRewardVerifier) ResolveReward(_ context.Context, headerExtra []byte, blockNumber uint64) (*usdb.ResolvedReward, error) {
+	s.lastExtra = append([]byte(nil), headerExtra...)
+	s.lastBlockNo = blockNumber
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.resolved, nil
+}
+
+func (s *stubRewardVerifier) Close() {}
+
+func newTestStateDB(t *testing.T) *state.StateDB {
+	t.Helper()
+
+	statedb, err := state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
+	if err != nil {
+		t.Fatalf("failed to create state db: %v", err)
+	}
+	return statedb
+}
+
+func newTestPayloadBytes(t *testing.T) []byte {
+	t.Helper()
+
+	payload, err := usdb.NewRewardPayloadV1(
+		123,
+		common.HexToHash("0x1111").Hex(),
+		common.HexToHash("0x2222").Hex(),
+		common.HexToHash("0x3333").Hex()[2:]+"i7",
+	)
+	if err != nil {
+		t.Fatalf("failed to build payload: %v", err)
+	}
+	encoded, err := payload.MarshalBinary()
+	if err != nil {
+		t.Fatalf("failed to encode payload: %v", err)
+	}
+	return encoded
+}
+
+func TestFinalizeAndAssembleUsesUsdbReward(t *testing.T) {
+	coinbase := common.HexToAddress("0x1001")
+	verifier := &stubRewardVerifier{
+		resolved: &usdb.ResolvedReward{
+			BaseReward:  big.NewInt(100),
+			MinerReward: big.NewInt(250),
+		},
+	}
+	engine := &Ethash{
+		config: Config{
+			Log:  log.Root(),
+			USDB: USDBConfig{Enabled: true},
+		},
+		usdbRewardVerifier: verifier,
+	}
+	header := &types.Header{
+		Number:   big.NewInt(1),
+		Coinbase: coinbase,
+		Extra:    newTestPayloadBytes(t),
+	}
+	statedb := newTestStateDB(t)
+	chain := &stubChainHeaderReader{config: params.AllEthashProtocolChanges}
+
+	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("FinalizeAndAssemble returned error: %v", err)
+	}
+	if block == nil {
+		t.Fatalf("expected block to be assembled")
+	}
+	if verifier.lastBlockNo != 1 {
+		t.Fatalf("unexpected verifier block number: have %d want 1", verifier.lastBlockNo)
+	}
+	if got := statedb.GetBalance(coinbase); got.Cmp(big.NewInt(250)) != 0 {
+		t.Fatalf("unexpected miner balance: have %s want %s", got, "250")
+	}
+}
+
+func TestFinalizeAndAssembleReturnsErrorWhenUsdbVerifierFails(t *testing.T) {
+	coinbase := common.HexToAddress("0x1002")
+	engine := &Ethash{
+		config: Config{
+			Log:  log.Root(),
+			USDB: USDBConfig{Enabled: true},
+		},
+		usdbRewardVerifier: &stubRewardVerifier{err: errInvalidPoW},
+	}
+	header := &types.Header{
+		Number:   big.NewInt(1),
+		Coinbase: coinbase,
+		Extra:    newTestPayloadBytes(t),
+	}
+	statedb := newTestStateDB(t)
+	chain := &stubChainHeaderReader{config: params.AllEthashProtocolChanges}
+
+	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil)
+	if err == nil {
+		t.Fatalf("expected FinalizeAndAssemble to fail")
+	}
+	if block != nil {
+		t.Fatalf("expected no block on verifier failure")
+	}
+	if got := statedb.GetBalance(coinbase); got.Sign() != 0 {
+		t.Fatalf("unexpected miner balance after verifier failure: %s", got)
+	}
+}
+
+func TestFinalizeLeavesStateUnchangedWhenUsdbVerifierFails(t *testing.T) {
+	coinbase := common.HexToAddress("0x1003")
+	engine := &Ethash{
+		config: Config{
+			Log:  log.Root(),
+			USDB: USDBConfig{Enabled: true},
+		},
+		usdbRewardVerifier: &stubRewardVerifier{err: errInvalidPoW},
+	}
+	header := &types.Header{
+		Number:   big.NewInt(1),
+		Coinbase: coinbase,
+		Extra:    newTestPayloadBytes(t),
+	}
+	statedb := newTestStateDB(t)
+	chain := &stubChainHeaderReader{config: params.AllEthashProtocolChanges}
+
+	engine.Finalize(chain, header, statedb, nil, nil)
+	if got := statedb.GetBalance(coinbase); got.Sign() != 0 {
+		t.Fatalf("unexpected miner balance after finalize failure: %s", got)
+	}
+	if header.Root == (common.Hash{}) {
+		t.Fatalf("expected finalize to still compute a state root")
+	}
 }

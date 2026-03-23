@@ -17,6 +17,8 @@
 package miner
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"math/big"
 	"math/rand"
@@ -37,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -206,8 +209,38 @@ func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consens
 	return w, backend
 }
 
+type stubPayloadBuilder struct {
+	payload []byte
+}
+
+func (s *stubPayloadBuilder) BuildCurrentPayload(context.Context) ([]byte, error) {
+	return append([]byte(nil), s.payload...), nil
+}
+
+func (s *stubPayloadBuilder) Close() {}
+
 func TestGenerateBlockAndImportEthash(t *testing.T) {
 	testGenerateBlockAndImport(t, false)
+}
+
+func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
+	w, _ := newTestWorker(t, params.AllEthashProtocolChanges, ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
+	defer w.close()
+
+	payload := bytes.Repeat([]byte{0xab}, usdb.RewardPayloadV1Size)
+	w.usdbPayloadBuilder = &stubPayloadBuilder{payload: payload}
+	w.setExtra([]byte("static-extra"))
+
+	env, err := w.prepareWork(&generateParams{
+		timestamp: uint64(time.Now().Unix()) + 1,
+		coinbase:  testBankAddress,
+	})
+	if err != nil {
+		t.Fatalf("prepareWork failed: %v", err)
+	}
+	if !bytes.Equal(env.header.Extra, payload) {
+		t.Fatalf("unexpected header extra: have %x want %x", env.header.Extra, payload)
+	}
 }
 
 func TestGenerateBlockAndImportClique(t *testing.T) {

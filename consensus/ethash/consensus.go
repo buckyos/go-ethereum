@@ -18,6 +18,7 @@ package ethash
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -649,16 +650,25 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 // Finalize implements consensus.Engine, accumulating the block and uncle rewards,
 // setting the final state on the header
 func (ethash *Ethash) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header) {
-	// Accumulate any block and uncle rewards and commit the final state root
-	accumulateRewards(chain.Config(), state, header, uncles)
+	// Finalize cannot return an error through the consensus.Engine interface.
+	// When USDB-backed reward resolution fails during block import, keep the state
+	// unchanged apart from recomputing the root. The imported block header still
+	// carries the rewarded state root from the producer side, so the caller will
+	// reject the block later via state-root mismatch instead of silently accepting it.
+	if err := ethash.accumulateRewards(chain.Config(), state, header, uncles); err != nil {
+		ethash.config.Log.Error("Failed to apply block rewards", "number", header.Number.Uint64(), "err", err)
+	}
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 }
 
 // FinalizeAndAssemble implements consensus.Engine, accumulating the block and
 // uncle rewards, setting the final state and assembling the block.
 func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {
-	// Finalize block
-	ethash.Finalize(chain, header, state, txs, uncles)
+	// Mining can fail closed here because FinalizeAndAssemble is allowed to return an error.
+	if err := ethash.accumulateRewards(chain.Config(), state, header, uncles); err != nil {
+		return nil, err
+	}
+	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 
 	// Header seems complete, assemble into a block and return
 	return types.NewBlock(header, txs, uncles, receipts, trie.NewStackTrie(nil)), nil
@@ -697,10 +707,10 @@ var (
 	big32 = big.NewInt(32)
 )
 
-// AccumulateRewards credits the coinbase of the given block with the mining
+// accumulateLegacyRewards credits the coinbase of the given block with the mining
 // reward. The total reward consists of the static block reward and rewards for
 // included uncles. The coinbase of each uncle block is also rewarded.
-func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.Header, uncles []*types.Header) {
+func accumulateLegacyRewards(config *params.ChainConfig, state *state.StateDB, header *types.Header, uncles []*types.Header) {
 	// Select the correct block reward based on chain progression
 	blockReward := FrontierBlockReward
 	if config.IsByzantium(header.Number) {
@@ -723,4 +733,43 @@ func accumulateRewards(config *params.ChainConfig, state *state.StateDB, header 
 		reward.Add(reward, r)
 	}
 	state.AddBalance(header.Coinbase, reward)
+}
+
+func (ethash *Ethash) accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.Header, uncles []*types.Header) error {
+	if !ethash.config.USDB.Enabled {
+		accumulateLegacyRewards(config, state, header, uncles)
+		return nil
+	}
+	return ethash.accumulateUSDBRewards(state, header, uncles)
+}
+
+func (ethash *Ethash) accumulateUSDBRewards(state *state.StateDB, header *types.Header, uncles []*types.Header) error {
+	if ethash.usdbRewardVerifierErr != nil {
+		return ethash.usdbRewardVerifierErr
+	}
+	if ethash.usdbRewardVerifier == nil {
+		return errors.New("usdb reward verifier not configured")
+	}
+	resolved, err := ethash.usdbRewardVerifier.ResolveReward(context.Background(), header.Extra, header.Number.Uint64())
+	if err != nil {
+		return fmt.Errorf("failed to resolve usdb reward payload: %w", err)
+	}
+	// The USDB multiplier only adjusts the miner's base reward. Uncle rewards and
+	// inclusion bonuses keep the original Ethash formula shape and use the same
+	// base reward for monetary consistency.
+	blockReward := new(big.Int).Set(resolved.BaseReward)
+	reward := new(big.Int).Set(resolved.MinerReward)
+	r := new(big.Int)
+	for _, uncle := range uncles {
+		r.Add(uncle.Number, big8)
+		r.Sub(r, header.Number)
+		r.Mul(r, blockReward)
+		r.Div(r, big8)
+		state.AddBalance(uncle.Coinbase, r)
+
+		r.Div(blockReward, big32)
+		reward.Add(reward, r)
+	}
+	state.AddBalance(header.Coinbase, reward)
+	return nil
 }
