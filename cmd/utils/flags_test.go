@@ -18,8 +18,13 @@
 package utils
 
 import (
+	"flag"
 	"reflect"
 	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/urfave/cli/v2"
 )
 
 func Test_SplitTagsFlag(t *testing.T) {
@@ -60,5 +65,66 @@ func Test_SplitTagsFlag(t *testing.T) {
 				t.Errorf("splitTagsFlag() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func newCLIContext(t *testing.T, flagsList []cli.Flag, args ...string) *cli.Context {
+	t.Helper()
+
+	set := flag.NewFlagSet("test", flag.ContinueOnError)
+	for _, f := range flagsList {
+		if err := f.Apply(set); err != nil {
+			t.Fatalf("failed to apply flag %v: %v", f.Names(), err)
+		}
+	}
+	if err := set.Parse(args); err != nil {
+		t.Fatalf("failed to parse args %v: %v", args, err)
+	}
+	return cli.NewContext(cli.NewApp(), set, nil)
+}
+
+func TestSetMinerAppliesUSDBFlags(t *testing.T) {
+	ctx := newCLIContext(t, []cli.Flag{
+		MinerUSDBEnabledFlag,
+		MinerUSDBRPCURLFlag,
+		MinerUSDBPassIDFlag,
+		MinerUSDBTimeoutFlag,
+	}, "--miner.usdb", "--miner.usdb.rpcurl", "http://127.0.0.1:8548", "--miner.usdb.passid", "abc123i7", "--miner.usdb.timeout", "4s")
+
+	cfg := ethconfig.Defaults.Miner
+	setMiner(ctx, &cfg)
+
+	if !cfg.USDB.Enabled {
+		t.Fatalf("expected miner usdb to be enabled")
+	}
+	if cfg.USDB.RPCURL != "http://127.0.0.1:8548" {
+		t.Fatalf("unexpected miner usdb rpc url: %s", cfg.USDB.RPCURL)
+	}
+	if cfg.USDB.PassID != "abc123i7" {
+		t.Fatalf("unexpected miner usdb pass id: %s", cfg.USDB.PassID)
+	}
+	if cfg.USDB.QueryTimeout != 4*time.Second {
+		t.Fatalf("unexpected miner usdb timeout: %s", cfg.USDB.QueryTimeout)
+	}
+}
+
+func TestSetEthashAppliesUSDBFlags(t *testing.T) {
+	ctx := newCLIContext(t, []cli.Flag{
+		EthashUSDBEnabledFlag,
+		EthashUSDBRPCURLFlag,
+		EthashUSDBTimeoutFlag,
+	}, "--ethash.usdb", "--ethash.usdb.rpcurl", "http://127.0.0.1:18548", "--ethash.usdb.timeout", "6s")
+
+	cfg := ethconfig.Defaults
+	setEthash(ctx, &cfg)
+
+	if !cfg.Ethash.USDB.Enabled {
+		t.Fatalf("expected ethash usdb to be enabled")
+	}
+	if cfg.Ethash.USDB.RPCURL != "http://127.0.0.1:18548" {
+		t.Fatalf("unexpected ethash usdb rpc url: %s", cfg.Ethash.USDB.RPCURL)
+	}
+	if cfg.Ethash.USDB.QueryTimeout != 6*time.Second {
+		t.Fatalf("unexpected ethash usdb timeout: %s", cfg.Ethash.USDB.QueryTimeout)
 	}
 }
