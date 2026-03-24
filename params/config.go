@@ -106,6 +106,7 @@ var (
 		IstanbulBlock:           big.NewInt(0),
 		BerlinBlock:             big.NewInt(0),
 		LondonBlock:             big.NewInt(0),
+		ShanghaiBlock:           big.NewInt(0),
 		EthPoWForkBlock:         big.NewInt(0),
 		EthPoWForkSupport:       true,
 		ChainID_ALT:             new(big.Int).SetUint64(USDBNetworkID),

@@ -13,6 +13,16 @@
 
 ## 2. 设计边界
 
+### 2.0 EVM 指令前提
+
+当前 SourceDAO artifact 由 Solidity `0.8.20` 生成，runtime bytecode 包含 `PUSH0`。
+
+因此要在 USDB 链上直接预置并运行这套合约，链配置必须至少满足：
+
+- `ShanghaiBlock = 0`
+
+否则即使地址、code、bootstrap 流程都正确，合约初始化交易也会在 opcode 层失败。
+
 ### 2.1 本阶段纳入共识配置的字段
 
 放入 `params.ChainConfig`：

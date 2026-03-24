@@ -79,6 +79,17 @@ type SimulatedBackend struct {
 // A simulated backend always uses chainID 1337.
 func NewSimulatedBackendWithDatabase(database ethdb.Database, alloc core.GenesisAlloc, gasLimit uint64) *SimulatedBackend {
 	genesis := core.Genesis{Config: params.AllEthashProtocolChanges, GasLimit: gasLimit, Alloc: alloc}
+	return NewSimulatedBackendWithGenesisAndDatabase(database, &genesis)
+}
+
+// NewSimulatedBackendWithGenesisAndDatabase creates a new binding backend from a
+// fully specified genesis block and backing database. This is useful when tests
+// need modern EVM features or custom chain configuration instead of the
+// historical all-ethash test config.
+func NewSimulatedBackendWithGenesisAndDatabase(database ethdb.Database, genesis *core.Genesis) *SimulatedBackend {
+	if genesis == nil {
+		genesis = &core.Genesis{Config: params.AllEthashProtocolChanges}
+	}
 	genesis.MustCommit(database)
 	blockchain, _ := core.NewBlockChain(database, nil, genesis.Config, ethash.NewFaker(), vm.Config{}, nil, nil)
 
@@ -94,6 +105,12 @@ func NewSimulatedBackendWithDatabase(database ethdb.Database, alloc core.Genesis
 
 	backend.rollback(blockchain.CurrentBlock())
 	return backend
+}
+
+// NewSimulatedBackendWithGenesis creates a new simulated backend backed by an
+// in-memory database using the provided genesis block.
+func NewSimulatedBackendWithGenesis(genesis *core.Genesis) *SimulatedBackend {
+	return NewSimulatedBackendWithGenesisAndDatabase(rawdb.NewMemoryDatabase(), genesis)
 }
 
 // NewSimulatedBackend creates a new binding backend using a simulated blockchain

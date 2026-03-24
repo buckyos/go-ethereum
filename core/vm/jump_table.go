@@ -55,6 +55,8 @@ var (
 	berlinInstructionSet           = newBerlinInstructionSet()
 	londonInstructionSet           = newLondonInstructionSet()
 	mergeInstructionSet            = newMergeInstructionSet()
+	shanghaiInstructionSet         = newShanghaiInstructionSet(false)
+	mergeShanghaiInstructionSet    = newShanghaiInstructionSet(true)
 )
 
 // JumpTable contains the EVM opcodes supported at a given fork.
@@ -86,6 +88,17 @@ func newMergeInstructionSet() JumpTable {
 		minStack:    minStack(0, 1),
 		maxStack:    maxStack(0, 1),
 	}
+	return validate(instructionSet)
+}
+
+func newShanghaiInstructionSet(isMerge bool) JumpTable {
+	var instructionSet JumpTable
+	if isMerge {
+		instructionSet = newMergeInstructionSet()
+	} else {
+		instructionSet = newLondonInstructionSet()
+	}
+	enable3855(&instructionSet) // EIP-3855: PUSH0 opcode
 	return validate(instructionSet)
 }
 
