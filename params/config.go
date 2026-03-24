@@ -303,19 +303,82 @@ var (
 	// AllEthashProtocolChanges contains every protocol change (EIPs) introduced
 	// and accepted by the Ethereum core developers into the Ethash consensus.
 	//
-	// This configuration is intentionally not using keyed fields to force anyone
-	// adding flags to the config to also have to set these fields.
-	AllEthashProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, false, big.NewInt(1337), nil, false, new(EthashConfig), nil}
+	// This configuration intentionally enables every Ethash-era protocol change
+	// and serves as a compact all-forks-active test config.
+	AllEthashProtocolChanges = &ChainConfig{
+		ChainID:             big.NewInt(1337),
+		HomesteadBlock:      big.NewInt(0),
+		DAOForkBlock:        nil,
+		DAOForkSupport:      false,
+		EIP150Block:         big.NewInt(0),
+		EIP150Hash:          common.Hash{},
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		MuirGlacierBlock:    big.NewInt(0),
+		BerlinBlock:         big.NewInt(0),
+		LondonBlock:         big.NewInt(0),
+		ArrowGlacierBlock:   big.NewInt(0),
+		GrayGlacierBlock:    big.NewInt(0),
+		MergeNetsplitBlock:  nil,
+		ShanghaiBlock:       nil,
+		CancunBlock:         nil,
+		EthPoWForkBlock:     nil,
+		EthPoWForkSupport:   false,
+		ChainID_ALT:         big.NewInt(1337),
+		Ethash:              new(EthashConfig),
+	}
 
 	// AllCliqueProtocolChanges contains every protocol change (EIPs) introduced
 	// and accepted by the Ethereum core developers into the Clique consensus.
 	//
-	// This configuration is intentionally not using keyed fields to force anyone
-	// adding flags to the config to also have to set these fields.
-	AllCliqueProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, nil, false, big.NewInt(1337), nil, false, nil, &CliqueConfig{Period: 0, Epoch: 30000}}
+	// This configuration intentionally enables every Clique-era protocol change
+	// and serves as a compact all-forks-active test config.
+	AllCliqueProtocolChanges = &ChainConfig{
+		ChainID:             big.NewInt(1337),
+		HomesteadBlock:      big.NewInt(0),
+		DAOForkBlock:        nil,
+		DAOForkSupport:      false,
+		EIP150Block:         big.NewInt(0),
+		EIP150Hash:          common.Hash{},
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		MuirGlacierBlock:    big.NewInt(0),
+		BerlinBlock:         big.NewInt(0),
+		LondonBlock:         big.NewInt(0),
+		ChainID_ALT:         big.NewInt(1337),
+		Clique:              &CliqueConfig{Period: 0, Epoch: 30000},
+	}
 
-	TestChainConfig = &ChainConfig{big.NewInt(1), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, false, big.NewInt(1), nil, false, new(EthashConfig), nil}
-	TestRules       = TestChainConfig.Rules(new(big.Int), false)
+	TestChainConfig = &ChainConfig{
+		ChainID:             big.NewInt(1),
+		HomesteadBlock:      big.NewInt(0),
+		DAOForkBlock:        nil,
+		DAOForkSupport:      false,
+		EIP150Block:         big.NewInt(0),
+		EIP150Hash:          common.Hash{},
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		MuirGlacierBlock:    big.NewInt(0),
+		BerlinBlock:         big.NewInt(0),
+		LondonBlock:         big.NewInt(0),
+		ArrowGlacierBlock:   big.NewInt(0),
+		GrayGlacierBlock:    big.NewInt(0),
+		ChainID_ALT:         big.NewInt(1),
+		Ethash:              new(EthashConfig),
+	}
+	TestRules = TestChainConfig.Rules(new(big.Int), false)
 )
 
 // NetworkNames are user friendly names to use in the chain spec banner.
@@ -411,6 +474,12 @@ type ChainConfig struct {
 	EthPoWForkBlock     *big.Int `json:"ethPoWForkBlock,omitempty"`     //EthPoW hard-fork switch block (nil = no fork)
 	EthPoWForkSupport   bool     `json:"ethPoWForkSupport,omitempty"`   // Whether the nodes supports or opposes the EthPoW hard-fork
 	ChainID_ALT         *big.Int `json:"chainId_alt"`                   // chainId alt identifies the current chain after pos switch and is used for replay protection
+	// DividendFeeSplitBlock enables routing a portion of transaction fees into the
+	// configured DividendAddress. Nil keeps the fee-split path disabled.
+	DividendFeeSplitBlock *big.Int `json:"dividendFeeSplitBlock,omitempty"`
+	// DividendAddress is the system contract or reserved address that receives the
+	// dividend share once DividendFeeSplitBlock becomes active.
+	DividendAddress common.Address `json:"dividendAddress,omitempty"`
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
 	TerminalTotalDifficulty *big.Int `json:"terminalTotalDifficulty,omitempty"`
@@ -511,6 +580,9 @@ func (c *ChainConfig) String() string {
 	if c.EthPoWForkBlock != nil {
 		banner += fmt.Sprintf(" - EthPoW:                      %-8v\n", c.EthPoWForkBlock)
 	}
+	if c.DividendFeeSplitBlock != nil {
+		banner += fmt.Sprintf(" - Dividend fee split:         %-8v (%s)\n", c.DividendFeeSplitBlock, c.DividendAddress)
+	}
 	banner += "\n"
 
 	// Add a special section for the merge as it's non-obvious
@@ -602,6 +674,16 @@ func (c *ChainConfig) IsGrayGlacier(num *big.Int) bool {
 // IsEthPoWFork returns whether num is either equal to the EthPoWFork fork block or greater.
 func (c *ChainConfig) IsEthPoWFork(num *big.Int) bool {
 	return isForked(c.EthPoWForkBlock, num)
+}
+
+// IsDividendFeeSplit reports whether dividend fee splitting is active at the
+// given block number. The feature is only considered active if both the
+// activation block and the target address are configured.
+func (c *ChainConfig) IsDividendFeeSplit(num *big.Int) bool {
+	return c != nil &&
+		c.DividendFeeSplitBlock != nil &&
+		c.DividendAddress != (common.Address{}) &&
+		isForked(c.DividendFeeSplitBlock, num)
 }
 
 // HasEthPoWTransitionReset reports whether the chain uses the legacy ETHW fork
@@ -739,6 +821,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "shanghaiBlock", block: c.ShanghaiBlock, optional: true},
 		{name: "cancunBlock", block: c.CancunBlock, optional: true},
 		{name: "ethPoWForkBlock", block: c.EthPoWForkBlock, optional: true},
+		{name: "dividendFeeSplitBlock", block: c.DividendFeeSplitBlock, optional: true},
 	} {
 		if lastFork.name != "" {
 			// Next one must be higher number
@@ -828,6 +911,12 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, head *big.Int) *Confi
 	}
 	if c.IsEthPoWFork(head) && c.EthPoWForkSupport != newcfg.EthPoWForkSupport {
 		return newCompatError("EthPoW fork support flag", c.EthPoWForkBlock, newcfg.EthPoWForkBlock)
+	}
+	if isForkIncompatible(c.DividendFeeSplitBlock, newcfg.DividendFeeSplitBlock, head) {
+		return newCompatError("Dividend fee split block", c.DividendFeeSplitBlock, newcfg.DividendFeeSplitBlock)
+	}
+	if c.IsDividendFeeSplit(head) && c.DividendAddress != newcfg.DividendAddress {
+		return newCompatError("Dividend fee split address", c.DividendFeeSplitBlock, newcfg.DividendFeeSplitBlock)
 	}
 	return nil
 }

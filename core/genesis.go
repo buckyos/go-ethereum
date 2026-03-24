@@ -528,6 +528,60 @@ func DefaultUSDBGenesisBlock() *Genesis {
 	}
 }
 
+// USDBBootstrapGenesisConfig customizes the built-in USDB genesis for
+// development and integration testing of system contracts such as Dao and
+// Dividend. The helper intentionally only injects code, balances and the fee
+// split activation knobs; contract initialization is still expected to happen
+// via bootstrap transactions after the chain starts.
+type USDBBootstrapGenesisConfig struct {
+	DaoAddress            common.Address
+	DaoCode               []byte
+	DividendAddress       common.Address
+	DividendCode          []byte
+	BootstrapAdmin        common.Address
+	BootstrapAdminBalance *big.Int
+	DividendFeeSplitBlock *big.Int
+}
+
+// DefaultUSDBGenesisBlockWithBootstrap clones the default USDB genesis and
+// overlays development-time system contracts and bootstrap balances. The
+// returned genesis is not the built-in network genesis and will therefore have
+// a different hash when any of the options are populated.
+func DefaultUSDBGenesisBlockWithBootstrap(opts USDBBootstrapGenesisConfig) *Genesis {
+	genesis := DefaultUSDBGenesisBlock()
+	config := *genesis.Config
+	genesis.Config = &config
+	genesis.Alloc = make(GenesisAlloc, len(genesis.Alloc)+3)
+	for addr, account := range genesis.Alloc {
+		genesis.Alloc[addr] = account
+	}
+
+	if opts.DaoAddress != (common.Address{}) && len(opts.DaoCode) > 0 {
+		genesis.Alloc[opts.DaoAddress] = GenesisAccount{
+			Balance: big.NewInt(0),
+			Code:    common.CopyBytes(opts.DaoCode),
+		}
+	}
+	if opts.DividendAddress != (common.Address{}) && len(opts.DividendCode) > 0 {
+		genesis.Alloc[opts.DividendAddress] = GenesisAccount{
+			Balance: big.NewInt(0),
+			Code:    common.CopyBytes(opts.DividendCode),
+		}
+	}
+	if opts.BootstrapAdmin != (common.Address{}) && opts.BootstrapAdminBalance != nil {
+		genesis.Alloc[opts.BootstrapAdmin] = GenesisAccount{
+			Balance: new(big.Int).Set(opts.BootstrapAdminBalance),
+		}
+	}
+	if opts.DividendAddress != (common.Address{}) {
+		genesis.Config.DividendAddress = opts.DividendAddress
+	}
+	if opts.DividendFeeSplitBlock != nil {
+		genesis.Config.DividendFeeSplitBlock = new(big.Int).Set(opts.DividendFeeSplitBlock)
+	}
+	return genesis
+}
+
 // DeveloperGenesisBlock returns the 'geth --dev' genesis block.
 func DeveloperGenesisBlock(period uint64, gasLimit uint64, faucet common.Address) *Genesis {
 	// Override the default period to the user requested one

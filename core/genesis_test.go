@@ -211,6 +211,45 @@ func TestGenesis_Commit(t *testing.T) {
 	}
 }
 
+func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
+	daoAddr := common.HexToAddress("0x0000000000000000000000000000000000001001")
+	dividendAddr := common.HexToAddress("0x0000000000000000000000000000000000001002")
+	adminAddr := common.HexToAddress("0x0000000000000000000000000000000000001003")
+	daoCode := []byte{0x60, 0x00, 0x60, 0x00}
+	dividendCode := []byte{0x60, 0x01, 0x60, 0x00}
+	adminBalance := big.NewInt(123456789)
+	activationBlock := big.NewInt(16)
+
+	genesis := DefaultUSDBGenesisBlockWithBootstrap(USDBBootstrapGenesisConfig{
+		DaoAddress:            daoAddr,
+		DaoCode:               daoCode,
+		DividendAddress:       dividendAddr,
+		DividendCode:          dividendCode,
+		BootstrapAdmin:        adminAddr,
+		BootstrapAdminBalance: adminBalance,
+		DividendFeeSplitBlock: activationBlock,
+	})
+
+	if got := genesis.Config.DividendAddress; got != dividendAddr {
+		t.Fatalf("unexpected dividend address: %s", got)
+	}
+	if got := genesis.Config.DividendFeeSplitBlock; got == nil || got.Cmp(activationBlock) != 0 {
+		t.Fatalf("unexpected dividend activation block: %v", got)
+	}
+	if got := genesis.Alloc[daoAddr].Code; !reflect.DeepEqual(got, daoCode) {
+		t.Fatalf("unexpected dao code: %x", got)
+	}
+	if got := genesis.Alloc[dividendAddr].Code; !reflect.DeepEqual(got, dividendCode) {
+		t.Fatalf("unexpected dividend code: %x", got)
+	}
+	if got := genesis.Alloc[adminAddr].Balance; got == nil || got.Cmp(adminBalance) != 0 {
+		t.Fatalf("unexpected bootstrap admin balance: %v", got)
+	}
+	if DefaultUSDBGenesisBlock().ToBlock().Hash() == genesis.ToBlock().Hash() {
+		t.Fatalf("bootstrap overlay must produce a distinct development genesis hash")
+	}
+}
+
 func TestReadWriteGenesisAlloc(t *testing.T) {
 	var (
 		db    = rawdb.NewMemoryDatabase()

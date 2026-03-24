@@ -20,6 +20,8 @@ import (
 	"math/big"
 	"reflect"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 func TestCheckCompatible(t *testing.T) {
@@ -141,5 +143,27 @@ func TestHasMergeTransition(t *testing.T) {
 	cfg := &ChainConfig{TerminalTotalDifficultyPassed: true}
 	if !cfg.HasMergeTransition() {
 		t.Fatalf("post-merge debug config must still report merge transition support")
+	}
+}
+
+func TestIsDividendFeeSplit(t *testing.T) {
+	addr := common.HexToAddress("0x0000000000000000000000000000000000001000")
+	cfg := &ChainConfig{}
+	if cfg.IsDividendFeeSplit(big.NewInt(0)) {
+		t.Fatalf("fee split must stay disabled without block and address")
+	}
+	cfg.DividendFeeSplitBlock = big.NewInt(10)
+	if cfg.IsDividendFeeSplit(big.NewInt(10)) {
+		t.Fatalf("fee split must stay disabled without a dividend address")
+	}
+	cfg.DividendAddress = addr
+	if cfg.IsDividendFeeSplit(big.NewInt(9)) {
+		t.Fatalf("fee split activated before the configured block")
+	}
+	if !cfg.IsDividendFeeSplit(big.NewInt(10)) {
+		t.Fatalf("fee split did not activate at the configured block")
+	}
+	if !cfg.IsDividendFeeSplit(big.NewInt(11)) {
+		t.Fatalf("fee split did not remain active after the configured block")
 	}
 }
