@@ -153,6 +153,26 @@
 
 这样可以避免和开发机上常见的 `8545` 本地链冲突。
 
+如果需要本地双节点简单组网，也可以直接使用：
+
+```bash
+./scripts/usdb/run_local_two_node_network.sh
+```
+
+该脚本会：
+
+- 生成同一份 bootstrap genesis
+- 初始化两个独立 datadir
+- 启动 node1（出块）与 node2（跟随）
+- 通过 `admin_addPeer` 手工连通两个节点
+
+默认端口：
+
+- node1 RPC: `18545`
+- node1 P2P: `31303`
+- node2 RPC: `18546`
+- node2 P2P: `31304`
+
 ### 3.3 状态转换
 
 文件：
