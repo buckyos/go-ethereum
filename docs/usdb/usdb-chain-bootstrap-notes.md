@@ -219,6 +219,68 @@
     - `admin.addPeer(...)`
   - 待进入多机开发或公开测试网阶段后，再补正式 `USDBBootnodes` 和 DNS discovery
 
+### 3.3.2 开发期 bootnodes / static-nodes 生成方式
+
+当前阶段不建议把 bootnodes 直接硬编码进代码，而是先通过外部脚本生成。
+
+开发期建议使用以下工具链：
+
+- [generate_bootnodes_manifest.sh](/home/bucky/work/go-ethereum/scripts/usdb/generate_bootnodes_manifest.sh)
+  - 从运行中的 USDB 节点 RPC 读取 `admin_nodeInfo.enode`
+  - 生成：
+    - `bootnodes-manifest.json`
+    - `static-nodes.json`
+    - `bootnodes.txt`
+- [run_devnet_node.sh](/home/bucky/work/go-ethereum/scripts/usdb/run_devnet_node.sh)
+  - 在任意机器上按角色启动一个 USDB devnet 节点
+  - 支持：
+    - `NODE_ROLE=bootnode`
+    - `NODE_ROLE=miner`
+    - `NODE_ROLE=full`
+  - 并可通过：
+    - `BOOTNODES`
+    - `BOOTNODES_FILE`
+    - `STATIC_NODES_FILE`
+    接入外部 bootnodes 列表
+
+典型流程：
+
+1. 在第一台机器上启动发现种子节点：
+
+```bash
+NODE_ROLE=bootnode KEEP_RUNNING=1 ./scripts/usdb/run_devnet_node.sh
+```
+
+2. 生成 bootnodes / static-nodes 清单：
+
+```bash
+./scripts/usdb/generate_bootnodes_manifest.sh --rpc-url http://127.0.0.1:28545
+```
+
+3. 在其他机器上引用生成出来的 `bootnodes.txt` 启动跟随节点或矿工节点：
+
+```bash
+NODE_ROLE=miner \
+BOOTNODES_FILE=/tmp/usdb-bootnodes/bootnodes.txt \
+KEEP_RUNNING=1 \
+./scripts/usdb/run_devnet_node.sh
+```
+
+如果希望使用静态邻居列表，也可以直接把生成器输出的 `static-nodes.json` 注入节点：
+
+```bash
+NODE_ROLE=full \
+STATIC_NODES_FILE=/tmp/usdb-bootnodes/static-nodes.json \
+KEEP_RUNNING=1 \
+./scripts/usdb/run_devnet_node.sh
+```
+
+这样做的好处是：
+
+- 本地与多机联调都复用同一份 bootstrap genesis
+- bootnodes 仍是外部配置，不污染链代码
+- 到正式 testnet / mainnet 阶段，再决定是否收进内置 `USDBBootnodes`
+
 也就是说，当前阶段的最小可行网络默认值策略是：
 
 - `ChainID / NetworkId / genesis hash` 已独立
