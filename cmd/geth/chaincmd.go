@@ -43,6 +43,10 @@ import (
 )
 
 var (
+	usdbBootstrapConfigFlag = &cli.PathFlag{
+		Name:  "usdb.bootstrap.config",
+		Usage: "Path to a SourceDAO local config used to materialize a bootstrap USDB genesis when dumping genesis JSON",
+	}
 	initCommand = &cli.Command{
 		Action:    initGenesis,
 		Name:      "init",
@@ -61,7 +65,7 @@ It expects the genesis file as argument.`,
 		Name:      "dumpgenesis",
 		Usage:     "Dumps genesis block JSON configuration to stdout",
 		ArgsUsage: "",
-		Flags:     utils.NetworkFlags,
+		Flags:     append([]cli.Flag{}, append(utils.NetworkFlags, usdbBootstrapConfigFlag)...),
 		Description: `
 The dumpgenesis command dumps the genesis block configuration in JSON format to stdout.`,
 	}
@@ -204,9 +208,21 @@ func initGenesis(ctx *cli.Context) error {
 
 func dumpGenesis(ctx *cli.Context) error {
 	// TODO(rjl493456442) support loading from the custom datadir
-	genesis := utils.MakeGenesis(ctx)
-	if genesis == nil {
-		genesis = core.DefaultGenesisBlock()
+	var genesis *core.Genesis
+	if configPath := ctx.Path(usdbBootstrapConfigFlag.Name); configPath != "" {
+		if !ctx.Bool(utils.USDBFlag.Name) {
+			utils.Fatalf("--%s requires --%s", usdbBootstrapConfigFlag.Name, utils.USDBFlag.Name)
+		}
+		var err error
+		genesis, err = loadUSDBBootstrapGenesisFromSourceDAOConfig(configPath)
+		if err != nil {
+			utils.Fatalf("could not build bootstrap genesis: %v", err)
+		}
+	} else {
+		genesis = utils.MakeGenesis(ctx)
+		if genesis == nil {
+			genesis = core.DefaultGenesisBlock()
+		}
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(genesis); err != nil {
 		utils.Fatalf("could not encode genesis")

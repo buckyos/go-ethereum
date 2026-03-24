@@ -11,6 +11,8 @@
 - genesis / bootstrap 对系统合约地址的承载约定
 - 对应的配置单测与集成测试骨架
 
+同时，第一阶段要把“测试 helper”再往前推一步，变成开发者可直接使用的固定 bootstrap genesis 生成流程。
+
 ## 2. 设计边界
 
 ### 2.0 EVM 指令前提
@@ -98,6 +100,58 @@
 - 先使用外部 genesis JSON 或测试专用 genesis builder 注入 code
 
 这样合约仍在变动时，不会频繁改变内置 `USDBGenesisHash`。
+
+### 3.2.1 第一阶段的生成入口
+
+第一阶段推荐的本地 bring-up 流程是：
+
+1. 使用 `geth dumpgenesis --usdb --usdb.bootstrap.config <path>` 读取一份 SourceDAO 本地 manifest
+2. 基于 manifest 中的：
+   - `daoAddress`
+   - `dividendAddress`
+   - `bootstrapAdminPrivateKey`
+   - `dividendFeeSplitBlock`
+   - `artifactsDir`
+   以及 SourceDAO artifact 中的 runtime bytecode
+   生成一份固定的 `genesis-bootstrap.json`
+3. 用 `geth init genesis-bootstrap.json` 初始化本地节点
+
+这样做的好处是：
+
+- 保持“生成自动化，但 genesis 结果固定”
+- 避免把当前仍在演进的合约代码直接变成内置链身份
+- 单节点、多节点、SourceDAO smoke 都能复用同一份开发期 genesis
+
+开发期的最小使用方式：
+
+```bash
+./build/bin/geth dumpgenesis \
+  --usdb \
+  --usdb.bootstrap.config /home/bucky/work/SourceDAO/tools/config/usdb-local.json \
+  > /tmp/usdb-bootstrap-genesis.json
+
+./build/bin/geth --datadir /tmp/usdb-node-1 init /tmp/usdb-bootstrap-genesis.json
+```
+
+或者直接使用仓库脚本，把这两步与 SourceDAO smoke 串起来：
+
+```bash
+./scripts/usdb/run_local_bootstrap_smoke.sh
+```
+
+该脚本会：
+
+- 从 `SourceDAO/tools/config/usdb-local.json` 生成 bootstrap genesis
+- 初始化一个本地 datadir
+- 启动单节点 USDB geth
+- 调用 `SourceDAO` 的 `npm run test:usdb:smoke`
+
+默认端口约定：
+
+- RPC: `18545`
+- P2P: `31303`
+
+这样可以避免和开发机上常见的 `8545` 本地链冲突。
 
 ### 3.3 状态转换
 
@@ -215,6 +269,13 @@
 2. 增加 `IsDividendFeeSplit(...)`
 3. 单测覆盖配置行为
 4. 文档与 bring-up 约定同步
+5. 增加开发期 bootstrap genesis 生成入口
+
+当前第一批完成后，开发者应当可以：
+
+- 从 SourceDAO 本地配置直接导出 `genesis-bootstrap.json`
+- 在单机上启动一条带 `Dao` / `Dividend` runtime code 的 USDB 开发链
+- 后续再用 bootstrap admin 发送初始化交易
 
 第二批：
 

@@ -117,7 +117,25 @@ genesis 中建议至少预置：
 - 只预置代码
 - 初始化通过 bootstrap 交易完成
 
-### 4.4 Bootstrap 交易顺序
+### 4.4 开发期与正式网的 genesis 形态
+
+冷启动方案需要区分两个阶段：
+
+- 开发 / 测试阶段
+  - 不直接把 `Dao` / `Dividend` 的 runtime code 永久硬编码进内置 `DefaultUSDBGenesisBlock()`
+  - 先由 `go-ethereum` 提供一个 genesis 生成入口，基于 SourceDAO artifact 和本地 manifest 生成一份固定的 `genesis-bootstrap.json`
+  - 本地单节点、多节点联调、SourceDAO smoke 都统一使用这份 canonical 开发期 genesis
+- 正式网络阶段
+  - 等 `DaoAddress` / `DividendAddress` / runtime code / `DividendFeeSplitBlock` 冻结后，再确定正式网的 canonical genesis
+  - 这时可以继续以外部 `genesis.json` 为准，也可以同步内置到代码里，但事实来源仍应是一份固定、可审计的 genesis 文件
+
+这里的关键点是：
+
+- 生成过程可以自动化
+- 生成结果必须固定
+- 不能让节点在运行时根据松散配置各自动态装配 genesis
+
+### 4.5 Bootstrap 交易顺序
 
 启动后由一个 genesis 预置的小额 bootstrap admin 账户发送初始化交易。
 
@@ -138,7 +156,7 @@ genesis 中建议至少预置：
 
 但这不应该阻塞手续费分账功能本身的冷启动设计。
 
-### 4.5 激活高度
+### 4.6 激活高度
 
 手续费分账建议增加一个独立激活高度，例如：
 
@@ -158,6 +176,25 @@ genesis 中建议至少预置：
 - 避免合约未初始化时就开始收款
 - 把“链启动”和“分账功能启用”拆成两个阶段
 - 更便于回归测试和问题定位
+
+### 4.7 后续新节点的加入方式
+
+带系统合约的 bootstrap genesis 只是在网络定义阶段“确定一次”，不是每个新节点都要重新做一遍部署。
+
+更准确地说：
+
+- 后续新节点仍必须使用同一份 bootstrap genesis
+  - 因为它们需要认同相同的 genesis hash
+- 但它们不需要重新执行 bootstrap 运维动作
+  - `Dao.initialize()`
+  - `Dividend.initialize(...)`
+  - `Dao.setTokenDividendAddress(...)`
+  这些都会作为早期链上交易被同步和重放
+
+因此：
+
+- genesis 预置 code 是网络身份的一部分
+- bootstrap 初始化交易只需要在网络早期实际执行一次
 
 ## 5. 为什么不推荐其他方案
 
