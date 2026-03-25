@@ -126,6 +126,8 @@ After this smoke is stable, the next extensions should be:
    - first planned runner:
      - `scripts/usdb/run_usdb_ethw_reward_energy_growth_e2e.sh`
 2. `historical stability after BTC head advances`
+   - planned runner:
+     - `scripts/usdb/run_usdb_ethw_reward_historical_stability_e2e.sh`
 3. `fail-closed cases`
    - bad pass id
    - verifier unavailable
@@ -147,3 +149,27 @@ stages:
    - boosted USDB energy > initial USDB energy
    - stage-2 ETHW reward > stage-1 ETHW reward
    - the same pass id appears in both payload batches
+
+## Phase 2 Outline
+
+The historical-stability scenario should verify more than local reward math. It
+should prove that a fresh ETHW validator can still accept old reward blocks
+after the BTC head has moved forward.
+
+1. Mint one pass and start ETHW node 1 as the only miner.
+2. Mine a small stage-1 batch of ETHW blocks and stop ETHW mining.
+3. Advance the BTC regtest head and top up the same BTC owner address so the
+   current USDB energy becomes larger than it was during stage 1.
+4. Start a fresh ETHW node 2 with the same canonical USDB genesis and
+   validator-side `--ethash.usdb` enabled, but without mining.
+5. Connect node 2 to node 1 and wait until node 2 syncs the already mined
+   stage-1 blocks.
+6. Assert:
+   - node 2 reaches the same head height and head hash as node 1
+   - historical replay of the old stage-1 payloads still yields the original
+     stage-1 reward
+   - the current USDB energy after the BTC head advance is larger than the
+     historical stage-1 energy
+   - the reward implied by the new current USDB energy is larger than the
+     historical stage-1 reward, proving the synced old blocks were not
+     validated against the latest BTC head
