@@ -19,7 +19,7 @@ const (
 	defaultSourceDAODividendArtifact    = "contracts/Dividend.sol/DividendContract.json"
 )
 
-type sourceDAOUSDBLocalConfig struct {
+type usdbChainBootstrapConfig struct {
 	ChainID                  uint64  `json:"chainId"`
 	ArtifactsDir             string  `json:"artifactsDir"`
 	DaoAddress               string  `json:"daoAddress"`
@@ -44,7 +44,7 @@ func loadUSDBBootstrapGenesisFromSourceDAOConfig(configPath string) (*core.Genes
 	if err != nil {
 		return nil, fmt.Errorf("read bootstrap config %s: %w", configPath, err)
 	}
-	var config sourceDAOUSDBLocalConfig
+	var config usdbChainBootstrapConfig
 	if err := json.Unmarshal(blob, &config); err != nil {
 		return nil, fmt.Errorf("decode bootstrap config %s: %w", configPath, err)
 	}

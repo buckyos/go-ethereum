@@ -127,7 +127,7 @@
 ```bash
 ./build/bin/geth dumpgenesis \
   --usdb \
-  --usdb.bootstrap.config /home/bucky/work/SourceDAO/tools/config/usdb-local.json \
+  --usdb.bootstrap.config /home/bucky/work/go-ethereum/tools/config/usdb-local-chain.json \
   > /tmp/usdb-bootstrap-genesis.json
 
 ./build/bin/geth --datadir /tmp/usdb-node-1 init /tmp/usdb-bootstrap-genesis.json
@@ -141,7 +141,7 @@
 
 该脚本会：
 
-- 从 `SourceDAO/tools/config/usdb-local.json` 生成 bootstrap genesis
+- 从 `go-ethereum/tools/config/usdb-local-chain.json` 生成 bootstrap genesis
 - 初始化一个本地 datadir
 - 启动单节点 USDB geth
 - 调用 `SourceDAO` 的 `npm run test:usdb:smoke`

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SOURCE_DAO_DIR=${SOURCE_DAO_DIR:-"$ROOT_DIR/../SourceDAO"}
-USDB_CONFIG=${USDB_CONFIG:-"$SOURCE_DAO_DIR/tools/config/usdb-local.json"}
+USDB_CONFIG=${USDB_CONFIG:-"$ROOT_DIR/tools/config/usdb-local-chain.json"}
 WORK_DIR=${WORK_DIR:-/tmp/usdb-local-bootstrap}
 DATADIR=${DATADIR:-"$WORK_DIR/datadir"}
 GENESIS_JSON=${GENESIS_JSON:-"$WORK_DIR/usdb-bootstrap-genesis.json"}
@@ -107,7 +107,7 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
     cd "$SOURCE_DAO_DIR"
     source "$HOME/.nvm/nvm.sh"
     nvm use 24 >/dev/null
-    SOURCE_DAO_USDB_CONFIG="$USDB_CONFIG" \
+    SOURCE_DAO_USDB_CONFIG="${SOURCE_DAO_USDB_CONFIG:-$SOURCE_DAO_DIR/tools/config/sourcedao-local.json}" \
     SOURCE_DAO_USDB_RPC_URL="http://${HTTP_ADDR}:${HTTP_PORT}" \
     npm run test:usdb:smoke
   )
