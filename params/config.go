@@ -475,6 +475,10 @@ type ChainConfig struct {
 	EthPoWForkBlock     *big.Int `json:"ethPoWForkBlock,omitempty"`     //EthPoW hard-fork switch block (nil = no fork)
 	EthPoWForkSupport   bool     `json:"ethPoWForkSupport,omitempty"`   // Whether the nodes supports or opposes the EthPoW hard-fork
 	ChainID_ALT         *big.Int `json:"chainId_alt"`                   // chainId alt identifies the current chain after pos switch and is used for replay protection
+	// EthPoWMinimumDifficultyOverride allows development and integration-test chains
+	// to override the PoW minimum difficulty floor without mutating the built-in
+	// network defaults for the same chain ID.
+	EthPoWMinimumDifficultyOverride *big.Int `json:"ethPoWMinimumDifficulty,omitempty"`
 	// DividendFeeSplitBlock enables routing a portion of transaction fees into the
 	// configured DividendAddress. Nil keeps the fee-split path disabled.
 	DividendFeeSplitBlock *big.Int `json:"dividendFeeSplitBlock,omitempty"`
@@ -711,6 +715,9 @@ func (c *ChainConfig) HasEthPoWChainIDSwitch() bool {
 // ETHW no-bomb path for the given chain. USDB starts from genesis with a lower
 // bootstrap floor than the legacy Ethereum/ETHW defaults.
 func (c *ChainConfig) EthPoWMinimumDifficulty() *big.Int {
+	if c != nil && c.EthPoWMinimumDifficultyOverride != nil {
+		return new(big.Int).Set(c.EthPoWMinimumDifficultyOverride)
+	}
 	if c != nil && c.ChainID != nil && c.ChainID.Cmp(new(big.Int).SetUint64(USDBNetworkID)) == 0 {
 		return new(big.Int).Set(USDBMinimumDifficulty)
 	}

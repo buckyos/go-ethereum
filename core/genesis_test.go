@@ -219,6 +219,8 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 	dividendCode := []byte{0x60, 0x01, 0x60, 0x00}
 	adminBalance := big.NewInt(123456789)
 	activationBlock := big.NewInt(16)
+	genesisDifficulty := big.NewInt(0x40000)
+	minimumDifficulty := big.NewInt(0x20000)
 
 	genesis := DefaultUSDBGenesisBlockWithBootstrap(USDBBootstrapGenesisConfig{
 		DaoAddress:            daoAddr,
@@ -228,6 +230,8 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 		BootstrapAdmin:        adminAddr,
 		BootstrapAdminBalance: adminBalance,
 		DividendFeeSplitBlock: activationBlock,
+		GenesisDifficulty:     genesisDifficulty,
+		MinimumDifficulty:     minimumDifficulty,
 	})
 
 	if got := genesis.Config.DividendAddress; got != dividendAddr {
@@ -244,6 +248,12 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 	}
 	if got := genesis.Alloc[adminAddr].Balance; got == nil || got.Cmp(adminBalance) != 0 {
 		t.Fatalf("unexpected bootstrap admin balance: %v", got)
+	}
+	if got := genesis.Difficulty; got == nil || got.Cmp(genesisDifficulty) != 0 {
+		t.Fatalf("unexpected genesis difficulty: %v", got)
+	}
+	if got := genesis.Config.EthPoWMinimumDifficulty(); got.Cmp(minimumDifficulty) != 0 {
+		t.Fatalf("unexpected minimum difficulty override: %v", got)
 	}
 	if DefaultUSDBGenesisBlock().ToBlock().Hash() == genesis.ToBlock().Hash() {
 		t.Fatalf("bootstrap overlay must produce a distinct development genesis hash")

@@ -28,6 +28,8 @@ type sourceDAOUSDBLocalConfig struct {
 	DividendArtifact         string  `json:"dividendArtifact"`
 	BootstrapAdminPrivateKey string  `json:"bootstrapAdminPrivateKey"`
 	BootstrapAdminBalanceWei string  `json:"bootstrapAdminBalanceWei"`
+	GenesisDifficulty        string  `json:"genesisDifficulty"`
+	MinimumDifficulty        string  `json:"minimumDifficulty"`
 	DividendFeeSplitBlock    *uint64 `json:"dividendFeeSplitBlock"`
 }
 
@@ -66,6 +68,14 @@ func loadUSDBBootstrapGenesisFromSourceDAOConfig(configPath string) (*core.Genes
 	if err != nil {
 		return nil, err
 	}
+	genesisDifficulty, err := parseOptionalPositiveBigInt("genesisDifficulty", config.GenesisDifficulty)
+	if err != nil {
+		return nil, err
+	}
+	minimumDifficulty, err := parseOptionalPositiveBigInt("minimumDifficulty", config.MinimumDifficulty)
+	if err != nil {
+		return nil, err
+	}
 
 	artifactsDir := resolveSourceDAOArtifactsDir(configPath, config.ArtifactsDir)
 	daoCode, err := loadHardhatRuntimeBytecode(resolveSourceDAOArtifactPath(artifactsDir, config.DaoArtifact, defaultSourceDAODaoArtifact))
@@ -84,6 +94,8 @@ func loadUSDBBootstrapGenesisFromSourceDAOConfig(configPath string) (*core.Genes
 		DividendCode:          dividendCode,
 		BootstrapAdmin:        bootstrapAdmin,
 		BootstrapAdminBalance: bootstrapAdminBalance,
+		GenesisDifficulty:     genesisDifficulty,
+		MinimumDifficulty:     minimumDifficulty,
 	}
 	if config.DividendFeeSplitBlock != nil {
 		opts.DividendFeeSplitBlock = new(big.Int).SetUint64(*config.DividendFeeSplitBlock)
@@ -115,6 +127,17 @@ func parseBootstrapAdminBalance(value string) (*big.Int, error) {
 		return nil, fmt.Errorf("invalid bootstrapAdminBalanceWei %q", value)
 	}
 	return balance, nil
+}
+
+func parseOptionalPositiveBigInt(field string, value string) (*big.Int, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, ok := new(big.Int).SetString(value, 0)
+	if !ok || parsed.Sign() <= 0 {
+		return nil, fmt.Errorf("invalid %s %q", field, value)
+	}
+	return parsed, nil
 }
 
 func resolveSourceDAOArtifactsDir(configPath string, artifactsDir string) string {

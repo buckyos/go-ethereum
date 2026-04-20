@@ -210,6 +210,22 @@ func TestCalcDifficultyUsesUSDBMinimumDifficulty(t *testing.T) {
 	}
 }
 
+func TestCalcDifficultyUsesOverrideMinimumDifficulty(t *testing.T) {
+	config := *params.USDBChainConfig
+	overrideMinimum := big.NewInt(0x40000)
+	config.EthPoWMinimumDifficultyOverride = overrideMinimum
+
+	parent := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1000,
+		Difficulty: big.NewInt(0x20000),
+	}
+	diff := CalcDifficulty(&config, 1100, parent)
+	if diff.Cmp(overrideMinimum) != 0 {
+		t.Fatalf("unexpected overridden minimum difficulty floor: have %v want %v", diff, overrideMinimum)
+	}
+}
+
 func BenchmarkDifficultyCalculator(b *testing.B) {
 	x1 := makeDifficultyCalculator(big.NewInt(1000000))
 	x2 := MakeDifficultyCalculatorU256(big.NewInt(1000000))

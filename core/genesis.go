@@ -541,6 +541,8 @@ type USDBBootstrapGenesisConfig struct {
 	BootstrapAdmin        common.Address
 	BootstrapAdminBalance *big.Int
 	DividendFeeSplitBlock *big.Int
+	GenesisDifficulty     *big.Int
+	MinimumDifficulty     *big.Int
 }
 
 // DefaultUSDBGenesisBlockWithBootstrap clones the default USDB genesis and
@@ -572,6 +574,12 @@ func DefaultUSDBGenesisBlockWithBootstrap(opts USDBBootstrapGenesisConfig) *Gene
 		genesis.Alloc[opts.BootstrapAdmin] = GenesisAccount{
 			Balance: new(big.Int).Set(opts.BootstrapAdminBalance),
 		}
+	}
+	if opts.GenesisDifficulty != nil {
+		genesis.Difficulty = new(big.Int).Set(opts.GenesisDifficulty)
+	}
+	if opts.MinimumDifficulty != nil {
+		genesis.Config.EthPoWMinimumDifficultyOverride = new(big.Int).Set(opts.MinimumDifficulty)
 	}
 	if opts.DividendAddress != (common.Address{}) {
 		genesis.Config.DividendAddress = opts.DividendAddress

@@ -47,6 +47,8 @@ func TestLoadUSDBBootstrapGenesisFromSourceDAOConfig(t *testing.T) {
   "dividendAddress": "0x0000000000000000000000000000000000001002",
   "bootstrapAdminPrivateKey": "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4f5bcaeaf3f4e6f54",
   "bootstrapAdminBalanceWei": "0x16345785d8a0000",
+  "genesisDifficulty": "0x40000",
+  "minimumDifficulty": "0x20000",
   "dividendFeeSplitBlock": 16
 }`)
 	if err := os.WriteFile(configPath, configBlob, 0o600); err != nil {
@@ -74,6 +76,12 @@ func TestLoadUSDBBootstrapGenesisFromSourceDAOConfig(t *testing.T) {
 	}
 	if got := genesis.Config.DividendFeeSplitBlock; got == nil || got.Uint64() != 16 {
 		t.Fatalf("unexpected dividend fee split block: %v", got)
+	}
+	if got := genesis.Difficulty; got == nil || got.Cmp(big.NewInt(0x40000)) != 0 {
+		t.Fatalf("unexpected genesis difficulty: %v", got)
+	}
+	if got := genesis.Config.EthPoWMinimumDifficulty(); got.Cmp(big.NewInt(0x20000)) != 0 {
+		t.Fatalf("unexpected minimum difficulty: %v", got)
 	}
 
 	key, err := crypto.HexToECDSA("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4f5bcaeaf3f4e6f54")
