@@ -252,15 +252,15 @@ type worker struct {
 	fullTaskHook func()                             // Method to call before pushing the full sealing task.
 	resubmitHook func(time.Duration, time.Duration) // Method to call upon updating resubmitting interval.
 
-	// usdbPayloadBuilder builds the current reward payload that is written into header.Extra.
+	// usdbPayloadBuilder builds the current profile selector written into header.Extra.
 	// It is only set when miner-side USDB integration is enabled.
-	usdbPayloadBuilder rewardPayloadBuilder
+	usdbPayloadBuilder profileSelectorBuilder
 	// usdbPayloadBuilderErr preserves initialization failures so block assembly can
 	// fail closed instead of falling back to stale or empty extra-data.
 	usdbPayloadBuilderErr error
 }
 
-type rewardPayloadBuilder interface {
+type profileSelectorBuilder interface {
 	// BuildCurrentPayload fetches the current USDB state and returns the encoded
 	// payload that should be committed into header.Extra for the candidate block.
 	BuildCurrentPayload(ctx context.Context) ([]byte, error)
@@ -294,7 +294,14 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
 	}
 	if config.USDB.Enabled {
-		builder, err := usdb.NewRPCPayloadBuilder(config.USDB.RPCURL, config.USDB.PassID, config.USDB.QueryTimeout)
+		// The current dev chain supports policy v1. UIP-0008/UIP-0009 chain
+		// configuration will replace this constant with a height-derived version.
+		builder, err := usdb.NewRPCPayloadBuilder(
+			config.USDB.RPCURL,
+			config.USDB.PassID,
+			usdb.DifficultyPolicyVersionV1,
+			config.USDB.QueryTimeout,
+		)
 		if err != nil {
 			worker.usdbPayloadBuilderErr = fmt.Errorf("failed to initialize usdb payload builder: %w", err)
 		} else {
@@ -1090,7 +1097,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 
 func (w *worker) resolveHeaderExtra(
 	ctx context.Context,
-	builder rewardPayloadBuilder,
+	builder profileSelectorBuilder,
 	builderErr error,
 	staticExtra []byte,
 ) ([]byte, error) {

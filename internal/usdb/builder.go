@@ -6,17 +6,21 @@ import (
 	"time"
 )
 
-// PayloadBuilder creates the current reward payload used by miner/header assembly.
+// PayloadBuilder creates the current UIP-0007 selector used by miner/header assembly.
 type PayloadBuilder struct {
-	client       Client
-	passID       PassID
-	queryTimeout time.Duration
+	client                  Client
+	passID                  PassID
+	difficultyPolicyVersion uint16
+	queryTimeout            time.Duration
 }
 
 // NewPayloadBuilder constructs a builder from an already-configured USDB client.
-func NewPayloadBuilder(client Client, passID string, queryTimeout time.Duration) (*PayloadBuilder, error) {
+func NewPayloadBuilder(client Client, passID string, difficultyPolicyVersion uint16, queryTimeout time.Duration) (*PayloadBuilder, error) {
 	if client == nil {
 		return nil, fmt.Errorf("nil usdb client")
+	}
+	if difficultyPolicyVersion == 0 {
+		return nil, fmt.Errorf("difficulty policy version must be positive")
 	}
 	parsedPassID, err := ParsePassID(passID)
 	if err != nil {
@@ -26,14 +30,15 @@ func NewPayloadBuilder(client Client, passID string, queryTimeout time.Duration)
 		queryTimeout = DefaultQueryTimeout
 	}
 	return &PayloadBuilder{
-		client:       client,
-		passID:       parsedPassID,
-		queryTimeout: queryTimeout,
+		client:                  client,
+		passID:                  parsedPassID,
+		difficultyPolicyVersion: difficultyPolicyVersion,
+		queryTimeout:            queryTimeout,
 	}, nil
 }
 
-// NewRPCPayloadBuilder dials one USDB endpoint and uses it to generate current reward payloads.
-func NewRPCPayloadBuilder(endpoint, passID string, queryTimeout time.Duration) (*PayloadBuilder, error) {
+// NewRPCPayloadBuilder dials one USDB endpoint and uses it to generate current selectors.
+func NewRPCPayloadBuilder(endpoint, passID string, difficultyPolicyVersion uint16, queryTimeout time.Duration) (*PayloadBuilder, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeout)
 	defer cancel()
 
@@ -41,7 +46,7 @@ func NewRPCPayloadBuilder(endpoint, passID string, queryTimeout time.Duration) (
 	if err != nil {
 		return nil, err
 	}
-	builder, err := NewPayloadBuilder(client, passID, queryTimeout)
+	builder, err := NewPayloadBuilder(client, passID, difficultyPolicyVersion, queryTimeout)
 	if err != nil {
 		client.Close()
 		return nil, err
@@ -56,7 +61,7 @@ func (b *PayloadBuilder) Close() {
 	}
 }
 
-// BuildCurrentPayload fetches the latest current system state and emits the v1 header payload.
+// BuildCurrentPayload emits a selector only after validating the configured pass in current state.
 func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context) ([]byte, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, b.queryTimeout)
 	defer cancel()
@@ -68,21 +73,8 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context) ([]byte, error
 	if systemState == nil {
 		return nil, fmt.Errorf("usdb returned no current system state")
 	}
-	query := QueryContext{
-		RequestedHeight: systemState.LocalSyncedBlockHeight,
-		ExpectedState: QueryExpectedState{
-			SnapshotID:    systemState.UpstreamSnapshotID,
-			SystemStateID: systemState.SystemStateID,
-		},
-	}
-	passSnapshot, err := b.client.GetPassSnapshot(queryCtx, b.passID, query)
-	if err != nil {
-		return nil, err
-	}
-	if passSnapshot == nil {
-		return nil, fmt.Errorf("configured pass %s not found in current usdb state", b.passID.String())
-	}
-	payload, err := NewRewardPayloadV1(
+	payload, err := NewProfileSelectorPayload(
+		b.difficultyPolicyVersion,
 		systemState.LocalSyncedBlockHeight,
 		systemState.UpstreamSnapshotID,
 		systemState.SystemStateID,
@@ -90,6 +82,9 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context) ([]byte, error
 	)
 	if err != nil {
 		return nil, err
+	}
+	if _, err := resolveConsensusProfile(queryCtx, b.client, *payload); err != nil {
+		return nil, fmt.Errorf("configured pass %s is not valid in current usdb state: %w", b.passID.String(), err)
 	}
 	return payload.MarshalBinary()
 }

@@ -48,7 +48,7 @@ type Config struct {
 	Notify     []string       `toml:",omitempty"` // HTTP URL list to be notified of new work packages (only useful in ethash).
 	NotifyFull bool           `toml:",omitempty"` // Notify with pending block headers instead of work packages
 	ExtraData  hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
-	USDB       USDBConfig     `toml:",omitempty"` // USDB reward payload generation settings
+	USDB       USDBConfig     `toml:",omitempty"` // USDB profile selector generation settings
 	GasFloor   uint64         // Target gas floor for mined blocks.
 	GasCeil    uint64         // Target gas ceiling for mined blocks.
 	GasPrice   *big.Int       // Minimum gas price for mining a transaction
@@ -56,12 +56,12 @@ type Config struct {
 	Noverify   bool           // Disable remote mining solution verification(only useful in ethash).
 }
 
-// USDBConfig configures optional USDB reward payload generation during block assembly.
+// USDBConfig configures optional USDB profile selector generation during block assembly.
 type USDBConfig struct {
 	Enabled bool `toml:",omitempty"`
 	// RPCURL points to the local usdb-indexer JSON-RPC endpoint used by the miner.
 	RPCURL string `toml:",omitempty"`
-	// PassID selects the configured winner/candidate pass whose history is embedded into header.Extra.
+	// PassID selects the pass committed as selected_pass in header.Extra.
 	PassID string `toml:",omitempty"`
 	// QueryTimeout bounds one current-state payload build against the local USDB service.
 	QueryTimeout time.Duration `toml:",omitempty"`

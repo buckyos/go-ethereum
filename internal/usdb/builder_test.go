@@ -2,60 +2,90 @@ package usdb
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
-type stubClient struct {
-	system *SystemStateInfo
-	pass   *PassSnapshot
-}
-
-func (s *stubClient) GetSystemStateInfo(context.Context) (*SystemStateInfo, error) {
-	return s.system, nil
-}
-
-func (s *stubClient) GetPassSnapshot(context.Context, PassID, QueryContext) (*PassSnapshot, error) {
-	return s.pass, nil
-}
-
-func (s *stubClient) GetPassEnergy(context.Context, PassID, QueryContext) (*PassEnergySnapshot, error) {
-	return &PassEnergySnapshot{}, nil
-}
-
-func (s *stubClient) Close() {}
-
-func TestPayloadBuilderBuildCurrentPayload(t *testing.T) {
-	builder, err := NewPayloadBuilder(&stubClient{
+func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	client := &stubProfileClient{
 		system: &SystemStateInfo{
 			LocalSyncedBlockHeight: 123,
-			UpstreamSnapshotID:     repeatHex("11", 32),
-			SystemStateID:          repeatHex("22", 32),
+			UpstreamSnapshotID:     selector.SnapshotIDHex(),
+			SystemStateID:          selector.SystemStateIDHex(),
 		},
-		pass: &PassSnapshot{
-			InscriptionID:  repeatHex("33", 32) + "i1",
-			ResolvedHeight: 123,
-		},
-	}, repeatHex("33", 32)+"i1", 0)
+		profile: newTestProfileView(t, selector, "1000000", "500000"),
+	}
+	builder, err := NewPayloadBuilder(client, selector.PassID.String(), 7, 0)
 	if err != nil {
 		t.Fatalf("failed to build payload builder: %v", err)
 	}
 
 	encoded, err := builder.BuildCurrentPayload(context.Background())
 	if err != nil {
-		t.Fatalf("failed to build payload: %v", err)
+		t.Fatalf("failed to build profile selector: %v", err)
 	}
-	if len(encoded) != RewardPayloadV1Size {
-		t.Fatalf("unexpected payload size: have %d want %d", len(encoded), RewardPayloadV1Size)
+	if len(encoded) != ProfileSelectorPayloadV1Size {
+		t.Fatalf("unexpected payload size: have %d want %d", len(encoded), ProfileSelectorPayloadV1Size)
 	}
 
-	var payload RewardPayloadV1
+	var payload ProfileSelectorPayload
 	if err := payload.UnmarshalBinary(encoded); err != nil {
-		t.Fatalf("failed to decode payload: %v", err)
+		t.Fatalf("failed to decode profile selector: %v", err)
 	}
-	if payload.BTCHeight != 123 {
-		t.Fatalf("unexpected btc height: have %d want %d", payload.BTCHeight, 123)
+	if payload.BTCHeight != 123 || payload.DifficultyPolicyVersion != 7 {
+		t.Fatalf("unexpected selector versions/heights: %+v", payload)
 	}
-	if payload.PassID.String() != repeatHex("33", 32)+"i1" {
-		t.Fatalf("unexpected pass id: have %s", payload.PassID.String())
+	if payload.PassID != selector.PassID {
+		t.Fatalf("unexpected pass id: have %s want %s", payload.PassID.String(), selector.PassID.String())
+	}
+	if client.lastPassID != selector.PassID {
+		t.Fatalf("unexpected profile query pass id: have %s want %s", client.lastPassID.String(), selector.PassID.String())
+	}
+	if client.lastQuery.RequestedHeight != selector.BTCHeight ||
+		client.lastQuery.ExpectedState.SnapshotID != selector.SnapshotIDHex() ||
+		client.lastQuery.ExpectedState.SystemStateID != selector.SystemStateIDHex() {
+		t.Fatalf("profile query was not pinned to selector state: %+v", client.lastQuery)
+	}
+}
+
+func TestPayloadBuilderRejectsNonCandidateConfiguredPass(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	tests := []struct {
+		name  string
+		state string
+		kind  string
+	}{
+		{name: "dormant standard", state: "dormant", kind: passKindStandard},
+		{name: "active collab", state: passStateActive, kind: "collab"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile := newTestProfileView(t, selector, "1000000", "0")
+			profile.Pass.State = test.state
+			profile.Pass.PassKind = test.kind
+			client := &stubProfileClient{
+				system: &SystemStateInfo{
+					LocalSyncedBlockHeight: selector.BTCHeight,
+					UpstreamSnapshotID:     selector.SnapshotIDHex(),
+					SystemStateID:          selector.SystemStateIDHex(),
+				},
+				profile: profile,
+			}
+			builder, err := NewPayloadBuilder(client, selector.PassID.String(), DifficultyPolicyVersionV1, 0)
+			if err != nil {
+				t.Fatalf("failed to build payload builder: %v", err)
+			}
+			if _, err := builder.BuildCurrentPayload(context.Background()); !errors.Is(err, ErrSelectedPassNotCandidate) {
+				t.Fatalf("expected candidate error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestNewPayloadBuilderRejectsZeroDifficultyPolicyVersion(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	if _, err := NewPayloadBuilder(&stubProfileClient{}, selector.PassID.String(), 0, 0); err == nil {
+		t.Fatal("expected zero difficulty policy version to be rejected")
 	}
 }

@@ -109,9 +109,9 @@ func TestMiner(t *testing.T) {
 	waitForMiningState(t, miner, true)
 }
 
-func TestMinerSetExtraAcceptsUsdbRewardPayloadV1(t *testing.T) {
+func TestMinerSetExtraAcceptsUsdbProfileSelectorPayloadV1(t *testing.T) {
 	miner := &Miner{worker: &worker{}}
-	extra := make([]byte, usdb.RewardPayloadV1Size)
+	extra := make([]byte, usdb.ProfileSelectorPayloadV1Size)
 	if err := miner.SetExtra(extra); err != nil {
 		t.Fatalf("expected payload-sized extra to be accepted, got %v", err)
 	}

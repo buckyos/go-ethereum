@@ -316,10 +316,11 @@ func newTestStateDB(t *testing.T) *state.StateDB {
 func newTestPayloadBytes(t *testing.T) []byte {
 	t.Helper()
 
-	payload, err := usdb.NewRewardPayloadV1(
+	payload, err := usdb.NewProfileSelectorPayload(
+		usdb.DifficultyPolicyVersionV1,
 		123,
-		common.HexToHash("0x1111").Hex(),
-		common.HexToHash("0x2222").Hex(),
+		common.HexToHash("0x1111").Hex()[2:],
+		common.HexToHash("0x2222").Hex()[2:],
 		common.HexToHash("0x3333").Hex()[2:]+"i7",
 	)
 	if err != nil {

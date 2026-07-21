@@ -227,7 +227,7 @@ func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
 	w, _ := newTestWorker(t, params.AllEthashProtocolChanges, ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
 	defer w.close()
 
-	payload := bytes.Repeat([]byte{0xab}, usdb.RewardPayloadV1Size)
+	payload := bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size)
 	w.usdbPayloadBuilder = &stubPayloadBuilder{payload: payload}
 	w.setExtra([]byte("static-extra"))
 

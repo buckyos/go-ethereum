@@ -753,7 +753,7 @@ func (ethash *Ethash) accumulateUSDBRewards(state *state.StateDB, header *types.
 	}
 	resolved, err := ethash.usdbRewardVerifier.ResolveReward(context.Background(), header.Extra, header.Number.Uint64())
 	if err != nil {
-		return fmt.Errorf("failed to resolve usdb reward payload: %w", err)
+		return fmt.Errorf("failed to resolve usdb profile selector: %w", err)
 	}
 	// The USDB multiplier only adjusts the miner's base reward. Uncle rewards and
 	// inclusion bonuses keep the original Ethash formula shape and use the same

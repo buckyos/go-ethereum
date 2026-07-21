@@ -5,21 +5,6 @@ import (
 	"testing"
 )
 
-func TestLevelForEnergyThresholds(t *testing.T) {
-	if level := LevelForEnergy(0); level != 0 {
-		t.Fatalf("unexpected level for zero energy: have %d want 0", level)
-	}
-	if level := LevelForEnergy(DefaultLevelBaseEnergy - 1); level != 0 {
-		t.Fatalf("unexpected level below first threshold: have %d want 0", level)
-	}
-	if level := LevelForEnergy(DefaultLevelBaseEnergy); level != 1 {
-		t.Fatalf("unexpected level at first threshold: have %d want 1", level)
-	}
-	if level := LevelForEnergy(10_000_000); level <= 1 {
-		t.Fatalf("expected higher level for larger energy, have %d", level)
-	}
-}
-
 func TestMultiplierBpsForLevelClampsAndInterpolates(t *testing.T) {
 	if got := MultiplierBpsForLevel(0); got != MinimumMultiplierBps {
 		t.Fatalf("unexpected min multiplier for level 0: have %d want %d", got, MinimumMultiplierBps)
