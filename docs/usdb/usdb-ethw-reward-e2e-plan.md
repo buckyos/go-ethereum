@@ -3,18 +3,24 @@
 This note defines the first end-to-end integration path between the BTC-side
 USDB regtest stack and the local USDB/ETHW chain.
 
+The Go-side UIP-0007 path is current. The three legacy shell runners still need
+their old 105-byte payload decoding and pre-UIP-0006 RPC assertions migrated
+before this E2E plan can be executed as a full acceptance suite.
+
 ## Goal
 
 The first version focuses on one narrow loop:
 
-1. Mint one miner pass on BTC regtest with a target `eth_main` address.
-2. Let `usdb-indexer` resolve the pass energy and current system state.
+1. Mint one standard miner pass on BTC regtest.
+2. Let `usdb-indexer` resolve its current UIP-0006 economic profile and system state.
    - If the freshly minted pass still resolves to `energy=0`, the smoke may
      top up the same BTC owner address once, mine a few extra BTC blocks, and retry.
    - The v1 smoke does not require the final energy to become positive; a
      minimum-band reward path is still a valid first end-to-end result.
-3. Start one local ETHW node with `--miner.usdb.*` and `--ethash.usdb.*`.
-4. Mine a few ETHW blocks whose `header.Extra` carries `RewardPayloadV1`.
+3. Start one local ETHW node with the built-in USDB chain config and operational
+   `--miner.usdb.*` / `--ethash.usdb.*` companion-service parameters.
+4. Mine a few ETHW blocks whose `header.Extra` carries the 107-byte UIP-0007
+   `ProfileSelectorPayload`.
 5. Verify the coinbase reward matches the historical USDB reward input.
 
 This version intentionally excludes:
@@ -33,11 +39,10 @@ Those belong to later phases once the reward loop itself is stable.
 From the sibling repository `/home/bucky/work/usdb` we already have:
 
 - `bitcoind regtest + ord + balance-history + usdb-indexer` startup helpers
-- live-ord mint flows with `eth_main`
+- live-ord standard-pass mint flows
 - JSON-RPC helpers for:
   - `get_system_state_info`
-  - `get_pass_snapshot`
-  - `get_pass_energy`
+  - `get_pass_economic_profile`
 
 The entry point reused by this E2E is:
 
@@ -47,36 +52,39 @@ The entry point reused by this E2E is:
 
 This repository already has:
 
-- `RewardPayloadV1` codec under `internal/usdb`
+- `ProfileSelectorPayload` codec under `internal/usdb`
 - miner-side payload builder
 - validator-side reward verifier
-- CLI flags:
-  - `--miner.usdb`
+- operational CLI flags:
   - `--miner.usdb.rpcurl`
   - `--miner.usdb.passid`
-  - `--ethash.usdb`
+  - `--miner.usdb.timeout`
   - `--ethash.usdb.rpcurl`
+  - `--ethash.usdb.timeout`
+
+USDB consensus activation and expected payload/difficulty-policy versions come
+exclusively from `params.ChainConfig.USDB`. CLI parameters cannot enable or
+disable those rules.
 
 ## First-Version Flow
 
 The first-version smoke should perform the following steps:
 
 1. Start the BTC regtest stack.
-2. Fund one ord wallet and inscribe one mint payload:
-   - `{"p":"usdb","op":"mint","eth_main":"<coinbase address>","prev":[]}`
+2. Fund one ord wallet and inscribe one UIP-0001 standard mint payload.
 3. Wait until `balance-history` and `usdb-indexer` are synced and consensus ready.
 4. Start one ETHW node on the built-in USDB genesis.
 5. If the current pass energy is zero, fund the same BTC owner address once
    more, mine a few extra BTC growth blocks, and wait until
    `balance-history` / `usdb-indexer` catch up.
-6. Enable both:
-   - miner-side payload generation
-   - validator-side reward replay
+6. Configure miner and validator companion RPC access. The built-in USDB chain
+   config activates payload generation and validation from genesis.
 7. Wait until the ETHW node mines a small number of blocks.
 8. Stop mining and inspect every mined header.
 9. For each block:
-   - decode `header.Extra` as `RewardPayloadV1`
-   - query USDB historical state using the payload selectors
+   - decode `header.Extra` as `ProfileSelectorPayload`
+   - verify its payload and difficulty-policy versions against chain config
+   - query the UIP-0006 historical profile using the payload selectors
    - recompute `energy -> level -> multiplier -> reward`
 10. Assert the coinbase balance equals the sum of the recomputed block rewards.
 
@@ -84,13 +92,14 @@ The first-version smoke should perform the following steps:
 
 The v1 smoke should assert:
 
-1. `header.Extra` is present and has the exact `RewardPayloadV1` length.
+1. `header.Extra` is present and has the exact 107-byte `ProfileSelectorPayload` length.
 2. The payload version is `1`.
-3. The payload `pass_id` matches the minted inscription id.
-4. The USDB snapshot resolved from the payload is valid.
-5. The pass snapshot resolved from the payload is valid and keeps:
-   - `eth_main == miner etherbase`
-6. The pass energy resolved from the payload is valid.
+3. The payload difficulty policy version equals the chain-config expected version.
+4. The payload `pass_id` matches the minted inscription id.
+5. The USDB external state resolved from the payload matches `btc_height`,
+   `snapshot_id`, and `system_state_id` exactly.
+6. The selected pass is `Active / standard`, and its energy/level fields can be
+   independently recomputed from the UIP-0006 profile.
 7. The mined ETHW balance equals the sum of:
    - `BaseReward(blockNumber) * Multiplier(level)`
 
@@ -161,7 +170,7 @@ after the BTC head has moved forward.
 3. Advance the BTC regtest head and top up the same BTC owner address so the
    current USDB energy becomes larger than it was during stage 1.
 4. Start a fresh ETHW node 2 with the same canonical USDB genesis and
-   validator-side `--ethash.usdb` enabled, but without mining.
+   validator-side companion RPC configured, but without mining.
 5. Connect node 2 to node 1 and wait until node 2 syncs the already mined
    stage-1 blocks.
 6. Assert:

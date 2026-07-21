@@ -1,5 +1,9 @@
 # USDB Pass Level 难度调节与协作者奖励方案备忘
 
+> 历史设计稿：本文早于 UIP-0004 至 UIP-0009，只保留设计演进背景。
+> 当前 `ProfileSelectorPayload`、effective energy、level/factor 和版本激活语义以对应 UIP
+> 与现行实现为准，文中的 `RewardPayloadV1` 和旧 collab 字段不再是有效接口。
+
 ## 1. 背景
 
 当前已经落地的 `v1` 方向是：

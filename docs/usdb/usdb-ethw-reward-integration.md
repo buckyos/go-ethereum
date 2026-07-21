@@ -1,5 +1,9 @@
 # USDB × ETHW 矿工奖励对接备忘
 
+> 历史设计稿：本文记录 UIP 拆分前的 reward-only 方案，不再作为现行协议或实现依据。
+> 当前 header selector、economic profile 和 chain-config 边界分别以 UIP-0006、
+> UIP-0007、UIP-0008/UIP-0009 及 `internal/usdb` 实现为准。
+
 ## 1. 需求
 
 当前需要在 ETHW 侧引入一条新的奖励逻辑：

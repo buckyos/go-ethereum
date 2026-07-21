@@ -380,11 +380,6 @@ var (
 		Usage:    "Lock memory maps for recent ethash mining DAGs",
 		Category: flags.EthashCategory,
 	}
-	EthashUSDBEnabledFlag = &cli.BoolFlag{
-		Name:     "ethash.usdb",
-		Usage:    "Enable USDB-backed reward verification during block finalization",
-		Category: flags.EthashCategory,
-	}
 	EthashUSDBRPCURLFlag = &cli.StringFlag{
 		Name:     "ethash.usdb.rpcurl",
 		Usage:    "Local usdb-indexer JSON-RPC endpoint used for historical reward verification",
@@ -581,11 +576,6 @@ var (
 	MinerNoVerifyFlag = &cli.BoolFlag{
 		Name:     "miner.noverify",
 		Usage:    "Disable remote sealing verification",
-		Category: flags.MinerCategory,
-	}
-	MinerUSDBEnabledFlag = &cli.BoolFlag{
-		Name:     "miner.usdb",
-		Usage:    "Enable USDB-backed reward payload generation in header extra-data",
 		Category: flags.MinerCategory,
 	}
 	MinerUSDBRPCURLFlag = &cli.StringFlag{
@@ -1694,9 +1684,6 @@ func setEthash(ctx *cli.Context, cfg *ethconfig.Config) {
 	if ctx.IsSet(EthashDatasetsLockMmapFlag.Name) {
 		cfg.Ethash.DatasetsLockMmap = ctx.Bool(EthashDatasetsLockMmapFlag.Name)
 	}
-	if ctx.IsSet(EthashUSDBEnabledFlag.Name) {
-		cfg.Ethash.USDB.Enabled = ctx.Bool(EthashUSDBEnabledFlag.Name)
-	}
 	if ctx.IsSet(EthashUSDBRPCURLFlag.Name) {
 		cfg.Ethash.USDB.RPCURL = ctx.String(EthashUSDBRPCURLFlag.Name)
 	}
@@ -1724,9 +1711,6 @@ func setMiner(ctx *cli.Context, cfg *miner.Config) {
 	}
 	if ctx.IsSet(MinerNoVerifyFlag.Name) {
 		cfg.Noverify = ctx.Bool(MinerNoVerifyFlag.Name)
-	}
-	if ctx.IsSet(MinerUSDBEnabledFlag.Name) {
-		cfg.USDB.Enabled = ctx.Bool(MinerUSDBEnabledFlag.Name)
 	}
 	if ctx.IsSet(MinerUSDBRPCURLFlag.Name) {
 		cfg.USDB.RPCURL = ctx.String(MinerUSDBRPCURLFlag.Name)

@@ -523,10 +523,8 @@ EOF
       --mine \
       --miner.threads 1 \
       --miner.etherbase "$MINER_ETHERBASE" \
-      --miner.usdb \
       --miner.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}" \
       --miner.usdb.passid "$pass_id" \
-      --ethash.usdb \
       --ethash.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}"
   ) >"$NODE1_LOG_FILE" 2>&1 &
   NODE1_PID=$!
@@ -572,7 +570,6 @@ EOF
       --port "$NODE2_P2P_PORT" \
       --nodiscover \
       --maxpeers 10 \
-      --ethash.usdb \
       --ethash.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}"
   ) >"$NODE2_LOG_FILE" 2>&1 &
   NODE2_PID=$!

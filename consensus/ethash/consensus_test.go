@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"math/rand"
 	"os"
@@ -333,6 +334,61 @@ func newTestPayloadBytes(t *testing.T) []byte {
 	return encoded
 }
 
+func newTestUSDBChainConfig() *params.ChainConfig {
+	return &params.ChainConfig{
+		HomesteadBlock: big.NewInt(0),
+		USDB: &params.USDBConsensusConfig{
+			PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+			DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+		},
+	}
+}
+
+func TestVerifyHeaderValidatesUsdbProfileSelectorWithoutRPC(t *testing.T) {
+	config := newTestUSDBChainConfig()
+	chain := &stubChainHeaderReader{config: config}
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+	}
+	validExtra := newTestPayloadBytes(t)
+	newHeader := func(extra []byte) *types.Header {
+		return &types.Header{
+			Number:     big.NewInt(1),
+			Time:       1_001,
+			Difficulty: CalcDifficulty(config, 1_001, parent),
+			GasLimit:   parent.GasLimit,
+			Extra:      append([]byte(nil), extra...),
+		}
+	}
+	engine := &Ethash{}
+	if err := engine.verifyHeader(chain, newHeader(validExtra), parent, false, false, 2_000); err != nil {
+		t.Fatalf("valid selector header rejected: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		extra         []byte
+		expectedError error
+	}{
+		{name: "missing", expectedError: usdb.ErrMissingProfileSelector},
+		{name: "wrong size", extra: validExtra[:len(validExtra)-1], expectedError: usdb.ErrProfileSelectorSize},
+		{name: "wrong payload version", extra: append([]byte(nil), validExtra...), expectedError: usdb.ErrProfileSelectorVersion},
+		{name: "wrong difficulty policy", extra: append([]byte(nil), validExtra...), expectedError: usdb.ErrDifficultyPolicyVersionMismatch},
+	}
+	tests[2].extra[0] = 2
+	tests[3].extra[2] = 2
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := engine.verifyHeader(chain, newHeader(test.extra), parent, false, false, 2_000); !errors.Is(err, test.expectedError) {
+				t.Fatalf("expected %v, got %v", test.expectedError, err)
+			}
+		})
+	}
+}
+
 func TestFinalizeAndAssembleUsesUsdbReward(t *testing.T) {
 	coinbase := common.HexToAddress("0x1001")
 	verifier := &stubRewardVerifier{
@@ -343,8 +399,7 @@ func TestFinalizeAndAssembleUsesUsdbReward(t *testing.T) {
 	}
 	engine := &Ethash{
 		config: Config{
-			Log:  log.Root(),
-			USDB: USDBConfig{Enabled: true},
+			Log: log.Root(),
 		},
 		usdbRewardVerifier: verifier,
 	}
@@ -354,7 +409,7 @@ func TestFinalizeAndAssembleUsesUsdbReward(t *testing.T) {
 		Extra:    newTestPayloadBytes(t),
 	}
 	statedb := newTestStateDB(t)
-	chain := &stubChainHeaderReader{config: params.AllEthashProtocolChanges}
+	chain := &stubChainHeaderReader{config: newTestUSDBChainConfig()}
 
 	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil)
 	if err != nil {
@@ -375,8 +430,7 @@ func TestFinalizeAndAssembleReturnsErrorWhenUsdbVerifierFails(t *testing.T) {
 	coinbase := common.HexToAddress("0x1002")
 	engine := &Ethash{
 		config: Config{
-			Log:  log.Root(),
-			USDB: USDBConfig{Enabled: true},
+			Log: log.Root(),
 		},
 		usdbRewardVerifier: &stubRewardVerifier{err: errInvalidPoW},
 	}
@@ -386,7 +440,7 @@ func TestFinalizeAndAssembleReturnsErrorWhenUsdbVerifierFails(t *testing.T) {
 		Extra:    newTestPayloadBytes(t),
 	}
 	statedb := newTestStateDB(t)
-	chain := &stubChainHeaderReader{config: params.AllEthashProtocolChanges}
+	chain := &stubChainHeaderReader{config: newTestUSDBChainConfig()}
 
 	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil)
 	if err == nil {
@@ -404,8 +458,7 @@ func TestFinalizeLeavesStateUnchangedWhenUsdbVerifierFails(t *testing.T) {
 	coinbase := common.HexToAddress("0x1003")
 	engine := &Ethash{
 		config: Config{
-			Log:  log.Root(),
-			USDB: USDBConfig{Enabled: true},
+			Log: log.Root(),
 		},
 		usdbRewardVerifier: &stubRewardVerifier{err: errInvalidPoW},
 	}
@@ -415,7 +468,7 @@ func TestFinalizeLeavesStateUnchangedWhenUsdbVerifierFails(t *testing.T) {
 		Extra:    newTestPayloadBytes(t),
 	}
 	statedb := newTestStateDB(t)
-	chain := &stubChainHeaderReader{config: params.AllEthashProtocolChanges}
+	chain := &stubChainHeaderReader{config: newTestUSDBChainConfig()}
 
 	engine.Finalize(chain, header, statedb, nil, nil)
 	if got := statedb.GetBalance(coinbase); got.Sign() != 0 {
@@ -423,5 +476,34 @@ func TestFinalizeLeavesStateUnchangedWhenUsdbVerifierFails(t *testing.T) {
 	}
 	if header.Root == (common.Hash{}) {
 		t.Fatalf("expected finalize to still compute a state root")
+	}
+}
+
+func TestFinalizeUsesLegacyRewardWhenChainConfigDoesNotActivateUsdb(t *testing.T) {
+	coinbase := common.HexToAddress("0x1004")
+	verifier := &stubRewardVerifier{err: errors.New("must not be called")}
+	engine := &Ethash{
+		config:             Config{Log: log.Root()},
+		usdbRewardVerifier: verifier,
+	}
+	header := &types.Header{
+		Number:   big.NewInt(1),
+		Coinbase: coinbase,
+	}
+	statedb := newTestStateDB(t)
+	chain := &stubChainHeaderReader{config: &params.ChainConfig{}}
+
+	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("legacy finalization failed: %v", err)
+	}
+	if block == nil {
+		t.Fatal("expected legacy block to be assembled")
+	}
+	if verifier.lastBlockNo != 0 {
+		t.Fatalf("USDB verifier called on inactive chain at block %d", verifier.lastBlockNo)
+	}
+	if got := statedb.GetBalance(coinbase); got.Cmp(FrontierBlockReward) != 0 {
+		t.Fatalf("unexpected legacy reward: have %s want %s", got, FrontierBlockReward)
 	}
 }

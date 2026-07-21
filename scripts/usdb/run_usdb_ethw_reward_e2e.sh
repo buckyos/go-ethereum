@@ -413,10 +413,8 @@ EOF
       --mine \
       --miner.threads 1 \
       --miner.etherbase "$MINER_ETHERBASE" \
-      --miner.usdb \
       --miner.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}" \
       --miner.usdb.passid "$pass_id" \
-      --ethash.usdb \
       --ethash.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}"
   ) >"$GETH_LOG_FILE" 2>&1 &
   GETH_PID=$!

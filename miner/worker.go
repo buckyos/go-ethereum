@@ -253,7 +253,7 @@ type worker struct {
 	resubmitHook func(time.Duration, time.Duration) // Method to call upon updating resubmitting interval.
 
 	// usdbPayloadBuilder builds the current profile selector written into header.Extra.
-	// It is only set when miner-side USDB integration is enabled.
+	// It is only set when the chain config activates USDB consensus.
 	usdbPayloadBuilder profileSelectorBuilder
 	// usdbPayloadBuilderErr preserves initialization failures so block assembly can
 	// fail closed instead of falling back to stale or empty extra-data.
@@ -263,7 +263,7 @@ type worker struct {
 type profileSelectorBuilder interface {
 	// BuildCurrentPayload fetches the current USDB state and returns the encoded
 	// payload that should be committed into header.Extra for the candidate block.
-	BuildCurrentPayload(ctx context.Context) ([]byte, error)
+	BuildCurrentPayload(ctx context.Context, blockNumber uint64) ([]byte, error)
 	// Close releases any builder-owned resources such as RPC connections.
 	Close()
 }
@@ -293,19 +293,24 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
 	}
-	if config.USDB.Enabled {
-		// The current dev chain supports policy v1. UIP-0008/UIP-0009 chain
-		// configuration will replace this constant with a height-derived version.
-		builder, err := usdb.NewRPCPayloadBuilder(
-			config.USDB.RPCURL,
-			config.USDB.PassID,
-			usdb.DifficultyPolicyVersionV1,
-			config.USDB.QueryTimeout,
-		)
-		if err != nil {
-			worker.usdbPayloadBuilderErr = fmt.Errorf("failed to initialize usdb payload builder: %w", err)
+	if chainConfig.HasUSDBConsensus() {
+		if config.USDB.PassID == "" {
+			// Validator-only nodes do not need a miner-side RPC connection. Keep a
+			// deterministic error so any later attempt to assemble a block still
+			// fails instead of falling back to static extra-data.
+			worker.usdbPayloadBuilderErr = errors.New("usdb selected pass is not configured")
 		} else {
-			worker.usdbPayloadBuilder = builder
+			builder, err := usdb.NewRPCPayloadBuilder(
+				config.USDB.RPCURL,
+				config.USDB.PassID,
+				chainConfig,
+				config.USDB.QueryTimeout,
+			)
+			if err != nil {
+				worker.usdbPayloadBuilderErr = fmt.Errorf("failed to initialize usdb payload builder: %w", err)
+			} else {
+				worker.usdbPayloadBuilder = builder
+			}
 		}
 	}
 	// Subscribe NewTxsEvent for tx pool
@@ -1040,8 +1045,8 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		Time:       timestamp,
 		Coinbase:   genParams.coinbase,
 	}
-	if !genParams.noExtra {
-		extra, err := w.resolveHeaderExtra(context.Background(), builder, builderErr, staticExtra)
+	if !genParams.noExtra || w.chainConfig.HasUSDBConsensus() {
+		extra, err := w.resolveHeaderExtra(context.Background(), builder, builderErr, staticExtra, header.Number)
 		if err != nil {
 			return nil, err
 		}
@@ -1100,14 +1105,25 @@ func (w *worker) resolveHeaderExtra(
 	builder profileSelectorBuilder,
 	builderErr error,
 	staticExtra []byte,
+	blockNumber *big.Int,
 ) ([]byte, error) {
+	if blockNumber == nil || !blockNumber.IsUint64() {
+		return nil, fmt.Errorf("invalid candidate block number %v", blockNumber)
+	}
+	policy, err := w.chainConfig.USDBConsensusAt(blockNumber.Uint64())
+	if err != nil {
+		return nil, err
+	}
+	if policy == nil {
+		return staticExtra, nil
+	}
 	if builder != nil {
-		return builder.BuildCurrentPayload(ctx)
+		return builder.BuildCurrentPayload(ctx, blockNumber.Uint64())
 	}
 	if builderErr != nil {
 		return nil, builderErr
 	}
-	return staticExtra, nil
+	return nil, fmt.Errorf("usdb payload builder is not configured at block %d", blockNumber.Uint64())
 }
 
 // fillTransactions retrieves the pending transactions from the txpool and fills them

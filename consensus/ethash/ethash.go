@@ -39,6 +39,7 @@ import (
 	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/hashicorp/golang-lru/simplelru"
 )
@@ -435,13 +436,13 @@ type Config struct {
 
 	Log log.Logger `toml:"-"`
 
-	// USDB enables optional reward verification against a local usdb-indexer service.
+	// USDB contains operational access to the local usdb-indexer service.
 	USDB USDBConfig `toml:",omitempty"`
 }
 
-// USDBConfig configures optional USDB-backed reward verification during block finalization.
+// USDBConfig contains operational settings for USDB-backed reward verification.
+// The chain config is the only source of consensus activation.
 type USDBConfig struct {
-	Enabled bool `toml:",omitempty"`
 	// RPCURL points to the local usdb-indexer JSON-RPC endpoint used by validators.
 	RPCURL string `toml:",omitempty"`
 	// QueryTimeout bounds one historical reward replay against the local USDB service.
@@ -486,10 +487,14 @@ type rewardVerifier interface {
 	Close()
 }
 
-// New creates a full sized ethash PoW scheme and starts a background thread for
-// remote mining, also optionally notifying a batch of remote services of new work
-// packages.
+// New creates an Ethash engine without chain-specific companion services.
 func New(config Config, notify []string, noverify bool) *Ethash {
+	return NewWithChainConfig(config, nil, notify, noverify)
+}
+
+// NewWithChainConfig creates a full sized Ethash engine and initializes the
+// USDB companion verifier only when the chain config activates USDB consensus.
+func NewWithChainConfig(config Config, chainConfig *params.ChainConfig, notify []string, noverify bool) *Ethash {
 	if config.Log == nil {
 		config.Log = log.Root()
 	}
@@ -510,7 +515,7 @@ func New(config Config, notify []string, noverify bool) *Ethash {
 		update:   make(chan struct{}),
 		hashrate: metrics.NewMeterForced(),
 	}
-	if config.USDB.Enabled {
+	if chainConfig.HasUSDBConsensus() {
 		verifier, err := usdb.NewRPCVerifier(config.USDB.RPCURL, config.USDB.QueryTimeout)
 		if err != nil {
 			ethash.usdbRewardVerifierErr = fmt.Errorf("failed to initialize usdb reward verifier: %w", err)

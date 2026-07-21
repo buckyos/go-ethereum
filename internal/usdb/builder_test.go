@@ -4,7 +4,16 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/params"
 )
+
+func testBuilderChainConfig(payloadVersion byte, difficultyPolicyVersion uint16) *params.ChainConfig {
+	return &params.ChainConfig{USDB: &params.USDBConsensusConfig{
+		PayloadVersion:          payloadVersion,
+		DifficultyPolicyVersion: difficultyPolicyVersion,
+	}}
+}
 
 func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 	selector := newTestSelector(t, 123)
@@ -16,12 +25,12 @@ func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 		},
 		profile: newTestProfileView(t, selector, "1000000", "500000"),
 	}
-	builder, err := NewPayloadBuilder(client, selector.PassID.String(), 7, 0)
+	builder, err := NewPayloadBuilder(client, selector.PassID.String(), testBuilderChainConfig(ProfileSelectorPayloadVersionV1, 7), 0)
 	if err != nil {
 		t.Fatalf("failed to build payload builder: %v", err)
 	}
 
-	encoded, err := builder.BuildCurrentPayload(context.Background())
+	encoded, err := builder.BuildCurrentPayload(context.Background(), 42)
 	if err != nil {
 		t.Fatalf("failed to build profile selector: %v", err)
 	}
@@ -72,20 +81,67 @@ func TestPayloadBuilderRejectsNonCandidateConfiguredPass(t *testing.T) {
 				},
 				profile: profile,
 			}
-			builder, err := NewPayloadBuilder(client, selector.PassID.String(), DifficultyPolicyVersionV1, 0)
+			builder, err := NewPayloadBuilder(client, selector.PassID.String(), testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0)
 			if err != nil {
 				t.Fatalf("failed to build payload builder: %v", err)
 			}
-			if _, err := builder.BuildCurrentPayload(context.Background()); !errors.Is(err, ErrSelectedPassNotCandidate) {
+			if _, err := builder.BuildCurrentPayload(context.Background(), 42); !errors.Is(err, ErrSelectedPassNotCandidate) {
 				t.Fatalf("expected candidate error, got %v", err)
 			}
 		})
 	}
 }
 
-func TestNewPayloadBuilderRejectsZeroDifficultyPolicyVersion(t *testing.T) {
+func TestPayloadBuilderRejectsUnavailableConsensusPolicy(t *testing.T) {
 	selector := newTestSelector(t, 123)
-	if _, err := NewPayloadBuilder(&stubProfileClient{}, selector.PassID.String(), 0, 0); err == nil {
-		t.Fatal("expected zero difficulty policy version to be rejected")
+	if _, err := NewPayloadBuilder(&stubProfileClient{}, selector.PassID.String(), nil, 0); err == nil {
+		t.Fatal("expected nil chain config to be rejected")
+	}
+	tests := []struct {
+		name   string
+		config *params.ChainConfig
+	}{
+		{name: "inactive", config: &params.ChainConfig{}},
+		{name: "zero payload version", config: testBuilderChainConfig(0, DifficultyPolicyVersionV1)},
+		{name: "zero difficulty policy", config: testBuilderChainConfig(ProfileSelectorPayloadVersionV1, 0)},
+		{name: "unsupported payload version", config: testBuilderChainConfig(2, DifficultyPolicyVersionV1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder, err := NewPayloadBuilder(&stubProfileClient{}, selector.PassID.String(), test.config, 0)
+			if err != nil {
+				t.Fatalf("failed to construct builder: %v", err)
+			}
+			if _, err := builder.BuildCurrentPayload(context.Background(), 42); err == nil {
+				t.Fatal("expected unavailable consensus policy to stop payload generation")
+			}
+		})
+	}
+}
+
+func TestPayloadBuilderRejectsUnavailableCurrentStateAndProfile(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	config := testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1)
+	tests := []struct {
+		name   string
+		client *stubProfileClient
+	}{
+		{name: "missing current state", client: &stubProfileClient{}},
+		{name: "missing profile", client: &stubProfileClient{system: &SystemStateInfo{
+			LocalSyncedBlockHeight: selector.BTCHeight,
+			UpstreamSnapshotID:     selector.SnapshotIDHex(),
+			SystemStateID:          selector.SystemStateIDHex(),
+		}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder, err := NewPayloadBuilder(test.client, selector.PassID.String(), config, 0)
+			if err != nil {
+				t.Fatalf("failed to construct builder: %v", err)
+			}
+			if _, err := builder.BuildCurrentPayload(context.Background(), 42); err == nil {
+				t.Fatal("expected unavailable current profile state to stop payload generation")
+			}
+		})
 	}
 }

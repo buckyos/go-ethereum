@@ -234,7 +234,7 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 		case ethash.ModeShared:
 			log.Warn("Ethash used in shared mode")
 		}
-		engine = ethash.New(ethash.Config{
+		engine = ethash.NewWithChainConfig(ethash.Config{
 			PowMode:          config.PowMode,
 			CacheDir:         stack.ResolvePath(config.CacheDir),
 			CachesInMem:      config.CachesInMem,
@@ -246,7 +246,7 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 			DatasetsLockMmap: config.DatasetsLockMmap,
 			NotifyFull:       config.NotifyFull,
 			USDB:             config.USDB,
-		}, notify, noverify)
+		}, chainConfig, notify, noverify)
 		engine.(*ethash.Ethash).SetThreads(-1) // Disable CPU mining
 	}
 	// Only networks with an actual merge transition should route the engine

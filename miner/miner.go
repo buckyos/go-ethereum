@@ -56,9 +56,9 @@ type Config struct {
 	Noverify   bool           // Disable remote mining solution verification(only useful in ethash).
 }
 
-// USDBConfig configures optional USDB profile selector generation during block assembly.
+// USDBConfig contains operational settings for the USDB companion service.
+// ChainConfig, not this structure, decides whether USDB consensus is active.
 type USDBConfig struct {
-	Enabled bool `toml:",omitempty"`
 	// RPCURL points to the local usdb-indexer JSON-RPC endpoint used by the miner.
 	RPCURL string `toml:",omitempty"`
 	// PassID selects the pass committed as selected_pass in header.Extra.

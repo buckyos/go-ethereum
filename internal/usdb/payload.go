@@ -37,6 +37,9 @@ var (
 	ErrProfileSelectorSize = errors.New("usdb profile selector size mismatch")
 	// ErrProfileSelectorVersion indicates an unsupported binary payload layout.
 	ErrProfileSelectorVersion = errors.New("usdb profile selector version mismatch")
+	// ErrDifficultyPolicyVersionMismatch indicates that the header commitment does
+	// not match the version selected by the ETHW chain configuration.
+	ErrDifficultyPolicyVersionMismatch = errors.New("usdb difficulty policy version mismatch")
 )
 
 // PassID is the canonical compact pass identifier used in ETHW consensus payloads.
@@ -115,6 +118,28 @@ func (p *ProfileSelectorPayload) UnmarshalBinary(data []byte) error {
 	p.SnapshotID = common.BytesToHash(data[snapshotIDOffset:systemStateIDOffset])
 	p.SystemStateID = common.BytesToHash(data[systemStateIDOffset:passIDOffset])
 	return p.PassID.UnmarshalBinary(data[passIDOffset:])
+}
+
+// ValidateProfileSelectorPayload performs the consensus-only binary checks for
+// header.Extra. It does not query the USDB companion service.
+func ValidateProfileSelectorPayload(data []byte, expectedPayloadVersion byte, expectedDifficultyPolicyVersion uint16) error {
+	if len(data) == 0 {
+		return ErrMissingProfileSelector
+	}
+	if expectedPayloadVersion != ProfileSelectorPayloadVersionV1 {
+		return fmt.Errorf("%w: chain config expects unsupported version %d", ErrProfileSelectorVersion, expectedPayloadVersion)
+	}
+	var payload ProfileSelectorPayload
+	if err := payload.UnmarshalBinary(data); err != nil {
+		return err
+	}
+	if payload.PayloadVersion != expectedPayloadVersion {
+		return fmt.Errorf("%w: have %d want %d", ErrProfileSelectorVersion, payload.PayloadVersion, expectedPayloadVersion)
+	}
+	if payload.DifficultyPolicyVersion != expectedDifficultyPolicyVersion {
+		return fmt.Errorf("%w: have %d want %d", ErrDifficultyPolicyVersionMismatch, payload.DifficultyPolicyVersion, expectedDifficultyPolicyVersion)
+	}
+	return nil
 }
 
 // SnapshotIDHex returns the canonical lowercase USDB snapshot id without a prefix.

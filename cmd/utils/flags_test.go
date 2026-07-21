@@ -88,18 +88,14 @@ func newCLIContext(t *testing.T, flagsList []cli.Flag, args ...string) *cli.Cont
 
 func TestSetMinerAppliesUSDBFlags(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
-		MinerUSDBEnabledFlag,
 		MinerUSDBRPCURLFlag,
 		MinerUSDBPassIDFlag,
 		MinerUSDBTimeoutFlag,
-	}, "--miner.usdb", "--miner.usdb.rpcurl", "http://127.0.0.1:8548", "--miner.usdb.passid", "abc123i7", "--miner.usdb.timeout", "4s")
+	}, "--miner.usdb.rpcurl", "http://127.0.0.1:8548", "--miner.usdb.passid", "abc123i7", "--miner.usdb.timeout", "4s")
 
 	cfg := ethconfig.Defaults.Miner
 	setMiner(ctx, &cfg)
 
-	if !cfg.USDB.Enabled {
-		t.Fatalf("expected miner usdb to be enabled")
-	}
 	if cfg.USDB.RPCURL != "http://127.0.0.1:8548" {
 		t.Fatalf("unexpected miner usdb rpc url: %s", cfg.USDB.RPCURL)
 	}
@@ -113,17 +109,13 @@ func TestSetMinerAppliesUSDBFlags(t *testing.T) {
 
 func TestSetEthashAppliesUSDBFlags(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
-		EthashUSDBEnabledFlag,
 		EthashUSDBRPCURLFlag,
 		EthashUSDBTimeoutFlag,
-	}, "--ethash.usdb", "--ethash.usdb.rpcurl", "http://127.0.0.1:18548", "--ethash.usdb.timeout", "6s")
+	}, "--ethash.usdb.rpcurl", "http://127.0.0.1:18548", "--ethash.usdb.timeout", "6s")
 
 	cfg := ethconfig.Defaults
 	setEthash(ctx, &cfg)
 
-	if !cfg.Ethash.USDB.Enabled {
-		t.Fatalf("expected ethash usdb to be enabled")
-	}
 	if cfg.Ethash.USDB.RPCURL != "http://127.0.0.1:18548" {
 		t.Fatalf("unexpected ethash usdb rpc url: %s", cfg.Ethash.USDB.RPCURL)
 	}

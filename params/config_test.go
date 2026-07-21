@@ -17,8 +17,10 @@
 package params
 
 import (
+	"encoding/json"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -143,6 +145,56 @@ func TestHasMergeTransition(t *testing.T) {
 	cfg := &ChainConfig{TerminalTotalDifficultyPassed: true}
 	if !cfg.HasMergeTransition() {
 		t.Fatalf("post-merge debug config must still report merge transition support")
+	}
+}
+
+func TestUSDBConsensusAtUsesChainConfigVersions(t *testing.T) {
+	if (&ChainConfig{}).HasUSDBConsensus() {
+		t.Fatal("empty chain config must not activate USDB consensus")
+	}
+	if policy, err := (&ChainConfig{}).USDBConsensusAt(7); err != nil || policy != nil {
+		t.Fatalf("inactive config returned policy=%+v err=%v", policy, err)
+	}
+	policy, err := USDBChainConfig.USDBConsensusAt(7)
+	if err != nil {
+		t.Fatalf("failed to resolve built-in USDB policy: %v", err)
+	}
+	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 {
+		t.Fatalf("unexpected built-in USDB policy: %+v", policy)
+	}
+	policy.DifficultyPolicyVersion = 9
+	if USDBChainConfig.USDB.DifficultyPolicyVersion != 1 {
+		t.Fatal("policy lookup must return a copy of chain config state")
+	}
+
+	for _, config := range []*ChainConfig{
+		{USDB: &USDBConsensusConfig{DifficultyPolicyVersion: 1}},
+		{USDB: &USDBConsensusConfig{PayloadVersion: 1}},
+	} {
+		if _, err := config.USDBConsensusAt(7); err == nil {
+			t.Fatalf("expected invalid USDB policy to fail: %+v", config.USDB)
+		}
+	}
+}
+
+func TestUSDBConsensusConfigJSONRoundTrip(t *testing.T) {
+	encoded, err := json.Marshal(USDBChainConfig)
+	if err != nil {
+		t.Fatalf("failed to encode USDB chain config: %v", err)
+	}
+	var decoded ChainConfig
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("failed to decode USDB chain config: %v", err)
+	}
+	policy, err := decoded.USDBConsensusAt(19)
+	if err != nil {
+		t.Fatalf("failed to resolve round-tripped USDB policy: %v", err)
+	}
+	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 {
+		t.Fatalf("unexpected round-tripped USDB policy: %+v", policy)
+	}
+	if banner := decoded.String(); !strings.Contains(banner, "USDB profile selector: payload v1, difficulty policy v1 (genesis)") {
+		t.Fatalf("USDB consensus versions missing from chain banner:\n%s", banner)
 	}
 }
 

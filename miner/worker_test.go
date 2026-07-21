@@ -210,36 +210,71 @@ func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consens
 }
 
 type stubPayloadBuilder struct {
-	payload []byte
+	payload     []byte
+	err         error
+	blockNumber uint64
 }
 
-func (s *stubPayloadBuilder) BuildCurrentPayload(context.Context) ([]byte, error) {
+func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber uint64) ([]byte, error) {
+	s.blockNumber = blockNumber
+	if s.err != nil {
+		return nil, s.err
+	}
 	return append([]byte(nil), s.payload...), nil
 }
 
 func (s *stubPayloadBuilder) Close() {}
+
+func testWorkerUSDBChainConfig() *params.ChainConfig {
+	config := *params.AllEthashProtocolChanges
+	config.USDB = &params.USDBConsensusConfig{
+		PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+		DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+	}
+	return &config
+}
 
 func TestGenerateBlockAndImportEthash(t *testing.T) {
 	testGenerateBlockAndImport(t, false)
 }
 
 func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
-	w, _ := newTestWorker(t, params.AllEthashProtocolChanges, ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
+	w, _ := newTestWorker(t, testWorkerUSDBChainConfig(), ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
 	defer w.close()
 
 	payload := bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size)
-	w.usdbPayloadBuilder = &stubPayloadBuilder{payload: payload}
+	builder := &stubPayloadBuilder{payload: payload}
+	w.usdbPayloadBuilder = builder
 	w.setExtra([]byte("static-extra"))
 
 	env, err := w.prepareWork(&generateParams{
 		timestamp: uint64(time.Now().Unix()) + 1,
 		coinbase:  testBankAddress,
+		noExtra:   true,
 	})
 	if err != nil {
 		t.Fatalf("prepareWork failed: %v", err)
 	}
 	if !bytes.Equal(env.header.Extra, payload) {
 		t.Fatalf("unexpected header extra: have %x want %x", env.header.Extra, payload)
+	}
+	if builder.blockNumber != 1 {
+		t.Fatalf("builder received block number %d, want 1", builder.blockNumber)
+	}
+}
+
+func TestPrepareWorkStopsWhenUsdbProfileIsUnavailable(t *testing.T) {
+	w, _ := newTestWorker(t, testWorkerUSDBChainConfig(), ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
+	defer w.close()
+
+	unavailable := errors.New("current usdb profile unavailable")
+	w.usdbPayloadBuilder = &stubPayloadBuilder{err: unavailable}
+	w.usdbPayloadBuilderErr = nil
+	if _, err := w.prepareWork(&generateParams{
+		timestamp: uint64(time.Now().Unix()) + 1,
+		coinbase:  testBankAddress,
+	}); !errors.Is(err, unavailable) {
+		t.Fatalf("expected unavailable profile error, got %v", err)
 	}
 }
 

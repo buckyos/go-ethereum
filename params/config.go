@@ -112,6 +112,10 @@ var (
 		ChainID_ALT:             new(big.Int).SetUint64(USDBNetworkID),
 		TerminalTotalDifficulty: nil,
 		Ethash:                  new(EthashConfig),
+		USDB: &USDBConsensusConfig{
+			PayloadVersion:          1,
+			DifficultyPolicyVersion: 1,
+		},
 	}
 
 	// MainnetTrustedCheckpoint contains the light client trusted checkpoint for the main network.
@@ -497,6 +501,18 @@ type ChainConfig struct {
 	// Various consensus engines
 	Ethash *EthashConfig `json:"ethash,omitempty"`
 	Clique *CliqueConfig `json:"clique,omitempty"`
+
+	// USDB activates the USDB profile-selector consensus rules. The v1 network
+	// config is active from genesis; future height-based schedules are resolved
+	// through USDBConsensusAt rather than runtime flags.
+	USDB *USDBConsensusConfig `json:"usdb,omitempty"`
+}
+
+// USDBConsensusConfig contains the consensus-owned UIP-0007 versions.
+// Operational companion-service settings intentionally do not belong here.
+type USDBConsensusConfig struct {
+	PayloadVersion          uint8  `json:"payloadVersion"`
+	DifficultyPolicyVersion uint16 `json:"difficultyPolicyVersion"`
 }
 
 // EthashConfig is the consensus engine configs for proof-of-work based sealing.
@@ -547,6 +563,9 @@ func (c *ChainConfig) String() string {
 		}
 	default:
 		banner += "Consensus: unknown\n"
+	}
+	if c.USDB != nil {
+		banner += fmt.Sprintf("USDB profile selector: payload v%d, difficulty policy v%d (genesis)\n", c.USDB.PayloadVersion, c.USDB.DifficultyPolicyVersion)
 	}
 	banner += "\n"
 
@@ -763,6 +782,29 @@ func (c *ChainConfig) DefaultNetworkID() uint64 {
 // engine directly for their full lifetime.
 func (c *ChainConfig) HasMergeTransition() bool {
 	return c != nil && (c.TerminalTotalDifficulty != nil || c.TerminalTotalDifficultyPassed)
+}
+
+// HasUSDBConsensus reports whether this network activates USDB consensus rules.
+// Presence means genesis activation for the current v1 chain configuration.
+func (c *ChainConfig) HasUSDBConsensus() bool {
+	return c != nil && c.USDB != nil
+}
+
+// USDBConsensusAt returns the USDB consensus versions expected at blockNumber.
+// The explicit height input keeps consumers compatible with future UIP-0008
+// activation schedules even though the current v1 config activates at genesis.
+func (c *ChainConfig) USDBConsensusAt(blockNumber uint64) (*USDBConsensusConfig, error) {
+	if !c.HasUSDBConsensus() {
+		return nil, nil
+	}
+	if c.USDB.PayloadVersion == 0 {
+		return nil, fmt.Errorf("invalid USDB payload version 0 at block %d", blockNumber)
+	}
+	if c.USDB.DifficultyPolicyVersion == 0 {
+		return nil, fmt.Errorf("invalid USDB difficulty policy version 0 at block %d", blockNumber)
+	}
+	config := *c.USDB
+	return &config, nil
 }
 
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.

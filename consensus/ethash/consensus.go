@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -270,6 +271,18 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	// Ensure that the header's extra-data section is of a reasonable size
 	if uint64(len(header.Extra)) > params.MaximumExtraDataSize {
 		return fmt.Errorf("extra-data too long: %d > %d", len(header.Extra), params.MaximumExtraDataSize)
+	}
+	if header.Number == nil || !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
+	policy, err := chain.Config().USDBConsensusAt(header.Number.Uint64())
+	if err != nil {
+		return fmt.Errorf("invalid usdb consensus config: %w", err)
+	}
+	if policy != nil {
+		if err := usdb.ValidateProfileSelectorPayload(header.Extra, policy.PayloadVersion, policy.DifficultyPolicyVersion); err != nil {
+			return fmt.Errorf("invalid usdb profile selector: %w", err)
+		}
 	}
 	// Verify the header's timestamp
 	if !uncle {
@@ -737,9 +750,19 @@ func accumulateLegacyRewards(config *params.ChainConfig, state *state.StateDB, h
 }
 
 func (ethash *Ethash) accumulateRewards(config *params.ChainConfig, state *state.StateDB, header *types.Header, uncles []*types.Header) error {
-	if !ethash.config.USDB.Enabled {
+	if header.Number == nil || !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
+	policy, err := config.USDBConsensusAt(header.Number.Uint64())
+	if err != nil {
+		return fmt.Errorf("invalid usdb consensus config: %w", err)
+	}
+	if policy == nil {
 		accumulateLegacyRewards(config, state, header, uncles)
 		return nil
+	}
+	if err := usdb.ValidateProfileSelectorPayload(header.Extra, policy.PayloadVersion, policy.DifficultyPolicyVersion); err != nil {
+		return fmt.Errorf("invalid usdb profile selector: %w", err)
 	}
 	return ethash.accumulateUSDBRewards(state, header, uncles)
 }

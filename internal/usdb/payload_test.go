@@ -82,6 +82,46 @@ func TestProfileSelectorPayloadV1RejectsInvalidSizeAndVersion(t *testing.T) {
 	}
 }
 
+func TestValidateProfileSelectorPayloadChecksConsensusVersions(t *testing.T) {
+	payload, err := NewProfileSelectorPayload(
+		DifficultyPolicyVersionV1,
+		123,
+		repeatHex("11", 32),
+		repeatHex("22", 32),
+		repeatHex("33", 32)+"i7",
+	)
+	if err != nil {
+		t.Fatalf("failed to build selector: %v", err)
+	}
+	encoded, err := payload.MarshalBinary()
+	if err != nil {
+		t.Fatalf("failed to encode selector: %v", err)
+	}
+	if err := ValidateProfileSelectorPayload(encoded, ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1); err != nil {
+		t.Fatalf("valid selector rejected: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		data           []byte
+		payloadVersion byte
+		difficulty     uint16
+		expectedError  error
+	}{
+		{name: "missing", payloadVersion: 1, difficulty: 1, expectedError: ErrMissingProfileSelector},
+		{name: "short", data: encoded[:len(encoded)-1], payloadVersion: 1, difficulty: 1, expectedError: ErrProfileSelectorSize},
+		{name: "unsupported expected payload", data: encoded, payloadVersion: 2, difficulty: 1, expectedError: ErrProfileSelectorVersion},
+		{name: "difficulty mismatch", data: encoded, payloadVersion: 1, difficulty: 2, expectedError: ErrDifficultyPolicyVersionMismatch},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateProfileSelectorPayload(test.data, test.payloadVersion, test.difficulty); !errors.Is(err, test.expectedError) {
+				t.Fatalf("expected %v, got %v", test.expectedError, err)
+			}
+		})
+	}
+}
+
 func TestParsePassIDRequiresCanonicalEncoding(t *testing.T) {
 	raw := repeatHex("ab", 32) + "i42"
 	passID, err := ParsePassID(raw)
