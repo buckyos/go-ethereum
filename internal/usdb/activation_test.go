@@ -44,26 +44,26 @@ func TestActiveVersionSetDecoderRejectsUnknownAndDuplicateFamilies(t *testing.T)
 	}
 }
 
-func TestActiveVersionSetValidatesExactBTCV1Surface(t *testing.T) {
+func TestActiveVersionSetValidatesBTCProfileSurface(t *testing.T) {
 	set := newTestActiveVersionSet(t)
-	if err := set.ValidateBTCIndexerV1(); err != nil {
+	if err := set.ValidateBTCProfileSurface(); err != nil {
 		t.Fatalf("expected BTC v1 set to validate: %v", err)
 	}
 
 	set["energy_formula_version"] = json.RawMessage(`"v999"`)
-	if err := set.ValidateBTCIndexerV1(); err == nil {
-		t.Fatal("expected unsupported energy formula to fail")
+	if err := set.ValidateBTCProfileSurface(); err != nil {
+		t.Fatalf("formula dispatch should decide version support: %v", err)
 	}
 
 	set = newTestActiveVersionSet(t)
 	delete(set, "query_semantics_version")
-	if err := set.ValidateBTCIndexerV1(); err == nil {
+	if err := set.ValidateBTCProfileSurface(); err == nil {
 		t.Fatal("expected missing family to fail")
 	}
 
 	set = newTestActiveVersionSet(t)
 	set["payload_version"] = json.RawMessage(`1`)
-	if err := set.ValidateBTCIndexerV1(); err == nil {
+	if err := set.ValidateBTCProfileSurface(); err == nil {
 		t.Fatal("expected extra family to fail")
 	}
 }

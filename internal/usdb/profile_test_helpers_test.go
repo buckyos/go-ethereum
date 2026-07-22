@@ -83,7 +83,7 @@ func newTestSystemStateInfo(t *testing.T, selector ProfileSelectorPayload) *Syst
 		t.Fatalf("failed to identify test active version set: %v", err)
 	}
 	return &SystemStateInfo{
-		ActivationRegistryID:   repeatHex("77", 32),
+		ActivationRegistryID:   BTCRegtestActivationRegistryIDV1,
 		ActiveVersionSet:       activeVersionSet,
 		ActiveVersionSetID:     activeVersionSetID,
 		LocalSyncedBlockHeight: selector.BTCHeight,
@@ -119,7 +119,7 @@ func newTestProfileView(t *testing.T, selector ProfileSelectorPayload, rawEnergy
 			SystemStateID:                  selector.SystemStateIDHex(),
 			BalanceHistoryAPIVersion:       "1.0.0",
 			BalanceHistorySemanticsVersion: "balance-snapshot-at-or-before:v1",
-			ActivationRegistryID:           repeatHex("77", 32),
+			ActivationRegistryID:           BTCRegtestActivationRegistryIDV1,
 			ActiveVersionSet:               activeVersionSet,
 			ActiveVersionSetID:             activeVersionSetID,
 		},

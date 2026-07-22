@@ -24,7 +24,10 @@ var (
 	ErrInvalidBaseDifficulty = errors.New("invalid usdb base difficulty")
 	// ErrInvalidDifficultyFactor indicates a factor outside the UIP-0005 v1 range.
 	ErrInvalidDifficultyFactor = errors.New("invalid usdb difficulty factor")
-	maximumEnergyValue         = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
+	// ErrUnsupportedBTCFormulaVersion indicates that the payload height selects a
+	// BTC-side formula this binary cannot deterministically replay.
+	ErrUnsupportedBTCFormulaVersion = errors.New("unsupported BTC profile formula version")
+	maximumEnergyValue              = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
 )
 
 // UIP-0005 freezes these integer thresholds so every implementation has identical boundaries.
@@ -149,4 +152,97 @@ func saturatingAddEnergy(left, right *big.Int) *big.Int {
 		return new(big.Int).Set(maximumEnergyValue)
 	}
 	return sum
+}
+
+func resolveProfileFormulaValues(
+	activeVersions ActiveVersionSet,
+	profile PassEconomicProfile,
+) (*big.Int, *big.Int, *big.Int, uint8, uint64, error) {
+	energyFormulaVersion, err := activeVersions.requireStringVersion("energy_formula_version")
+	if err != nil {
+		return nil, nil, nil, 0, 0, err
+	}
+	var rawEnergy *big.Int
+	switch energyFormulaVersion {
+	case EnergyFormulaVersionV1:
+		rawEnergy, err = parseEnergyDecimal("raw_energy", profile.RawEnergy)
+	default:
+		return nil, nil, nil, 0, 0, fmt.Errorf(
+			"%w: energy_formula_version=%q",
+			ErrUnsupportedBTCFormulaVersion,
+			energyFormulaVersion,
+		)
+	}
+	if err != nil {
+		return nil, nil, nil, 0, 0, err
+	}
+
+	effectiveFormulaVersion, err := activeVersions.requireStringVersion("effective_energy_formula_version")
+	if err != nil {
+		return nil, nil, nil, 0, 0, err
+	}
+	var collabContribution, effectiveEnergy *big.Int
+	switch effectiveFormulaVersion {
+	case EffectiveEnergyFormulaVersionV1:
+		collabContribution, err = parseEnergyDecimal("collab_contribution", profile.CollabContribution)
+		if err == nil {
+			effectiveEnergy, err = parseEnergyDecimal("effective_energy", profile.EffectiveEnergy)
+		}
+		if err == nil {
+			expectedEffectiveEnergy := saturatingAddEnergy(rawEnergy, collabContribution)
+			if effectiveEnergy.Cmp(expectedEffectiveEnergy) != 0 {
+				err = fmt.Errorf(
+					"%w: effective_energy have %s want %s",
+					ErrProfileDerivedValueMismatch,
+					effectiveEnergy,
+					expectedEffectiveEnergy,
+				)
+			}
+		}
+	default:
+		return nil, nil, nil, 0, 0, fmt.Errorf(
+			"%w: effective_energy_formula_version=%q",
+			ErrUnsupportedBTCFormulaVersion,
+			effectiveFormulaVersion,
+		)
+	}
+	if err != nil {
+		return nil, nil, nil, 0, 0, err
+	}
+
+	levelFormulaVersion, err := activeVersions.requireStringVersion("level_formula_version")
+	if err != nil {
+		return nil, nil, nil, 0, 0, err
+	}
+	var level uint8
+	var difficultyFactorBps uint64
+	switch levelFormulaVersion {
+	case LevelFormulaVersionV1:
+		level = LevelForEffectiveEnergy(effectiveEnergy)
+		if profile.Level != level {
+			return nil, nil, nil, 0, 0, fmt.Errorf(
+				"%w: level have %d want %d",
+				ErrProfileDerivedValueMismatch,
+				profile.Level,
+				level,
+			)
+		}
+		difficultyFactorBps = DifficultyFactorBpsForLevel(level)
+		if profile.DifficultyFactorBps != difficultyFactorBps {
+			return nil, nil, nil, 0, 0, fmt.Errorf(
+				"%w: difficulty_factor_bps have %d want %d",
+				ErrProfileDerivedValueMismatch,
+				profile.DifficultyFactorBps,
+				difficultyFactorBps,
+			)
+		}
+	default:
+		return nil, nil, nil, 0, 0, fmt.Errorf(
+			"%w: level_formula_version=%q",
+			ErrUnsupportedBTCFormulaVersion,
+			levelFormulaVersion,
+		)
+	}
+
+	return rawEnergy, collabContribution, effectiveEnergy, level, difficultyFactorBps, nil
 }

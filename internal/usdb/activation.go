@@ -134,14 +134,16 @@ func (set ActiveVersionSet) ID() (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// ValidateBTCIndexerV1 rejects version sets that the current validator cannot replay.
-func (set ActiveVersionSet) ValidateBTCIndexerV1() error {
+// ValidateBTCProfileSurface rejects version sets whose non-formula contracts cannot
+// be decoded by this validator. Formula families are dispatched separately so a
+// future generated registry can carry multiple supported formula versions.
+func (set ActiveVersionSet) ValidateBTCProfileSurface() error {
 	required := map[string]string{
 		"inscription_schema_version":        InscriptionSchemaVersionV1,
 		"pass_state_machine_version":        PassStateMachineVersionV1,
-		"energy_formula_version":            EnergyFormulaVersionV1,
-		"effective_energy_formula_version":  EffectiveEnergyFormulaVersionV1,
-		"level_formula_version":             LevelFormulaVersionV1,
+		"energy_formula_version":            "",
+		"effective_energy_formula_version":  "",
+		"level_formula_version":             "",
 		"query_semantics_version":           QuerySemanticsVersionV1,
 		"state_view_version":                EconomicStateViewVersionV1,
 		"commit_protocol_version":           CommitProtocolVersionV1,
@@ -151,36 +153,30 @@ func (set ActiveVersionSet) ValidateBTCIndexerV1() error {
 		return fmt.Errorf("BTC active_version_set has %d families, want %d", len(set), len(required))
 	}
 	for family, expected := range required {
-		raw, ok := set[family]
-		if !ok {
-			return fmt.Errorf("BTC active_version_set is missing %s", family)
-		}
-		value, integer, err := decodeActiveVersionValue(raw)
+		value, err := set.requireStringVersion(family)
 		if err != nil {
-			return fmt.Errorf("invalid %s: %w", family, err)
+			return err
 		}
-		if value == nil || integer != nil || *value != expected {
-			return fmt.Errorf("unsupported %s, have %s want %q", family, string(raw), expected)
+		if expected != "" && value != expected {
+			return fmt.Errorf("unsupported %s, have %q want %q", family, value, expected)
 		}
 	}
 	return nil
 }
 
-func validateBTCActivationIdentity(registryID string, set ActiveVersionSet, setID string) error {
-	if _, err := parseCanonicalHex32("activation_registry_id", registryID); err != nil {
-		return err
+func (set ActiveVersionSet) requireStringVersion(family string) (string, error) {
+	raw, ok := set[family]
+	if !ok {
+		return "", fmt.Errorf("BTC active_version_set is missing %s", family)
 	}
-	if _, err := parseCanonicalHex32("active_version_set_id", setID); err != nil {
-		return err
-	}
-	computedID, err := set.ID()
+	value, integer, err := decodeActiveVersionValue(raw)
 	if err != nil {
-		return fmt.Errorf("invalid active_version_set: %w", err)
+		return "", fmt.Errorf("invalid %s: %w", family, err)
 	}
-	if computedID != setID {
-		return fmt.Errorf("active_version_set_id have %q recomputed %q", setID, computedID)
+	if value == nil || integer != nil || *value == "" {
+		return "", fmt.Errorf("%s must be a non-empty string, have %s", family, string(raw))
 	}
-	return set.ValidateBTCIndexerV1()
+	return *value, nil
 }
 
 func decodeActiveVersionValue(raw json.RawMessage) (*string, *uint64, error) {

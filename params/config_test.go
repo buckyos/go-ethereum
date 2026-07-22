@@ -26,6 +26,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+const testBTCActivationRegistryID = "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
+
 func TestCheckCompatible(t *testing.T) {
 	type test struct {
 		stored, new *ChainConfig
@@ -172,9 +174,10 @@ func TestUSDBConsensusAtUsesChainConfigVersions(t *testing.T) {
 
 	for _, config := range []*ChainConfig{
 		{USDB: &USDBConsensusConfig{}},
-		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{Versions: USDBConsensusVersions{DifficultyPolicyVersion: 1}}}}},
-		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{Versions: USDBConsensusVersions{PayloadVersion: 1}}}}},
-		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+		{USDB: &USDBConsensusConfig{BTCActivationRegistryID: strings.Repeat("A", 64), Activations: []USDBConsensusActivation{{Versions: testUSDBConsensusVersions(1)}}}},
+		{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{{Versions: USDBConsensusVersions{DifficultyPolicyVersion: 1}}}}},
+		{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{{Versions: USDBConsensusVersions{PayloadVersion: 1}}}}},
+		{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{
 			{Block: 7, Versions: testUSDBConsensusVersions(1)},
 			{Block: 7, Versions: testUSDBConsensusVersions(2)},
 		}}},
@@ -186,7 +189,7 @@ func TestUSDBConsensusAtUsesChainConfigVersions(t *testing.T) {
 }
 
 func TestUSDBConsensusAtActivationBoundary(t *testing.T) {
-	config := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+	config := &ChainConfig{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{
 		{Block: 10, Versions: testUSDBConsensusVersions(1)},
 		{Block: 20, Versions: testUSDBConsensusVersions(2)},
 	}}}
@@ -223,6 +226,7 @@ func TestUSDBConsensusConfigJSONRoundTrip(t *testing.T) {
 		t.Fatalf("failed to encode USDB chain config: %v", err)
 	}
 	for _, field := range []string{
+		`"btcActivationRegistryId":"` + testBTCActivationRegistryID + `"`,
 		`"activations"`,
 		`"rewardRuleVersion":0`,
 		`"coinbaseEmissionPolicyVersion":0`,
@@ -247,17 +251,20 @@ func TestUSDBConsensusConfigJSONRoundTrip(t *testing.T) {
 	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 {
 		t.Fatalf("unexpected round-tripped USDB policy: %+v", policy)
 	}
+	if decoded.USDB.BTCActivationRegistryID != testBTCActivationRegistryID {
+		t.Fatalf("round-tripped USDB registry binding changed: %s", decoded.USDB.BTCActivationRegistryID)
+	}
 	if banner := decoded.String(); !strings.Contains(banner, "USDB consensus: payload v1, difficulty policy v1 from block 0 (1 activation(s))") {
 		t.Fatalf("USDB consensus versions missing from chain banner:\n%s", banner)
 	}
 }
 
 func TestUSDBConsensusCheckCompatible(t *testing.T) {
-	stored := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+	stored := &ChainConfig{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{
 		{Block: 0, Versions: testUSDBConsensusVersions(1)},
 		{Block: 100, Versions: testUSDBConsensusVersions(2)},
 	}}}
-	changedFuture := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+	changedFuture := &ChainConfig{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{
 		{Block: 0, Versions: testUSDBConsensusVersions(1)},
 		{Block: 100, Versions: testUSDBConsensusVersions(3)},
 	}}}
@@ -268,7 +275,7 @@ func TestUSDBConsensusCheckCompatible(t *testing.T) {
 		t.Fatalf("active version change returned unexpected compatibility result: %+v", err)
 	}
 
-	changedReward := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+	changedReward := &ChainConfig{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{
 		{Block: 0, Versions: testUSDBConsensusVersions(1)},
 		{Block: 100, Versions: testUSDBConsensusVersions(2)},
 	}}}
@@ -277,7 +284,7 @@ func TestUSDBConsensusCheckCompatible(t *testing.T) {
 		t.Fatalf("active reward-version change returned unexpected compatibility result: %+v", err)
 	}
 
-	shiftedFuture := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+	shiftedFuture := &ChainConfig{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{
 		{Block: 0, Versions: testUSDBConsensusVersions(1)},
 		{Block: 120, Versions: testUSDBConsensusVersions(2)},
 	}}}
@@ -285,11 +292,37 @@ func TestUSDBConsensusCheckCompatible(t *testing.T) {
 		t.Fatalf("shifted active boundary returned unexpected compatibility result: %+v", err)
 	}
 
-	changedGenesis := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+	changedGenesis := &ChainConfig{USDB: &USDBConsensusConfig{BTCActivationRegistryID: testBTCActivationRegistryID, Activations: []USDBConsensusActivation{
 		{Block: 0, Versions: testUSDBConsensusVersions(2)},
 	}}}
 	if err := stored.CheckCompatible(changedGenesis, 0); err == nil || err.RewindTo != 0 {
 		t.Fatalf("genesis version change returned unexpected compatibility result: %+v", err)
+	}
+
+	changedRegistry := &ChainConfig{USDB: &USDBConsensusConfig{
+		BTCActivationRegistryID: strings.Repeat("a", 64),
+		Activations: []USDBConsensusActivation{
+			{Block: 0, Versions: testUSDBConsensusVersions(1)},
+			{Block: 100, Versions: testUSDBConsensusVersions(2)},
+		},
+	}}
+	if err := stored.CheckCompatible(changedRegistry, 0); err == nil || err.What != "USDB BTC activation registry" || err.RewindTo != 0 {
+		t.Fatalf("genesis registry change returned unexpected compatibility result: %+v", err)
+	}
+
+	futureRegistry := &ChainConfig{USDB: &USDBConsensusConfig{
+		BTCActivationRegistryID: strings.Repeat("b", 64),
+		Activations:             []USDBConsensusActivation{{Block: 100, Versions: testUSDBConsensusVersions(1)}},
+	}}
+	futureRegistryChanged := &ChainConfig{USDB: &USDBConsensusConfig{
+		BTCActivationRegistryID: strings.Repeat("c", 64),
+		Activations:             []USDBConsensusActivation{{Block: 100, Versions: testUSDBConsensusVersions(1)}},
+	}}
+	if err := futureRegistry.CheckCompatible(futureRegistryChanged, 99); err != nil {
+		t.Fatalf("future registry binding change must remain compatible: %v", err)
+	}
+	if err := futureRegistry.CheckCompatible(futureRegistryChanged, 100); err == nil || err.What != "USDB BTC activation registry" || err.RewindTo != 99 {
+		t.Fatalf("active future registry change returned unexpected compatibility result: %+v", err)
 	}
 }
 

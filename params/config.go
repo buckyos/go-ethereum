@@ -114,6 +114,7 @@ var (
 		TerminalTotalDifficulty: nil,
 		Ethash:                  new(EthashConfig),
 		USDB: &USDBConsensusConfig{
+			BTCActivationRegistryID: "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d",
 			Activations: []USDBConsensusActivation{
 				{
 					Block: 0,
@@ -519,7 +520,11 @@ type ChainConfig struct {
 
 // USDBConsensusConfig is the chain-owned activation registry for USDB consensus.
 type USDBConsensusConfig struct {
-	Activations []USDBConsensusActivation `json:"activations"`
+	// BTCActivationRegistryID commits the network-scoped BTC registry used to
+	// validate every selector-pinned economic profile on this USDB network.
+	// It does not select USDB-chain payload, difficulty, or reward versions.
+	BTCActivationRegistryID string                    `json:"btcActivationRegistryId"`
+	Activations             []USDBConsensusActivation `json:"activations"`
 }
 
 // USDBConsensusActivation activates one complete version set at a USDB block.
@@ -856,6 +861,9 @@ func (c *USDBConsensusConfig) validate() error {
 	if c == nil {
 		return nil
 	}
+	if !isCanonicalUSDBRegistryID(c.BTCActivationRegistryID) {
+		return fmt.Errorf("invalid USDB BTC activation registry id %q", c.BTCActivationRegistryID)
+	}
 	if len(c.Activations) == 0 {
 		return fmt.Errorf("invalid USDB consensus activation registry: no activation records")
 	}
@@ -1084,8 +1092,26 @@ func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *Con
 			}
 			return err
 		}
+		if storedVersions != nil && usdbBTCActivationRegistryID(stored) != usdbBTCActivationRegistryID(updated) {
+			err := newCompatError(
+				"USDB BTC activation registry",
+				uint64BlockNumber(storedBlock),
+				uint64BlockNumber(updatedBlock),
+			)
+			if block > 0 {
+				err.RewindTo = block - 1
+			}
+			return err
+		}
 	}
 	return nil
+}
+
+func usdbBTCActivationRegistryID(config *USDBConsensusConfig) string {
+	if config == nil {
+		return ""
+	}
+	return config.BTCActivationRegistryID
 }
 
 func appendUSDBActivationBoundaries(boundaries []uint64, config *USDBConsensusConfig, head uint64) []uint64 {
@@ -1120,6 +1146,18 @@ func equalUSDBVersions(a, b *USDBConsensusVersions) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+func isCanonicalUSDBRegistryID(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func uint64BlockNumber(block *uint64) *big.Int {

@@ -346,6 +346,7 @@ func newTestUSDBChainConfig() *params.ChainConfig {
 	return &params.ChainConfig{
 		HomesteadBlock: big.NewInt(0),
 		USDB: &params.USDBConsensusConfig{
+			BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
 			Activations: []params.USDBConsensusActivation{{
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,

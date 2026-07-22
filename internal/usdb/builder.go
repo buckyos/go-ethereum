@@ -13,6 +13,7 @@ type PayloadBuilder struct {
 	client       Client
 	passID       PassID
 	chainConfig  *params.ChainConfig
+	btcRegistry  *btcActivationRegistry
 	queryTimeout time.Duration
 }
 
@@ -23,6 +24,13 @@ func NewPayloadBuilder(client Client, passID string, chainConfig *params.ChainCo
 	}
 	if chainConfig == nil {
 		return nil, fmt.Errorf("nil chain config")
+	}
+	if !chainConfig.HasUSDBConsensus() {
+		return nil, fmt.Errorf("chain config has no usdb consensus configuration")
+	}
+	btcRegistry, err := loadBTCActivationRegistry(chainConfig.USDB.BTCActivationRegistryID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid chain-config BTC activation registry: %w", err)
 	}
 	parsedPassID, err := ParsePassID(passID)
 	if err != nil {
@@ -35,6 +43,7 @@ func NewPayloadBuilder(client Client, passID string, chainConfig *params.ChainCo
 		client:       client,
 		passID:       parsedPassID,
 		chainConfig:  chainConfig,
+		btcRegistry:  btcRegistry,
 		queryTimeout: queryTimeout,
 	}, nil
 }
@@ -87,7 +96,8 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if systemState == nil {
 		return nil, fmt.Errorf("usdb returned no current system state")
 	}
-	if err := validateBTCActivationIdentity(
+	if _, err := b.btcRegistry.validateIdentity(
+		systemState.LocalSyncedBlockHeight,
 		systemState.ActivationRegistryID,
 		systemState.ActiveVersionSet,
 		systemState.ActiveVersionSetID,
@@ -104,7 +114,7 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if err != nil {
 		return nil, err
 	}
-	profile, err := resolveConsensusProfile(queryCtx, b.client, *payload)
+	profile, err := resolveConsensusProfile(queryCtx, b.client, b.btcRegistry, *payload)
 	if err != nil {
 		return nil, fmt.Errorf("configured pass %s is not valid in current usdb state: %w", b.passID.String(), err)
 	}

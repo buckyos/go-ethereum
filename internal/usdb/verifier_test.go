@@ -12,7 +12,7 @@ import (
 func TestVerifierResolveProfileValidatesUIP0006View(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	client := &stubProfileClient{profile: newTestProfileView(t, selector, "1000000", "500000")}
-	verifier, err := NewVerifier(client, 0)
+	verifier, err := NewVerifier(client, BTCRegtestActivationRegistryIDV1, 0)
 	if err != nil {
 		t.Fatalf("failed to build verifier: %v", err)
 	}
@@ -34,13 +34,15 @@ func TestVerifierResolveProfileValidatesUIP0006View(t *testing.T) {
 	}
 	if client.lastQuery.RequestedHeight != selector.BTCHeight ||
 		client.lastQuery.ExpectedState.SnapshotID != selector.SnapshotIDHex() ||
+		client.lastQuery.ExpectedState.ActivationRegistryID != BTCRegtestActivationRegistryIDV1 ||
+		client.lastQuery.ExpectedState.ActiveVersionSetID != resolved.View.ExternalState.ActiveVersionSetID ||
 		client.lastQuery.ExpectedState.SystemStateID != selector.SystemStateIDHex() {
 		t.Fatalf("historical query was not pinned to selector: %+v", client.lastQuery)
 	}
 }
 
 func TestVerifierResolveProfileRejectsMissingPayloadAndProfile(t *testing.T) {
-	verifier, err := NewVerifier(&stubProfileClient{}, 0)
+	verifier, err := NewVerifier(&stubProfileClient{}, BTCRegtestActivationRegistryIDV1, 0)
 	if err != nil {
 		t.Fatalf("failed to build verifier: %v", err)
 	}
@@ -50,6 +52,14 @@ func TestVerifierResolveProfileRejectsMissingPayloadAndProfile(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	if _, err := verifier.ResolveProfile(context.Background(), marshalTestSelector(t, selector)); !errors.Is(err, ErrProfileNotFound) {
 		t.Fatalf("expected missing profile error, got %v", err)
+	}
+}
+
+func TestNewRPCVerifierRejectsUnknownRegistryBeforeDial(t *testing.T) {
+	chainConfig := testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1)
+	chainConfig.USDB.BTCActivationRegistryID = repeatHex("99", 32)
+	if _, err := NewRPCVerifier("://invalid", chainConfig, 0); !errors.Is(err, ErrBTCActivationRegistryNotSupported) {
+		t.Fatalf("expected unsupported registry before RPC dial, got %v", err)
 	}
 }
 
@@ -66,6 +76,7 @@ func TestVerifierResolveProfileRejectsSelectorIdentityMismatch(t *testing.T) {
 		{name: "pass id", mutate: func(view *PassEconomicProfileView) { view.Pass.PassID = repeatHex("cc", 32) + "i7" }},
 		{name: "incomplete external state", mutate: func(view *PassEconomicProfileView) { view.ExternalState.LocalStateCommit = "" }},
 		{name: "non-canonical activation registry id", mutate: func(view *PassEconomicProfileView) { view.ExternalState.ActivationRegistryID = repeatHex("AA", 32) }},
+		{name: "chain-config activation registry mismatch", mutate: func(view *PassEconomicProfileView) { view.ExternalState.ActivationRegistryID = repeatHex("99", 32) }},
 		{name: "active version set id mismatch", mutate: func(view *PassEconomicProfileView) { view.ExternalState.ActiveVersionSetID = repeatHex("88", 32) }},
 		{name: "unsupported active energy formula", mutate: func(view *PassEconomicProfileView) {
 			view.ExternalState.ActiveVersionSet["energy_formula_version"] = []byte(`"v999"`)
@@ -78,7 +89,7 @@ func TestVerifierResolveProfileRejectsSelectorIdentityMismatch(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			profile := newTestProfileView(t, selector, "1000000", "0")
 			test.mutate(profile)
-			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, BTCRegtestActivationRegistryIDV1, 0)
 			if err != nil {
 				t.Fatalf("failed to build verifier: %v", err)
 			}
@@ -105,7 +116,7 @@ func TestVerifierResolveProfileRejectsNonCandidatePass(t *testing.T) {
 		profile := newTestProfileView(t, selector, "0", "0")
 		profile.Pass.State = test.state
 		profile.Pass.PassKind = test.kind
-		verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+		verifier, err := NewVerifier(&stubProfileClient{profile: profile}, BTCRegtestActivationRegistryIDV1, 0)
 		if err != nil {
 			t.Fatalf("failed to build verifier: %v", err)
 		}
@@ -118,7 +129,7 @@ func TestVerifierResolveProfileRejectsNonCandidatePass(t *testing.T) {
 func TestVerifierResolveProfileAcceptsZeroEnergyActiveStandardCandidate(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	profile := newTestProfileView(t, selector, "0", "0")
-	verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+	verifier, err := NewVerifier(&stubProfileClient{profile: profile}, BTCRegtestActivationRegistryIDV1, 0)
 	if err != nil {
 		t.Fatalf("failed to build verifier: %v", err)
 	}
@@ -146,7 +157,7 @@ func TestVerifierResolveProfileRejectsInvalidEnergyEncoding(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			profile := newTestProfileView(t, selector, "1", "1")
 			test.mutate(profile)
-			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, BTCRegtestActivationRegistryIDV1, 0)
 			if err != nil {
 				t.Fatalf("failed to build verifier: %v", err)
 			}
@@ -171,7 +182,7 @@ func TestVerifierResolveProfileCrossChecksDerivedValues(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			profile := newTestProfileView(t, selector, "1000000", "500000")
 			test.mutate(profile)
-			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, BTCRegtestActivationRegistryIDV1, 0)
 			if err != nil {
 				t.Fatalf("failed to build verifier: %v", err)
 			}
@@ -185,7 +196,7 @@ func TestVerifierResolveProfileCrossChecksDerivedValues(t *testing.T) {
 func TestVerifierResolveProfileAcceptsSaturatedEffectiveEnergy(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	profile := newTestProfileView(t, selector, maximumEnergyValue.String(), "1")
-	verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+	verifier, err := NewVerifier(&stubProfileClient{profile: profile}, BTCRegtestActivationRegistryIDV1, 0)
 	if err != nil {
 		t.Fatalf("failed to build verifier: %v", err)
 	}
@@ -204,7 +215,7 @@ func TestVerifierHistoricalReplayIgnoresCurrentHead(t *testing.T) {
 		system:  &SystemStateInfo{LocalSyncedBlockHeight: 500},
 		profile: newTestProfileView(t, selector, "1000000", "500000"),
 	}
-	verifier, err := NewVerifier(client, 0)
+	verifier, err := NewVerifier(client, BTCRegtestActivationRegistryIDV1, 0)
 	if err != nil {
 		t.Fatalf("failed to build verifier: %v", err)
 	}
@@ -229,7 +240,7 @@ func TestVerifierHistoricalReplayIgnoresCurrentHead(t *testing.T) {
 func TestVerifierRejectsSameHeightReorgStateReplacement(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	client := &stubProfileClient{profile: newTestProfileView(t, selector, "1000000", "0")}
-	verifier, err := NewVerifier(client, 0)
+	verifier, err := NewVerifier(client, BTCRegtestActivationRegistryIDV1, 0)
 	if err != nil {
 		t.Fatalf("failed to build verifier: %v", err)
 	}
@@ -265,7 +276,7 @@ func TestVerifierRejectsTamperedSelectorFields(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			tampered := append([]byte(nil), encoded...)
 			tampered[test.offset] ^= 0x01
-			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, BTCRegtestActivationRegistryIDV1, 0)
 			if err != nil {
 				t.Fatalf("failed to build verifier: %v", err)
 			}
@@ -280,7 +291,7 @@ func TestVerifierPropagatesHistoricalAndServiceFailures(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	encoded := marshalTestSelector(t, selector)
 	for _, expected := range []error{ErrSnapshotIDMismatch, ErrHistoryNotAvailable, ErrStateNotRetained, context.DeadlineExceeded} {
-		verifier, err := NewVerifier(&stubProfileClient{profileErr: expected}, 0)
+		verifier, err := NewVerifier(&stubProfileClient{profileErr: expected}, BTCRegtestActivationRegistryIDV1, 0)
 		if err != nil {
 			t.Fatalf("failed to build verifier: %v", err)
 		}

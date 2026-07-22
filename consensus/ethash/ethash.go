@@ -518,6 +518,7 @@ func NewWithChainConfig(config Config, chainConfig *params.ChainConfig, notify [
 	if chainConfig.HasUSDBConsensus() {
 		verifier, err := usdb.NewRPCVerifier(
 			config.USDBIndexer.RPCURL,
+			chainConfig,
 			config.USDBIndexer.QueryTimeout,
 		)
 		if err != nil {
