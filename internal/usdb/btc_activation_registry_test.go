@@ -94,6 +94,61 @@ func TestBTCActivationLookupUsesPayloadHeight(t *testing.T) {
 	}
 }
 
+func TestBTCActivationGoldenReloadPreservesCrossActivationReplay(t *testing.T) {
+	v1 := newTestActiveVersionSet(t)
+	v1ID, err := v1.ID()
+	if err != nil {
+		t.Fatalf("failed to identify v1 set: %v", err)
+	}
+	v2 := newTestActiveVersionSet(t)
+	v2["energy_formula_version"] = json.RawMessage(`"uip-0003-pass-energy-formula:v2"`)
+	v2ID, err := v2.ID()
+	if err != nil {
+		t.Fatalf("failed to identify v2 set: %v", err)
+	}
+	registryID := strings.Repeat("a", 64)
+	artifact := btcActivationGoldenArtifact{
+		SchemaVersion:               goActivationGoldenSchemaVersion,
+		SourceRegistrySchemaVersion: btcActivationRegistrySchemaV1,
+		Registries: []btcActivationRegistry{{
+			NetworkID:            "btc-restart-test",
+			ActivationRegistryID: registryID,
+			Activations: []btcActivationPoint{
+				{BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID},
+				{BTCHeight: 100, ActiveVersionSet: v2, ActiveVersionSetID: v2ID},
+			},
+		}},
+	}
+	encoded, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatalf("failed to encode synthetic golden artifact: %v", err)
+	}
+	reloaded, err := parseBTCActivationGolden(encoded)
+	if err != nil {
+		t.Fatalf("failed to reload synthetic golden artifact: %v", err)
+	}
+	registry := reloaded[registryID]
+	for _, test := range []struct {
+		name   string
+		height uint32
+		wantID string
+	}{
+		{name: "after activation", height: 101, wantID: v2ID},
+		{name: "rollback before activation", height: 99, wantID: v1ID},
+		{name: "replay activation boundary", height: 100, wantID: v2ID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			activation, err := registry.lookup(test.height)
+			if err != nil {
+				t.Fatalf("height %d lookup failed: %v", test.height, err)
+			}
+			if activation.ActiveVersionSetID != test.wantID {
+				t.Fatalf("height %d returned %s, want %s", test.height, activation.ActiveVersionSetID, test.wantID)
+			}
+		})
+	}
+}
+
 func TestProfileFormulaDispatchRejectsUnsupportedActiveVersion(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	profile := newTestProfileView(t, selector, "1", "0")

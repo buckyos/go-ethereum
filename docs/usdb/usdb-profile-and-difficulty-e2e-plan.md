@@ -11,6 +11,7 @@ The built-in development chain activates these policies from USDB block `0`:
 
 - `payload_version = 1`
 - `difficulty_policy_version = 1`
+- `btcActivationRegistryId = 22d820e6...aaf83d` (`btc-regtest`)
 
 The remaining UIP-0009 version families are present in the chain-config
 activation record but remain `0` until their defining UIP is implemented. In
@@ -38,9 +39,11 @@ Each live runner performs the following operations:
 4. Generate the canonical USDB genesis and initialize one or two geth nodes.
 5. Mine USDB blocks with the 107-byte UIP-0007 selector in `header.Extra`.
 6. Stop mining and replay every payload against `get_pass_economic_profile`.
-7. Independently recompute effective energy, level, difficulty factor, base
+7. Require every historical profile to match the chain-bound BTC registry ID,
+   v1 active-version-set ID, and complete active-version-set golden.
+8. Independently recompute effective energy, level, difficulty factor, base
    difficulty, and real difficulty.
-8. Verify the static pre-UIP-0011 block reward and final coinbase balance.
+9. Verify the static pre-UIP-0011 block reward and final coinbase balance.
 
 The common validator is:
 
@@ -57,6 +60,9 @@ For every mined block the common validator checks:
 - `payload_version` and `difficulty_policy_version` are both `1`.
 - `btc_height`, `snapshot_id`, `system_state_id`, and `pass_id` reproduce one
   exact historical UIP-0006 profile.
+- `activation_registry_id` equals the chain-config-bound `btc-regtest` registry.
+- `active_version_set_id` and the full `active_version_set` equal the generated
+  Rust/Go v1 golden selected at the payload BTC height.
 - The selected pass is `Active / standard`, including zero-energy candidates.
 - `effective_energy = saturating_u128(raw_energy + collab_contribution)`.
 - Returned `level` and `difficulty_factor_bps` match the frozen UIP-0005 table.
@@ -99,10 +105,14 @@ For every mined block the common validator checks:
 
 ## Fail-Closed Matrix
 
-Go unit/integration tests cover exact codec boundaries, activation lookup,
-candidate state/kind boundaries, structured RPC error mapping, historical
-replay, same-height state replacement, service timeout, selector-field
-tampering, and miner/validator difficulty agreement.
+Rust and Go unit/integration tests cover exact codec boundaries, activation
+before/at/after lookup, unknown networks and registry bindings, public manual
+override rejection, conflicting records, unsupported formula versions,
+active-set/local-commit identity changes, synthetic cross-activation
+rollback/replay/reload, structured RPC error mapping, historical replay,
+same-height state replacement, service timeout, selector-field tampering, and
+miner/validator difficulty agreement. The Rust generator `--check` command
+cross-checks the committed Go artifact against both Rust registry files.
 
 The next live-only additions should reuse the same common validator and cover:
 
@@ -112,12 +122,28 @@ The next live-only additions should reuse the same common validator and cover:
   selector is rejected;
 - activation-boundary replay after a second supported policy version exists.
 
+The last item cannot be a production-like live test while the only implemented
+and active formula set is v1. Until a second supported version exists, the
+cross-activation rollback/restart behavior is covered with synthetic Rust/Go
+registries and fail-closed v2 dispatch tests.
+
+## Latest Execution
+
+On 2026-07-22 the current-source geth binary and BTC-side services completed:
+
+- `run_usdb_profile_e2e.sh`: 13 mined USDB blocks, with every profile matching
+  the regtest registry/set golden and every difficulty/reward recomputation.
+- `run_usdb_profile_historical_stability_e2e.sh`: 12 blocks mined by node 1;
+  after BTC advanced from height 134 to 137 and raw energy changed from 0 to
+  2000, a fresh node 2 synchronized the same head and replayed all height-134
+  profiles successfully.
+
 ## Deferred Policy Work
 
 - UIP-0011 defines reward recipient validation, CoinBase emission, fee split,
   and issued-supply state transitions.
 - UIP-0014 defines quote activity and the candidate difficulty factor. Until it
   activates, difficulty v1 uses the nominal UIP-0006 factor.
-- Activation registry ids and BTC-side active-version-set commitments require
-  the corresponding UIP-0006/UIP-0008 cross-service fields before they can be
-  enforced by go-ethereum.
+- A real cross-activation live scenario remains deferred until a second formula
+  or policy version is implemented and intentionally activated in a test-only
+  network configuration.

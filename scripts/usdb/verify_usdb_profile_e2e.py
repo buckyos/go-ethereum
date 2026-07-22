@@ -7,6 +7,23 @@ import urllib.request
 
 PAYLOAD_SIZE = 107
 VIEW_VERSION = "uip-0006-usdb-economic-state-view:v1"
+BTC_REGTEST_ACTIVATION_REGISTRY_ID = (
+    "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
+)
+BTC_V1_ACTIVE_VERSION_SET_ID = (
+    "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
+)
+BTC_V1_ACTIVE_VERSION_SET = {
+    "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
+    "pass_state_machine_version": "uip-0002-pass-state-machine:v1",
+    "energy_formula_version": "uip-0003-pass-energy-formula:v1",
+    "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
+    "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
+    "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+    "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+    "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+    "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+}
 BPS_DENOMINATOR = 10_000
 MINIMUM_DIFFICULTY = 8_192
 LEGACY_BLOCK_REWARD = 2 * 10**18
@@ -136,11 +153,18 @@ def decode_selector(block):
     }
 
 
-def resolve_profile(usdb_indexer_rpc_url, selector):
+def resolve_profile(
+    usdb_indexer_rpc_url,
+    selector,
+    expected_activation_registry_id,
+    expected_active_version_set_id,
+):
     context = {
         "requested_height": selector["btc_height"],
         "expected_state": {
             "snapshot_id": selector["snapshot_id"],
+            "activation_registry_id": expected_activation_registry_id,
+            "active_version_set_id": expected_active_version_set_id,
             "system_state_id": selector["system_state_id"],
         },
     }
@@ -164,6 +188,8 @@ def resolve_profile(usdb_indexer_rpc_url, selector):
     for field, expected in (
         ("btc_height", selector["btc_height"]),
         ("snapshot_id", selector["snapshot_id"]),
+        ("activation_registry_id", expected_activation_registry_id),
+        ("active_version_set_id", expected_active_version_set_id),
         ("system_state_id", selector["system_state_id"]),
     ):
         if external.get(field) != expected:
@@ -171,6 +197,12 @@ def resolve_profile(usdb_indexer_rpc_url, selector):
                 f"profile external_state {field} mismatch: "
                 f"have {external.get(field)!r} want {expected!r}"
             )
+    if external.get("active_version_set") != BTC_V1_ACTIVE_VERSION_SET:
+        raise SystemExit(
+            "profile external_state active_version_set mismatch: "
+            f"have {external.get('active_version_set')!r} "
+            f"want {BTC_V1_ACTIVE_VERSION_SET!r}"
+        )
     pass_view = profile.get("pass") or {}
     if pass_view.get("pass_id") != selector["pass_id"]:
         raise SystemExit(f"profile pass id mismatch: {pass_view.get('pass_id')}")
@@ -219,6 +251,14 @@ def main():
     parser.add_argument("--balance-hex", required=True)
     parser.add_argument("--usdb-chain-rpc-url", required=True)
     parser.add_argument("--usdb-indexer-rpc-url", required=True)
+    parser.add_argument(
+        "--expected-activation-registry-id",
+        default=BTC_REGTEST_ACTIVATION_REGISTRY_ID,
+    )
+    parser.add_argument(
+        "--expected-active-version-set-id",
+        default=BTC_V1_ACTIVE_VERSION_SET_ID,
+    )
     parser.add_argument("--expected-pass-id")
     parser.add_argument("--stage1-end", type=int)
     parser.add_argument("--initial-raw-energy", type=int)
@@ -260,7 +300,10 @@ def main():
                 f"{selector['pass_id']} != {args.expected_pass_id}"
             )
         raw, contribution, effective, level, factor = resolve_profile(
-            args.usdb_indexer_rpc_url, selector
+            args.usdb_indexer_rpc_url,
+            selector,
+            args.expected_activation_registry_id,
+            args.expected_active_version_set_id,
         )
         all_raw.append(raw)
         expected_difficulty = expected_real_difficulty(parent, block, factor)
