@@ -35,7 +35,7 @@ type ResolvedConsensusProfile struct {
 	DifficultyFactorBps uint64
 }
 
-// Verifier resolves historical consensus profiles from the USDB RPC surface.
+// Verifier resolves historical consensus profiles from the usdb-indexer RPC surface.
 type Verifier struct {
 	client       Client
 	queryTimeout time.Duration
@@ -55,7 +55,7 @@ func NewVerifier(client Client, queryTimeout time.Duration) (*Verifier, error) {
 	}, nil
 }
 
-// NewRPCVerifier dials one USDB endpoint and uses it to resolve consensus profiles.
+// NewRPCVerifier dials one usdb-indexer endpoint and uses it to resolve consensus profiles.
 func NewRPCVerifier(endpoint string, queryTimeout time.Duration) (*Verifier, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeout)
 	defer cancel()
@@ -200,8 +200,16 @@ func validateProfileIdentity(selector ProfileSelectorPayload, view *PassEconomic
 	}
 	if state.StableBlockHash == "" || state.LocalStateCommit == "" ||
 		state.BalanceHistoryAPIVersion == "" || state.BalanceHistorySemanticsVersion == "" ||
-		state.USDBIndexProtocolVersion == "" || state.USDBIndexFormulaVersion == "" {
+		state.ActivationRegistryID == "" || len(state.ActiveVersionSet) == 0 ||
+		state.ActiveVersionSetID == "" {
 		return fmt.Errorf("%w: external_state is incomplete", ErrProfileStateMismatch)
+	}
+	if err := validateBTCActivationIdentity(
+		state.ActivationRegistryID,
+		state.ActiveVersionSet,
+		state.ActiveVersionSetID,
+	); err != nil {
+		return fmt.Errorf("%w: %v", ErrProfileStateMismatch, err)
 	}
 	if _, err := parseCanonicalHex32("owner_script_hash", view.Pass.OwnerScriptHash); err != nil {
 		return fmt.Errorf("%w: %v", ErrProfileStateMismatch, err)

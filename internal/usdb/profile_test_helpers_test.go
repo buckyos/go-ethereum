@@ -2,6 +2,7 @@ package usdb
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -50,6 +51,47 @@ func marshalTestSelector(t *testing.T, selector ProfileSelectorPayload) []byte {
 	return encoded
 }
 
+func newTestActiveVersionSet(t *testing.T) ActiveVersionSet {
+	t.Helper()
+	values := map[string]string{
+		"inscription_schema_version":        InscriptionSchemaVersionV1,
+		"pass_state_machine_version":        PassStateMachineVersionV1,
+		"energy_formula_version":            EnergyFormulaVersionV1,
+		"effective_energy_formula_version":  EffectiveEnergyFormulaVersionV1,
+		"level_formula_version":             LevelFormulaVersionV1,
+		"query_semantics_version":           QuerySemanticsVersionV1,
+		"state_view_version":                EconomicStateViewVersionV1,
+		"commit_protocol_version":           CommitProtocolVersionV1,
+		"balance_history_semantics_version": BalanceHistorySemanticsVersionV1,
+	}
+	set := make(ActiveVersionSet, len(values))
+	for family, value := range values {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("failed to encode %s: %v", family, err)
+		}
+		set[family] = encoded
+	}
+	return set
+}
+
+func newTestSystemStateInfo(t *testing.T, selector ProfileSelectorPayload) *SystemStateInfo {
+	t.Helper()
+	activeVersionSet := newTestActiveVersionSet(t)
+	activeVersionSetID, err := activeVersionSet.ID()
+	if err != nil {
+		t.Fatalf("failed to identify test active version set: %v", err)
+	}
+	return &SystemStateInfo{
+		ActivationRegistryID:   repeatHex("77", 32),
+		ActiveVersionSet:       activeVersionSet,
+		ActiveVersionSetID:     activeVersionSetID,
+		LocalSyncedBlockHeight: selector.BTCHeight,
+		UpstreamSnapshotID:     selector.SnapshotIDHex(),
+		SystemStateID:          selector.SystemStateIDHex(),
+	}
+}
+
 func newTestProfileView(t *testing.T, selector ProfileSelectorPayload, rawEnergy, collabContribution string) *PassEconomicProfileView {
 	t.Helper()
 	raw, err := parseEnergyDecimal("raw_energy", rawEnergy)
@@ -62,6 +104,11 @@ func newTestProfileView(t *testing.T, selector ProfileSelectorPayload, rawEnergy
 	}
 	effective := saturatingAddEnergy(raw, collab)
 	level := LevelForEffectiveEnergy(effective)
+	activeVersionSet := newTestActiveVersionSet(t)
+	activeVersionSetID, err := activeVersionSet.ID()
+	if err != nil {
+		t.Fatalf("failed to identify test active version set: %v", err)
+	}
 	return &PassEconomicProfileView{
 		ViewVersion: EconomicStateViewVersionV1,
 		ExternalState: EconomicExternalState{
@@ -72,8 +119,9 @@ func newTestProfileView(t *testing.T, selector ProfileSelectorPayload, rawEnergy
 			SystemStateID:                  selector.SystemStateIDHex(),
 			BalanceHistoryAPIVersion:       "1.0.0",
 			BalanceHistorySemanticsVersion: "balance-snapshot-at-or-before:v1",
-			USDBIndexProtocolVersion:       "1.0.0",
-			USDBIndexFormulaVersion:        "pass-energy-formula:v1",
+			ActivationRegistryID:           repeatHex("77", 32),
+			ActiveVersionSet:               activeVersionSet,
+			ActiveVersionSetID:             activeVersionSetID,
 		},
 		Pass: PassEconomicProfile{
 			PassID:               selector.PassID.String(),

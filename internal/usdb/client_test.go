@@ -45,6 +45,15 @@ func (s *stubJSONRPCClient) Close() {
 
 func TestPassEconomicProfileViewDecodesCurrentRPCContract(t *testing.T) {
 	selector := newTestSelector(t, 123)
+	activeVersionSet := newTestActiveVersionSet(t)
+	activeVersionSetJSON, err := json.Marshal(activeVersionSet)
+	if err != nil {
+		t.Fatalf("failed to encode active version set: %v", err)
+	}
+	activeVersionSetID, err := activeVersionSet.ID()
+	if err != nil {
+		t.Fatalf("failed to identify active version set: %v", err)
+	}
 	raw := `{
 		"view_version":"uip-0006-usdb-economic-state-view:v1",
 		"external_state":{
@@ -55,8 +64,9 @@ func TestPassEconomicProfileViewDecodesCurrentRPCContract(t *testing.T) {
 			"system_state_id":"` + selector.SystemStateIDHex() + `",
 			"balance_history_api_version":"1.0.0",
 			"balance_history_semantics_version":"balance-snapshot-at-or-before:v1",
-			"usdb_index_protocol_version":"1.0.0",
-			"usdb_index_formula_version":"pass-energy-formula:v1"
+			"activation_registry_id":"` + repeatHex("77", 32) + `",
+			"active_version_set":` + string(activeVersionSetJSON) + `,
+			"active_version_set_id":"` + activeVersionSetID + `"
 		},
 		"pass":{
 			"pass_id":"` + selector.PassID.String() + `",
@@ -172,7 +182,7 @@ func TestRPCClientCallsPassEconomicProfileContract(t *testing.T) {
 	if params.ViewVersion != EconomicStateViewVersionV1 || params.PassID != selector.PassID.String() || params.BlockHeight != selector.BTCHeight {
 		t.Fatalf("unexpected profile params: %+v", params)
 	}
-	if got.Pass.EffectiveEnergy != want.Pass.EffectiveEnergy || got.ExternalState != want.ExternalState {
+	if got.Pass.EffectiveEnergy != want.Pass.EffectiveEnergy || !reflect.DeepEqual(got.ExternalState, want.ExternalState) {
 		t.Fatalf("unexpected decoded profile: have %+v want %+v", got, want)
 	}
 	client.Close()
@@ -216,8 +226,12 @@ func TestRPCClientMapsConsensusErrors(t *testing.T) {
 		{code: rpcErrStateNotRetained, kind: ErrStateNotRetained},
 		{code: rpcErrHistoryNotAvailable, kind: ErrHistoryNotAvailable},
 		{code: rpcErrViewVersionMismatch, kind: ErrViewVersionMismatch},
-		{code: rpcErrProtocolVersionMismatch, kind: ErrProtocolVersionMismatch},
 		{code: rpcErrFormulaVersionMismatch, kind: ErrFormulaVersionMismatch},
+		{code: rpcErrActivationRecordNotFound, kind: ErrActivationRecordNotFound},
+		{code: rpcErrActivationRecordConflict, kind: ErrActivationRecordConflict},
+		{code: rpcErrVersionNotSupported, kind: ErrVersionNotSupported},
+		{code: rpcErrActiveVersionSetMismatch, kind: ErrActiveVersionSetMismatch},
+		{code: rpcErrCommitProtocolMismatch, kind: ErrCommitProtocolMismatch},
 	}
 	for _, test := range tests {
 		t.Run(test.kind.Error(), func(t *testing.T) {

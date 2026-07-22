@@ -1,8 +1,8 @@
-# USDB × ETHW 手续费分账改造备忘
+# USDB Chain 手续费分账改造备忘
 
 ## 1. 需求
 
-当前需要在 ETHW 侧引入一条新的手续费分账规则：
+当前需要在 USDB chain 侧引入一条新的手续费分账规则：
 
 - 所有交易手续费不再全部归矿工
 - 需要按固定比例，把其中一部分划入指定合约地址
@@ -18,13 +18,13 @@
 
 ### 2.1 手续费发放位置
 
-当前 ETHW 分支的手续费发放逻辑主要在：
+当前 USDB chain 分支的手续费发放逻辑主要在：
 
 - `core/state_transition.go`
 
 交易执行结束后，会在 `TransitionDb()` 末尾把手续费记到状态里。
 
-### 2.2 这条分支已经有一层 ETHW 特化
+### 2.2 这条分支继承了 legacy ETHW 的手续费特化
 
 当前逻辑并不是完全原始以太坊默认实现。
 
@@ -71,7 +71,7 @@
 
 ### 2.4 当前实现有没有现成说明
 
-目前仓库里并没有一份专门介绍这条 ETHW 分账规则的正式设计文档。
+目前仓库里并没有一份专门介绍这条 USDB chain 分账规则的正式设计文档。
 
 现有可直接参考的事实来源主要是：
 
@@ -101,7 +101,7 @@
 
 1. 只拆 `effectiveTip`
 2. 拆交易支付的总手续费
-3. 保留现有 ETHW 对 `base fee` / remainder 的处理，只拆 miner 侧那部分
+3. 保留继承代码对 `base fee` / remainder 的处理，只拆 miner 侧那部分
 
 如果这点不先定清，代码很容易改出两层互相叠加的歧义。
 
@@ -115,12 +115,12 @@
 - 再按比例拆成：
   - miner
   - dividend pool
-- 当前 ETHW 已有的 `remainGas -> MinerDAOAddress` 保持不变
+- 当前继承代码已有的 `remainGas -> MinerDAOAddress` 保持不变
 
 优点：
 
 - 改动最小
-- 不会推翻当前 ETHW 分支既有 fee 语义
+- 不会推翻当前 USDB chain 分支既有 fee 语义
 - 最适合先落第一版
 
 缺点：
@@ -129,7 +129,7 @@
 
 这个方案的本质是：
 
-- 保留当前 ETHW 对 `baseFee -> MinerDAOAddress` 的逻辑
+- 保留当前继承代码对 `baseFee -> MinerDAOAddress` 的逻辑
 - 只对 miner 当前拿到的 `tip` 做二次拆分
 
 ## 4.2 方案 B：把交易总手续费按比例整体拆分
@@ -145,13 +145,13 @@
 
 缺点：
 
-- 会和当前 ETHW 已有的 `MinerDAOAddress` 逻辑重叠
+- 会和当前继承代码已有的 `MinerDAOAddress` 逻辑重叠
 - 需要重新定义 London 后 base fee 的处理方式
 - 风险高于方案 A
 
 如果采用这个方案，建议直接把当前 `MinerDAOAddress` 逻辑整体替换掉，而不是叠加。
 
-## 4.3 方案 C：保留 ETHW 当前 base-fee 去向，再对矿工侧收益做二次拆分
+## 4.3 方案 C：保留当前 base-fee 去向，再对矿工侧收益做二次拆分
 
 语义：
 
@@ -202,11 +202,11 @@
 
 当前更推荐：
 
-- 如果只是想把当前 ETHW 的 `MinerDAOAddress` 换成我们自己的分红池，优先 `方案 D`
-- 如果希望保留 ETHW 分支已有经济逻辑，但再从 miner 收益里切一部分进池子，优先 `方案 C`
+- 如果只是想把当前 USDB chain 的 `MinerDAOAddress` 换成我们自己的分红池，优先 `方案 D`
+- 如果希望保留继承分支已有经济逻辑，但再从 miner 收益里切一部分进池子，优先 `方案 C`
 - 如果希望从现在开始把“给矿工的手续费”抽一部分进池子，且尽量少动旧规则，优先 `方案 A`
 
-不建议第一步直接做 `方案 B`，因为它会把现有 ETHW 分支对 base fee 的处理一起卷进来，讨论面更大。
+不建议第一步直接做 `方案 B`，因为它会把当前分支对 base fee 的处理一起卷进来，讨论面更大。
 
 ### 5.1 推荐的两阶段落地方式
 
@@ -284,7 +284,7 @@ SourceDAO / Dividend 这类依赖主合约初始化的冷启动问题，单独�
 - `miner share bps`
 - `pool share bps`
 
-并收口到 ETHW 自己的配置层，而不是继续把地址硬编码在 `params` 里。
+并收口到 USDB chain 自己的配置层，而不是继续把地址硬编码在 `params` 里。
 
 ## 8. 建议的代码收口位置
 
@@ -316,7 +316,7 @@ SourceDAO / Dividend 这类依赖主合约初始化的冷启动问题，单独�
 6. 是否需要补一个专项测试矩阵，覆盖：
    - pre-London
    - post-London
-   - ETHW fork 之后
+   - USDB chain fee-split activation 前后
    - 不同 fee cap / tip cap 组合
 
 额外需要明确：

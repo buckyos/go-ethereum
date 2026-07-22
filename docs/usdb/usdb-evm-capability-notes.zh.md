@@ -15,8 +15,8 @@
 本文刻意与以下文档分离：
 
 - `usdb-chain-bootstrap-notes.md`
-- `usdb-ethw-reward-integration.md`
-- `usdb-ethw-fee-split-integration.md`
+- `usdb-reward-integration.md`
+- `usdb-fee-split-integration.md`
 
 因为这里讨论的是 **EVM 能力与合约兼容性**，而不是奖励、手续费分账或冷启动流程。
 

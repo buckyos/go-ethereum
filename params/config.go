@@ -511,7 +511,7 @@ type ChainConfig struct {
 	Ethash *EthashConfig `json:"ethash,omitempty"`
 	Clique *CliqueConfig `json:"clique,omitempty"`
 
-	// USDB contains the height-indexed UIP-0008 activation registry for ETHW-side
+	// USDB contains the height-indexed UIP-0008 activation registry for USDB-chain
 	// USDB consensus rules. Operational companion-service settings do not belong
 	// in chain config.
 	USDB *USDBConsensusConfig `json:"usdb,omitempty"`
@@ -522,14 +522,14 @@ type USDBConsensusConfig struct {
 	Activations []USDBConsensusActivation `json:"activations"`
 }
 
-// USDBConsensusActivation activates one complete version set at an ETHW block.
+// USDBConsensusActivation activates one complete version set at a USDB block.
 // Records must be strictly ordered and may not share an activation block.
 type USDBConsensusActivation struct {
 	Block    uint64                `json:"block"`
 	Versions USDBConsensusVersions `json:"versions"`
 }
 
-// USDBConsensusVersions is the active ETHW-side version set defined by UIP-0008
+// USDBConsensusVersions is the active USDB-chain version set defined by UIP-0008
 // and UIP-0009. Zero is a development staging value for a family that has not
 // activated; each defining UIP decides whether zero is valid on a final network.
 // Payload and difficulty versions are mandatory for every activation record.

@@ -65,6 +65,12 @@ func TestVerifierResolveProfileRejectsSelectorIdentityMismatch(t *testing.T) {
 		{name: "system state id", mutate: func(view *PassEconomicProfileView) { view.ExternalState.SystemStateID = repeatHex("bb", 32) }},
 		{name: "pass id", mutate: func(view *PassEconomicProfileView) { view.Pass.PassID = repeatHex("cc", 32) + "i7" }},
 		{name: "incomplete external state", mutate: func(view *PassEconomicProfileView) { view.ExternalState.LocalStateCommit = "" }},
+		{name: "non-canonical activation registry id", mutate: func(view *PassEconomicProfileView) { view.ExternalState.ActivationRegistryID = repeatHex("AA", 32) }},
+		{name: "active version set id mismatch", mutate: func(view *PassEconomicProfileView) { view.ExternalState.ActiveVersionSetID = repeatHex("88", 32) }},
+		{name: "unsupported active energy formula", mutate: func(view *PassEconomicProfileView) {
+			view.ExternalState.ActiveVersionSet["energy_formula_version"] = []byte(`"v999"`)
+			view.ExternalState.ActiveVersionSetID, _ = view.ExternalState.ActiveVersionSet.ID()
+		}},
 		{name: "missing owner", mutate: func(view *PassEconomicProfileView) { view.Pass.OwnerScriptHash = "" }},
 		{name: "non-canonical owner", mutate: func(view *PassEconomicProfileView) { view.Pass.OwnerScriptHash = repeatHex("AA", 32) }},
 	}

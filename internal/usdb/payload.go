@@ -38,11 +38,11 @@ var (
 	// ErrProfileSelectorVersion indicates an unsupported binary payload layout.
 	ErrProfileSelectorVersion = errors.New("usdb profile selector version mismatch")
 	// ErrDifficultyPolicyVersionMismatch indicates that the header commitment does
-	// not match the version selected by the ETHW chain configuration.
+	// not match the version selected by the USDB chain configuration.
 	ErrDifficultyPolicyVersionMismatch = errors.New("usdb difficulty policy version mismatch")
 )
 
-// PassID is the canonical compact pass identifier used in ETHW consensus payloads.
+// PassID is the canonical compact pass identifier used in USDB consensus payloads.
 //
 // It intentionally avoids the variable-length inscription string on chain and stores
 // only the underlying outpoint components.
@@ -121,7 +121,7 @@ func (p *ProfileSelectorPayload) UnmarshalBinary(data []byte) error {
 }
 
 // ValidateProfileSelectorPayload performs the consensus-only binary checks for
-// header.Extra. It does not query the USDB companion service.
+// header.Extra. It does not query usdb-indexer.
 func ValidateProfileSelectorPayload(data []byte, expectedPayloadVersion byte, expectedDifficultyPolicyVersion uint16) error {
 	if len(data) == 0 {
 		return ErrMissingProfileSelector

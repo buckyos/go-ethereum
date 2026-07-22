@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	// DefaultQueryTimeout bounds one USDB companion-service query.
+	// DefaultQueryTimeout bounds one usdb-indexer query.
 	DefaultQueryTimeout = 3 * time.Second
 	// EconomicStateViewVersionV1 is the frozen UIP-0006 profile response contract.
 	EconomicStateViewVersionV1 = "uip-0006-usdb-economic-state-view:v1"
@@ -29,8 +29,12 @@ const (
 	rpcErrStateNotRetained         = -32048
 	rpcErrHistoryNotAvailable      = -32049
 	rpcErrViewVersionMismatch      = -32050
-	rpcErrProtocolVersionMismatch  = -32051
 	rpcErrFormulaVersionMismatch   = -32052
+	rpcErrActivationRecordNotFound = -32053
+	rpcErrActivationRecordConflict = -32054
+	rpcErrVersionNotSupported      = -32055
+	rpcErrActiveVersionSetMismatch = -32056
+	rpcErrCommitProtocolMismatch   = -32057
 )
 
 var (
@@ -47,8 +51,12 @@ var (
 	ErrStateNotRetained         = errors.New("usdb state not retained")
 	ErrHistoryNotAvailable      = errors.New("usdb history not available")
 	ErrViewVersionMismatch      = errors.New("usdb view version mismatch")
-	ErrProtocolVersionMismatch  = errors.New("usdb protocol version mismatch")
 	ErrFormulaVersionMismatch   = errors.New("usdb formula version mismatch")
+	ErrActivationRecordNotFound = errors.New("usdb activation record not found")
+	ErrActivationRecordConflict = errors.New("usdb activation record conflict")
+	ErrVersionNotSupported      = errors.New("usdb version not supported")
+	ErrActiveVersionSetMismatch = errors.New("usdb active version set mismatch")
+	ErrCommitProtocolMismatch   = errors.New("usdb commit protocol version mismatch")
 )
 
 // RPCError preserves the structured usdb-indexer code and data while exposing
@@ -62,7 +70,7 @@ type RPCError struct {
 }
 
 func (e *RPCError) Error() string {
-	return fmt.Sprintf("usdb rpc error %d (%s)", e.Code, e.Message)
+	return fmt.Sprintf("usdb-indexer rpc error %d (%s)", e.Code, e.Message)
 }
 
 func (e *RPCError) Unwrap() error {
@@ -79,30 +87,38 @@ type QueryContext struct {
 	ExpectedState   QueryExpectedState `json:"expected_state"`
 }
 
-// QueryExpectedState contains the selectors committed by UIP-0007 header.Extra.
+// QueryExpectedState contains optional UIP-0006 historical-state selectors.
+// UIP-0007 commits snapshot/system IDs; callers with a frozen external state may
+// additionally pin the activation registry and active version set.
 type QueryExpectedState struct {
-	SnapshotID    string `json:"snapshot_id,omitempty"`
-	SystemStateID string `json:"system_state_id,omitempty"`
+	SnapshotID           string `json:"snapshot_id,omitempty"`
+	ActivationRegistryID string `json:"activation_registry_id,omitempty"`
+	ActiveVersionSetID   string `json:"active_version_set_id,omitempty"`
+	SystemStateID        string `json:"system_state_id,omitempty"`
 }
 
 // SystemStateInfo is the current USDB state needed for miner selector generation.
 type SystemStateInfo struct {
-	LocalSyncedBlockHeight uint32 `json:"local_synced_block_height"`
-	UpstreamSnapshotID     string `json:"upstream_snapshot_id"`
-	SystemStateID          string `json:"system_state_id"`
+	ActivationRegistryID   string           `json:"activation_registry_id"`
+	ActiveVersionSet       ActiveVersionSet `json:"active_version_set"`
+	ActiveVersionSetID     string           `json:"active_version_set_id"`
+	LocalSyncedBlockHeight uint32           `json:"local_synced_block_height"`
+	UpstreamSnapshotID     string           `json:"upstream_snapshot_id"`
+	SystemStateID          string           `json:"system_state_id"`
 }
 
 // EconomicExternalState is the exact historical state identity returned by UIP-0006.
 type EconomicExternalState struct {
-	BTCHeight                      uint32 `json:"btc_height"`
-	SnapshotID                     string `json:"snapshot_id"`
-	StableBlockHash                string `json:"stable_block_hash"`
-	LocalStateCommit               string `json:"local_state_commit"`
-	SystemStateID                  string `json:"system_state_id"`
-	BalanceHistoryAPIVersion       string `json:"balance_history_api_version"`
-	BalanceHistorySemanticsVersion string `json:"balance_history_semantics_version"`
-	USDBIndexProtocolVersion       string `json:"usdb_index_protocol_version"`
-	USDBIndexFormulaVersion        string `json:"usdb_index_formula_version"`
+	BTCHeight                      uint32           `json:"btc_height"`
+	SnapshotID                     string           `json:"snapshot_id"`
+	StableBlockHash                string           `json:"stable_block_hash"`
+	LocalStateCommit               string           `json:"local_state_commit"`
+	SystemStateID                  string           `json:"system_state_id"`
+	BalanceHistoryAPIVersion       string           `json:"balance_history_api_version"`
+	BalanceHistorySemanticsVersion string           `json:"balance_history_semantics_version"`
+	ActivationRegistryID           string           `json:"activation_registry_id"`
+	ActiveVersionSet               ActiveVersionSet `json:"active_version_set"`
+	ActiveVersionSetID             string           `json:"active_version_set_id"`
 }
 
 // PassEconomicProfile is one pass and its UIP-0003 through UIP-0005 derived fields.
@@ -120,7 +136,7 @@ type PassEconomicProfile struct {
 	CollabBreakdownCount uint64  `json:"collab_breakdown_count"`
 }
 
-// PassEconomicProfileView is the frozen UIP-0006 response consumed by ETHW.
+// PassEconomicProfileView is the frozen UIP-0006 response consumed by USDB-chain consensus.
 type PassEconomicProfileView struct {
 	ViewVersion   string                `json:"view_version"`
 	ExternalState EconomicExternalState `json:"external_state"`
@@ -134,7 +150,7 @@ type passEconomicProfileParams struct {
 	Context     QueryContext `json:"context"`
 }
 
-// Client is the minimal USDB RPC surface needed to build and resolve selectors.
+// Client is the minimal usdb-indexer RPC surface needed to build and resolve selectors.
 type Client interface {
 	GetSystemStateInfo(ctx context.Context) (*SystemStateInfo, error)
 	GetPassEconomicProfile(ctx context.Context, passID PassID, query QueryContext) (*PassEconomicProfileView, error)
@@ -151,11 +167,11 @@ type RPCClient struct {
 	client jsonRPCClient
 }
 
-// DialRPC establishes a reusable client to one USDB RPC endpoint.
+// DialRPC establishes a reusable client to one usdb-indexer RPC endpoint.
 func DialRPC(ctx context.Context, endpoint string) (*RPCClient, error) {
 	client, err := gethrpc.DialContext(ctx, endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial usdb rpc %q: %w", endpoint, err)
+		return nil, fmt.Errorf("failed to dial usdb-indexer rpc %q: %w", endpoint, err)
 	}
 	return &RPCClient{client: client}, nil
 }
@@ -255,10 +271,18 @@ func rpcErrorKind(code int) error {
 		return ErrHistoryNotAvailable
 	case rpcErrViewVersionMismatch:
 		return ErrViewVersionMismatch
-	case rpcErrProtocolVersionMismatch:
-		return ErrProtocolVersionMismatch
 	case rpcErrFormulaVersionMismatch:
 		return ErrFormulaVersionMismatch
+	case rpcErrActivationRecordNotFound:
+		return ErrActivationRecordNotFound
+	case rpcErrActivationRecordConflict:
+		return ErrActivationRecordConflict
+	case rpcErrVersionNotSupported:
+		return ErrVersionNotSupported
+	case rpcErrActiveVersionSetMismatch:
+		return ErrActiveVersionSetMismatch
+	case rpcErrCommitProtocolMismatch:
+		return ErrCommitProtocolMismatch
 	default:
 		return nil
 	}

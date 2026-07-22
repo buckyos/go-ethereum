@@ -1,4 +1,4 @@
-# USDB × ETHW 矿工奖励对接备忘
+# USDB Chain 矿工奖励对接备忘
 
 > 历史设计稿：本文记录 UIP 拆分前的 reward-only 方案，不再作为现行协议或实现依据。
 > 当前 header selector、economic profile 和 chain-config 边界分别以 UIP-0006、
@@ -7,23 +7,23 @@
 当前实现状态：
 
 - header 使用 107-byte `ProfileSelectorPayloadV1`，而非本文的旧 reward payload；
-- chain config 使用按 ETHW block 生效的完整 activation registry；
+- chain config 使用按 USDB block 生效的完整 activation registry；
 - miner 和 validator 均通过同一份历史 `get_pass_economic_profile` 解析结果计算实际难度；
 - level/reward multiplier mock 已删除；在 UIP-0011 激活前仍沿用既有 Ethash 静态奖励。
 
 ## 1. 需求
 
-当前需要在 ETHW 侧引入一条新的奖励逻辑：
+当前需要在 USDB chain 共识侧引入一条新的奖励逻辑：
 
 - 矿工出块时，不再只拿当前链上固定的静态区块奖励
 - 还要根据 USDB / BTC 侧矿工证系统中的 `energy` 和 `level`
 - 计算该块应得的实际奖励
 
-目标不是简单做一个“矿工本地多发钱”的逻辑，而是让这套奖励规则成为 ETHW 节点都能一致验证的共识规则。
+目标不是简单做一个“矿工本地多发钱”的逻辑，而是让这套奖励规则成为 USDB chain 节点都能一致验证的共识规则。
 
 ## 2. 当前现状
 
-### 2.1 ETHW 当前奖励发放位置
+### 2.1 USDB chain 当前奖励发放位置
 
 在当前 `go-ethereum` 分支里，区块奖励仍然集中在：
 
@@ -36,17 +36,17 @@
 
 这里目前还是传统的静态 block reward 逻辑：
 
-- 根据分叉高度选择 `5 / 3 / 2 ETH`
+- 根据继承分叉高度选择 `5 / 3 / 2` 个 USDB native currency units
 - 对 miner 和 uncle 做标准奖励分配
 - 最终把奖励直接加到 `header.Coinbase`
 
-也就是说，当前 ETHW 还没有接入任何来自 USDB 的奖励决定因素。
+也就是说，当前 USDB chain 还没有接入任何来自 BTC-side USDB state view 的奖励决定因素。
 
 ### 2.1.1 当前 static reward 的具体含义
 
-按当前代码，ETHW 这条分支在现阶段实际运行时，矿工主奖励可以近似理解为：
+按当前代码，USDB chain 这条分支在现阶段实际运行时，矿工主奖励可以近似理解为：
 
-- `staticBlockReward = 2 ETH`
+- `staticBlockReward = 2 USDB native units`
 
 此外还存在 uncle 相关的两类奖励：
 
@@ -55,7 +55,7 @@
 
 因此“当前 static reward”更准确地说是：
 
-- miner 主奖励：`2 ETH`
+- miner 主奖励：`2 USDB native units`
 - 外加可能存在的 uncle 额外奖励
 
 ### 2.2 USDB 当前可提供的能力
@@ -69,7 +69,7 @@
 - `get_pass_energy`
 - 带 `ConsensusQueryContext` 的历史回放校验
 
-这意味着 ETHW 如果要对接 USDB，已经有能力在“高度 `H` 的历史上下文”下重建：
+这意味着 USDB chain 如果要消费 BTC-side USDB state view，已经有能力在“高度 `H` 的历史上下文”下重建：
 
 - 某张 pass 的 owner / state
 - 某张 pass 的 historical energy
@@ -86,12 +86,12 @@
 
 那么 `level` 需要额外定义来源：
 
-1. 在 ETHW 侧根据 `energy` 本地确定性推导
+1. 在 USDB chain 侧根据 `energy` 本地确定性推导
 2. 在 USDB 侧补一层 `level` 计算与 RPC
 
 当前建议先采用第 1 种做法：
 
-- 第一版先在 ETHW 本地用 `level = f(energy)` 的 mock 规则推导
+- 第一版先在 USDB chain 本地用 `level = f(energy)` 的 mock 规则推导
 - 后续再把 `level` 切换到由 USDB 对外返回
 
 ## 3. 关键约束
@@ -115,7 +115,7 @@
 
 ### 3.2 奖励计算必须绑定历史 USDB 状态，而不是当前状态
 
-ETHW validator 在未来重放校验某个旧块时，不能查“当前 USDB 状态”，必须查：
+USDB validator 在未来重放校验某个旧块时，不能查“当前 BTC-side USDB 状态”，必须查：
 
 - 该块声明的 BTC 高度
 - 对应的 `snapshot_id`
@@ -159,7 +159,7 @@ payload 最小可包含：
 
 缺点：
 
-- 当前 ETHW 对 `extraData` 限制是 32 bytes
+- 当前继承代码对 `extraData` 限制是 32 bytes
 - 如果要承载完整 payload，需要放宽上限
 
 这是当前最符合“外挂式、少侵入”的方案。
@@ -205,7 +205,7 @@ payload 最小可包含：
 
 需要做的事：
 
-1. 扩大 ETHW `extraData` 上限
+1. 扩大 USDB chain `extraData` 上限
 2. 定义 `UsdbRewardPayloadV1`
 3. miner 在出块时构造 payload
 4. validator 在导入块时解析 payload
@@ -217,9 +217,9 @@ payload 最小可包含：
 
 1. `baseReward(height)`
    - 纯链级货币政策
-   - 由 ETHW 自己的 fork / schedule 决定
+   - 由 USDB chain 自己的 fork / schedule 决定
    - 可以后续演进成类似：
-     - 初始 `10 ETH`
+     - 初始 `10 USDB native units`
      - 到某个高度后减半
      - 继续按高度衰减
      - 最终收敛到某个下限
@@ -255,12 +255,12 @@ payload 最小可包含：
 
 ### 5.2 奖励公式建议
 
-奖励公式本身建议放在 ETHW 代码里，不放在 USDB。
+奖励公式本身建议放在 USDB chain 共识代码里，不放在 BTC-side `usdb-indexer`。
 
 也就是：
 
 - USDB 提供历史状态事实
-- ETHW 提供奖励规则版本与计算逻辑
+- USDB chain 提供奖励规则版本与计算逻辑
 
 这样更容易保证：
 
@@ -274,7 +274,7 @@ payload 最小可包含：
 
 - validator / miner 都强依赖本地 USDB 服务
 - 但第一版 payload 不直接写 `level`
-- 第一版先由 ETHW 在本地根据历史 `energy` 推导 `level`
+- 第一版先由 USDB chain 在本地根据历史 `energy` 推导 `level`
 - 后续当 USDB 对外返回 `level` 时，再把本地 mock 替换掉
 
 因此第一版推荐做法是：
@@ -286,7 +286,7 @@ payload 最小可包含：
 
 当前更建议：
 
-- 先在 ETHW 本地定义 `level = f(energy)`
+- 先在 USDB chain 本地定义 `level = f(energy)`
 
 而不是第一步就要求 USDB 扩 RPC。
 
@@ -310,7 +310,7 @@ payload 最小可包含：
 这意味着：
 
 - `energy` 是历史查询得到的共识输入
-- `level` 是 ETHW 本地根据统一公式推导出的确定性派生值
+- `level` 是 USDB chain 本地根据统一公式推导出的确定性派生值
 
 后续如果 USDB 正式对外返回 `level`，第一版实现可以再把这层 mock 替换掉，但在接口和 payload 上不必做破坏性变化。
 
@@ -340,8 +340,8 @@ payload 最小可包含：
 
 当前结论是：
 
-- ETHW miner 强依赖本地 USDB 服务
-- ETHW validator 也强依赖本地 USDB 服务
+- USDB miner 强依赖本地 BTC-side USDB 服务
+- USDB validator 也强依赖本地 BTC-side USDB 服务
 
 也就是说：
 
@@ -396,11 +396,11 @@ payload 最小可包含：
      - 本地 system state 变化
 2. `pass_id` 是否可以省略
    - 当前不建议省略
-   - `pass_id` 不应依赖 `coinbase ETH address + system_state` 这类隐式推导
+   - `pass_id` 不应依赖 `coinbase USDB-chain account address + system_state` 这类隐式推导
    - 原因是：
      - 当前 USDB 对外稳定查询主键仍是 `pass_id / inscription_id`
-     - `eth_main` / `eth_collab` 只是 pass 内容字段，不是稳定唯一反查键
-     - 多 pass / candidate-set 场景下，按 ETH 地址隐式选 pass 会产生歧义
+     - `usdb_main` 只是 standard pass 的 USDB-chain account address，collab pass 使用 `leader_pass_id` / `leader_btc_addr`；这些字段都不是 `pass_id` 的替代主键
+     - 多 pass / candidate-set 场景下，按 USDB-chain account address 隐式选 pass 会产生歧义
    - 因此第一版更推荐显式携带 `pass_id`
    - 但编码上应尽量紧凑，例如使用固定长度的 outpoint 二进制编码，而不是直接放可变长字符串
 
@@ -469,7 +469,7 @@ payload 最小可包含：
 
 原因是：
 
-- 这套逻辑当前是 USDB 为 ETHW / USDB 链提供的内部共识扩展
+- 这套逻辑当前是 BTC-side USDB 服务为 USDB chain 提供的内部共识扩展
 - 它需要被 `miner`、`consensus`、`cmd/geth` 等仓库内部代码共同使用
 - 但它还不是一个需要对外稳定暴露的公共 Go SDK
 
@@ -482,7 +482,7 @@ payload 最小可包含：
 内部拆成：
 
 - `payload`：编码 / 解码 `UsdbRewardPayloadV1`
-- `client`：USDB RPC client
+- `client`：usdb-indexer RPC client
 - `policy`：奖励公式
 - `verifier`：按 payload 历史上下文重放 USDB 状态并生成 reward input
 
@@ -500,7 +500,7 @@ payload 最小可包含：
 2. 第一版 multiplier 线性区间 `[M, N]` 是否按 `0.5 .. 2.0` 固化
 3. `header.Extra` 是否直接扩到 `160 bytes`
 4. 第一版是否明确不带 `stable_block_hash`
-5. `baseReward(height)` 在第一阶段是否先固定返回常量 `5 ETH`
+5. `baseReward(height)` 在第一阶段是否先固定返回常量 `5 USDB native units`
 6. `baseReward(height)` 的衰减节奏和下限，是后续按 block height 自动切换，还是通过未来 `UsdbV2Block / UsdbV3Block` 升级实现
 
 ## 8. 第一阶段默认约定
@@ -513,7 +513,7 @@ payload 最小可包含：
 4. multiplier 使用 `level 1..50 -> [0.5, 2.0]` 线性增长
 5. `header.Extra` 预留 `160 bytes`
 6. 第一版 payload 不带 `stable_block_hash`
-7. `baseReward(height)` 第一阶段先返回常量 `5 ETH`
+7. `baseReward(height)` 第一阶段先返回常量 `5 USDB native units`
 
 后续如需演进：
 

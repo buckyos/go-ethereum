@@ -380,14 +380,14 @@ var (
 		Usage:    "Lock memory maps for recent ethash mining DAGs",
 		Category: flags.EthashCategory,
 	}
-	EthashUSDBRPCURLFlag = &cli.StringFlag{
-		Name:     "ethash.usdb.rpcurl",
+	EthashUSDBIndexerRPCURLFlag = &cli.StringFlag{
+		Name:     "ethash.usdb-indexer.rpcurl",
 		Usage:    "Local usdb-indexer JSON-RPC endpoint used for historical reward verification",
 		Category: flags.EthashCategory,
 	}
-	EthashUSDBTimeoutFlag = &cli.DurationFlag{
-		Name:     "ethash.usdb.timeout",
-		Usage:    "Timeout for one USDB-backed reward verification query",
+	EthashUSDBIndexerTimeoutFlag = &cli.DurationFlag{
+		Name:     "ethash.usdb-indexer.timeout",
+		Usage:    "Timeout for one usdb-indexer reward verification query",
 		Category: flags.EthashCategory,
 	}
 
@@ -578,8 +578,8 @@ var (
 		Usage:    "Disable remote sealing verification",
 		Category: flags.MinerCategory,
 	}
-	MinerUSDBRPCURLFlag = &cli.StringFlag{
-		Name:     "miner.usdb.rpcurl",
+	MinerUSDBIndexerRPCURLFlag = &cli.StringFlag{
+		Name:     "miner.usdb-indexer.rpcurl",
 		Usage:    "Local usdb-indexer JSON-RPC endpoint used to build header reward payloads",
 		Category: flags.MinerCategory,
 	}
@@ -588,9 +588,9 @@ var (
 		Usage:    "Configured USDB pass id whose historical state is committed into header extra-data",
 		Category: flags.MinerCategory,
 	}
-	MinerUSDBTimeoutFlag = &cli.DurationFlag{
-		Name:     "miner.usdb.timeout",
-		Usage:    "Timeout for one USDB-backed reward payload build query",
+	MinerUSDBIndexerTimeoutFlag = &cli.DurationFlag{
+		Name:     "miner.usdb-indexer.timeout",
+		Usage:    "Timeout for one usdb-indexer reward payload build query",
 		Category: flags.MinerCategory,
 	}
 
@@ -1684,11 +1684,11 @@ func setEthash(ctx *cli.Context, cfg *ethconfig.Config) {
 	if ctx.IsSet(EthashDatasetsLockMmapFlag.Name) {
 		cfg.Ethash.DatasetsLockMmap = ctx.Bool(EthashDatasetsLockMmapFlag.Name)
 	}
-	if ctx.IsSet(EthashUSDBRPCURLFlag.Name) {
-		cfg.Ethash.USDB.RPCURL = ctx.String(EthashUSDBRPCURLFlag.Name)
+	if ctx.IsSet(EthashUSDBIndexerRPCURLFlag.Name) {
+		cfg.Ethash.USDBIndexer.RPCURL = ctx.String(EthashUSDBIndexerRPCURLFlag.Name)
 	}
-	if ctx.IsSet(EthashUSDBTimeoutFlag.Name) {
-		cfg.Ethash.USDB.QueryTimeout = ctx.Duration(EthashUSDBTimeoutFlag.Name)
+	if ctx.IsSet(EthashUSDBIndexerTimeoutFlag.Name) {
+		cfg.Ethash.USDBIndexer.QueryTimeout = ctx.Duration(EthashUSDBIndexerTimeoutFlag.Name)
 	}
 }
 
@@ -1712,14 +1712,14 @@ func setMiner(ctx *cli.Context, cfg *miner.Config) {
 	if ctx.IsSet(MinerNoVerifyFlag.Name) {
 		cfg.Noverify = ctx.Bool(MinerNoVerifyFlag.Name)
 	}
-	if ctx.IsSet(MinerUSDBRPCURLFlag.Name) {
-		cfg.USDB.RPCURL = ctx.String(MinerUSDBRPCURLFlag.Name)
+	if ctx.IsSet(MinerUSDBIndexerRPCURLFlag.Name) {
+		cfg.USDB.IndexerRPCURL = ctx.String(MinerUSDBIndexerRPCURLFlag.Name)
 	}
 	if ctx.IsSet(MinerUSDBPassIDFlag.Name) {
 		cfg.USDB.PassID = ctx.String(MinerUSDBPassIDFlag.Name)
 	}
-	if ctx.IsSet(MinerUSDBTimeoutFlag.Name) {
-		cfg.USDB.QueryTimeout = ctx.Duration(MinerUSDBTimeoutFlag.Name)
+	if ctx.IsSet(MinerUSDBIndexerTimeoutFlag.Name) {
+		cfg.USDB.IndexerQueryTimeout = ctx.Duration(MinerUSDBIndexerTimeoutFlag.Name)
 	}
 	if ctx.IsSet(LegacyMinerGasTargetFlag.Name) {
 		log.Warn("The generic --miner.gastarget flag is deprecated and will be removed in the future!")

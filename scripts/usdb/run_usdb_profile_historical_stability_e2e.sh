@@ -4,19 +4,19 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
 
-E2E_WORK_DIR=${WORK_DIR:-/tmp/usdb-ethw-reward-historical-stability-e2e}
-ETHW_WORK_DIR=${ETHW_WORK_DIR:-"$E2E_WORK_DIR/geth"}
-GENESIS_JSON=${GENESIS_JSON:-"$ETHW_WORK_DIR/usdb-genesis.json"}
+E2E_WORK_DIR=${WORK_DIR:-/tmp/usdb-profile-historical-stability-e2e}
+USDB_CHAIN_WORK_DIR=${USDB_CHAIN_WORK_DIR:-"$E2E_WORK_DIR/geth"}
+GENESIS_JSON=${GENESIS_JSON:-"$USDB_CHAIN_WORK_DIR/usdb-genesis.json"}
 
-NODE1_DATADIR=${NODE1_DATADIR:-"$ETHW_WORK_DIR/node1"}
-NODE1_LOG_FILE=${NODE1_LOG_FILE:-"$ETHW_WORK_DIR/node1.log"}
+NODE1_DATADIR=${NODE1_DATADIR:-"$USDB_CHAIN_WORK_DIR/node1"}
+NODE1_LOG_FILE=${NODE1_LOG_FILE:-"$USDB_CHAIN_WORK_DIR/node1.log"}
 NODE1_HTTP_ADDR=${NODE1_HTTP_ADDR:-127.0.0.1}
 NODE1_HTTP_PORT=${NODE1_HTTP_PORT:-19745}
 NODE1_P2P_PORT=${NODE1_P2P_PORT:-31333}
 NODE1_AUTHRPC_PORT=${NODE1_AUTHRPC_PORT:-19751}
 
-NODE2_DATADIR=${NODE2_DATADIR:-"$ETHW_WORK_DIR/node2"}
-NODE2_LOG_FILE=${NODE2_LOG_FILE:-"$ETHW_WORK_DIR/node2.log"}
+NODE2_DATADIR=${NODE2_DATADIR:-"$USDB_CHAIN_WORK_DIR/node2"}
+NODE2_LOG_FILE=${NODE2_LOG_FILE:-"$USDB_CHAIN_WORK_DIR/node2.log"}
 NODE2_HTTP_ADDR=${NODE2_HTTP_ADDR:-127.0.0.1}
 NODE2_HTTP_PORT=${NODE2_HTTP_PORT:-19746}
 NODE2_P2P_PORT=${NODE2_P2P_PORT:-31334}
@@ -29,8 +29,8 @@ BLOCK_WAIT_SECONDS=${BLOCK_WAIT_SECONDS:-180}
 ENERGY_TOPUP_AMOUNT_BTC=${ENERGY_TOPUP_AMOUNT_BTC:-1.0}
 ENERGY_GROWTH_BLOCKS=${ENERGY_GROWTH_BLOCKS:-2}
 
-MINER_ETHERBASE=${MINER_ETHERBASE:-0x1111111111111111111111111111111111111111}
-MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$MINER_ETHERBASE}
+USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x1111111111111111111111111111111111111111}
+MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$USDB_CHAIN_MINER_ADDRESS}
 
 export REPO_ROOT="${USDB_REPO_DIR}"
 export WORK_DIR="${E2E_WORK_DIR}/usdb"
@@ -41,11 +41,11 @@ export USDB_INDEXER_ROOT="${USDB_INDEXER_ROOT:-$WORK_DIR/usdb-indexer}"
 export BTC_RPC_PORT="${BTC_RPC_PORT:-39972}"
 export BTC_P2P_PORT="${BTC_P2P_PORT:-39973}"
 export BH_RPC_PORT="${BH_RPC_PORT:-39970}"
-export USDB_RPC_PORT="${USDB_RPC_PORT:-39980}"
+export USDB_INDEXER_RPC_PORT="${USDB_INDEXER_RPC_PORT:-39980}"
 export ORD_RPC_PORT="${ORD_RPC_PORT:-39990}"
-export WALLET_NAME="${WALLET_NAME:-usdbethwrewardhistorical}"
-export ORD_WALLET_NAME="${ORD_WALLET_NAME:-ord-usdb-ethw-reward-historical-a}"
-export ORD_WALLET_NAME_B="${ORD_WALLET_NAME_B:-ord-usdb-ethw-reward-historical-b}"
+export WALLET_NAME="${WALLET_NAME:-usdbprofilehistorical}"
+export ORD_WALLET_NAME="${ORD_WALLET_NAME:-ord-usdb-profile-historical-a}"
+export ORD_WALLET_NAME_B="${ORD_WALLET_NAME_B:-ord-usdb-profile-historical-b}"
 export PREMINE_BLOCKS="${PREMINE_BLOCKS:-130}"
 export FUND_CONFIRM_BLOCKS="${FUND_CONFIRM_BLOCKS:-2}"
 export INSCRIBE_CONFIRM_BLOCKS="${INSCRIBE_CONFIRM_BLOCKS:-2}"
@@ -53,7 +53,7 @@ export SYNC_TIMEOUT_SEC="${SYNC_TIMEOUT_SEC:-300}"
 export BALANCE_HISTORY_LOG_FILE="${BALANCE_HISTORY_LOG_FILE:-$WORK_DIR/balance-history.log}"
 export USDB_INDEXER_LOG_FILE="${USDB_INDEXER_LOG_FILE:-$WORK_DIR/usdb-indexer.log}"
 export ORD_SERVER_LOG_FILE="${ORD_SERVER_LOG_FILE:-$WORK_DIR/ord-server.log}"
-export REGTEST_LOG_PREFIX="[usdb-ethw-reward-historical/usdb]"
+export REGTEST_LOG_PREFIX="[usdb-profile-historical/usdb]"
 
 GETH_BIN=${GETH_BIN:-}
 GETH_GO=${GETH_GO:-/usr/local/go/bin/go}
@@ -74,8 +74,8 @@ run_geth() {
   )
 }
 
-ethw_log() {
-  echo "[usdb-ethw-reward-historical/geth] $*"
+usdb_chain_log() {
+  echo "[usdb-profile-historical/geth] $*"
 }
 
 rpc_call() {
@@ -101,7 +101,7 @@ wait_chain_id() {
     fi
     sleep 1
   done
-  echo "Timed out waiting for ETHW RPC at ${url}" >&2
+  echo "Timed out waiting for USDB-chain RPC at ${url}" >&2
   return 1
 }
 
@@ -199,7 +199,7 @@ stop_residual_nodes_for() {
   local label="$4"
   while IFS= read -r pid; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-      ethw_log "Stopping residual ${label} geth process pid=${pid} datadir=${datadir}"
+      usdb_chain_log "Stopping residual ${label} geth process pid=${pid} datadir=${datadir}"
       regtest_stop_process "$pid"
     fi
   done < <(
@@ -215,9 +215,9 @@ print_failure_diagnostics() {
   local label="$1"
   local log_file="$2"
   if [[ -f "$log_file" ]]; then
-    ethw_log "---- ${label} log (tail -n 120) ----"
+    usdb_chain_log "---- ${label} log (tail -n 120) ----"
     tail -n 120 "$log_file" || true
-    ethw_log "---- end ${label} log ----"
+    usdb_chain_log "---- end ${label} log ----"
   fi
 }
 
@@ -239,7 +239,7 @@ cleanup() {
   regtest_cleanup
 }
 
-collect_eth_blocks() {
+collect_usdb_blocks() {
   local url="$1"
   local final_block_height="$2"
   local blocks_file="$3"
@@ -284,12 +284,12 @@ verify_historical_stability() {
   local initial_energy="$5"
   local boosted_energy="$6"
 
-  python3 "$ROOT_DIR/scripts/usdb/verify_usdb_ethw_profile_e2e.py" \
+  python3 "$ROOT_DIR/scripts/usdb/verify_usdb_profile_e2e.py" \
     --blocks "$blocks_file" \
     --coinbase "$coinbase" \
     --balance-hex "$balance_hex" \
-    --eth-rpc-url "http://${NODE1_HTTP_ADDR}:${NODE1_HTTP_PORT}" \
-    --usdb-rpc-url "http://127.0.0.1:${USDB_RPC_PORT}" \
+    --usdb-chain-rpc-url "http://${NODE1_HTTP_ADDR}:${NODE1_HTTP_PORT}" \
+    --usdb-indexer-rpc-url "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
     --expected-pass-id "$expected_pass_id" \
     --initial-raw-energy "$initial_energy" \
     --boosted-raw-energy "$boosted_energy"
@@ -309,7 +309,7 @@ main() {
   fi
 
   regtest_ensure_workspace_dirs
-  mkdir -p "$ETHW_WORK_DIR"
+  mkdir -p "$USDB_CHAIN_WORK_DIR"
   stop_residual_nodes_for "$NODE1_DATADIR" "$NODE1_HTTP_PORT" "$NODE1_P2P_PORT" "node1"
   stop_residual_nodes_for "$NODE2_DATADIR" "$NODE2_HTTP_PORT" "$NODE2_P2P_PORT" "node2"
   rm -rf "$NODE1_DATADIR" "$NODE2_DATADIR"
@@ -336,7 +336,7 @@ main() {
   regtest_mine_blocks "$FUND_CONFIRM_BLOCKS" "$miner_btc_address"
   regtest_wait_until_ord_server_synced_to_bitcoind
 
-  mint_content_file="$WORK_DIR/usdb_ethw_reward_historical_mint.json"
+  mint_content_file="$WORK_DIR/usdb_profile_historical_mint.json"
   cat >"$mint_content_file" <<EOF
 {"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
 EOF
@@ -358,15 +358,15 @@ EOF
   regtest_wait_usdb_consensus_ready
 
   initial_energy="$(pass_energy_now "$pass_id")"
-  ethw_log "Initial current pass energy=${initial_energy} for pass_id=${pass_id}"
+  usdb_chain_log "Initial current pass energy=${initial_energy} for pass_id=${pass_id}"
 
-  ethw_log "Generating canonical USDB genesis"
+  usdb_chain_log "Generating canonical USDB genesis"
   run_geth dumpgenesis --usdb >"$GENESIS_JSON"
-  ethw_log "Initializing ETHW datadirs"
+  usdb_chain_log "Initializing USDB-chain datadirs"
   run_geth init --datadir "$NODE1_DATADIR" "$GENESIS_JSON" >/dev/null
   run_geth init --datadir "$NODE2_DATADIR" "$GENESIS_JSON" >/dev/null
 
-  ethw_log "Starting ETHW node 1 miner with USDB reward integration"
+  usdb_chain_log "Starting USDB-chain node 1 miner with USDB profile/difficulty integration"
   (
     cd "$ROOT_DIR"
     exec "${GETH_CMD[@]}" \
@@ -383,10 +383,10 @@ EOF
       --maxpeers 10 \
       --mine \
       --miner.threads 1 \
-      --miner.etherbase "$MINER_ETHERBASE" \
-      --miner.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}" \
+      --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
+      --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
       --miner.usdb.passid "$pass_id" \
-      --ethash.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}"
+      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
   ) >"$NODE1_LOG_FILE" 2>&1 &
   NODE1_PID=$!
 
@@ -394,12 +394,12 @@ EOF
   node2_rpc="http://${NODE2_HTTP_ADDR}:${NODE2_HTTP_PORT}"
   wait_chain_id "$node1_rpc"
   node1_tip_height="$(wait_block_height "$node1_rpc" "$TARGET_BLOCKS")"
-  ethw_log "Node 1 mined through ETH block ${node1_tip_height}; stopping miner before BTC head advance"
+  usdb_chain_log "Node 1 mined through USDB block ${node1_tip_height}; stopping miner before BTC head advance"
   stop_mining "$node1_rpc"
   sleep 2
   node1_tip_height="$(fetch_block_number "$node1_rpc")"
   node1_tip_hash="$(fetch_head_hash "$node1_rpc")"
-  node1_balance_hex="$(printf '%s' "$(rpc_call "$node1_rpc" "eth_getBalance" "[\"${MINER_ETHERBASE}\",\"latest\"]")" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result") or "0x0")')"
+  node1_balance_hex="$(printf '%s' "$(rpc_call "$node1_rpc" "eth_getBalance" "[\"${USDB_CHAIN_MINER_ADDRESS}\",\"latest\"]")" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result") or "0x0")')"
 
   regtest_log "Applying BTC owner top-up to advance the BTC head and increase current pass energy"
   regtest_fund_address "$ord_receive_address" "$ENERGY_TOPUP_AMOUNT_BTC"
@@ -414,9 +414,9 @@ EOF
   regtest_wait_balance_history_consensus_ready
   regtest_wait_usdb_consensus_ready
   boosted_energy="$(pass_energy_now "$pass_id")"
-  ethw_log "Current pass energy after BTC head advance=${boosted_energy}"
+  usdb_chain_log "Current pass energy after BTC head advance=${boosted_energy}"
 
-  ethw_log "Starting fresh ETHW node 2 validator after BTC head advance"
+  usdb_chain_log "Starting fresh USDB-chain node 2 validator after BTC head advance"
   (
     cd "$ROOT_DIR"
     exec "${GETH_CMD[@]}" \
@@ -431,7 +431,7 @@ EOF
       --port "$NODE2_P2P_PORT" \
       --nodiscover \
       --maxpeers 10 \
-      --ethash.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}"
+      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
   ) >"$NODE2_LOG_FILE" 2>&1 &
   NODE2_PID=$!
 
@@ -452,13 +452,13 @@ EOF
     exit 1
   fi
 
-  blocks_file="$ETHW_WORK_DIR/stage1_blocks.json"
-  collect_eth_blocks "$node1_rpc" "$node1_tip_height" "$blocks_file"
-  ethw_log "Verifying node 1 historical rewards remain stable after BTC head advance and node 2 sync"
-  verify_historical_stability "$blocks_file" "$MINER_ETHERBASE" "$node1_balance_hex" "$pass_id" "$initial_energy" "$boosted_energy"
+  blocks_file="$USDB_CHAIN_WORK_DIR/stage1_blocks.json"
+  collect_usdb_blocks "$node1_rpc" "$node1_tip_height" "$blocks_file"
+  usdb_chain_log "Verifying node 1 historical profiles and static rewards remain stable after BTC head advance and node 2 sync"
+  verify_historical_stability "$blocks_file" "$USDB_CHAIN_MINER_ADDRESS" "$node1_balance_hex" "$pass_id" "$initial_energy" "$boosted_energy"
 
-  ethw_log "USDB + ETHW historical reward stability E2E succeeded."
-  ethw_log "pass_id=${pass_id}, node1_height=${node1_tip_height}, historical_head=${node1_tip_hash}, initial_energy=${initial_energy}, current_energy=${boosted_energy}"
+  usdb_chain_log "USDB-chain historical profile stability E2E succeeded."
+  usdb_chain_log "pass_id=${pass_id}, node1_height=${node1_tip_height}, historical_head=${node1_tip_hash}, initial_energy=${initial_energy}, current_energy=${boosted_energy}"
 }
 
 main "$@"

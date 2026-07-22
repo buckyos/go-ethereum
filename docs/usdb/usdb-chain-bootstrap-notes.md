@@ -382,8 +382,8 @@ KEEP_RUNNING=1 \
 
 和它配套的功能级文档是：
 
-- `docs/usdb/usdb-ethw-reward-integration.md`
-- `docs/usdb/usdb-ethw-fee-split-integration.md`
+- `docs/usdb/usdb-reward-integration.md`
+- `docs/usdb/usdb-fee-split-integration.md`
 
 前者关注：
 

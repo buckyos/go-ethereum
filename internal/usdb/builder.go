@@ -39,7 +39,7 @@ func NewPayloadBuilder(client Client, passID string, chainConfig *params.ChainCo
 	}, nil
 }
 
-// NewRPCPayloadBuilder dials one USDB endpoint and uses it to generate current selectors.
+// NewRPCPayloadBuilder dials one usdb-indexer endpoint and uses it to generate current selectors.
 func NewRPCPayloadBuilder(endpoint, passID string, chainConfig *params.ChainConfig, queryTimeout time.Duration) (*PayloadBuilder, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeout)
 	defer cancel()
@@ -87,6 +87,13 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if systemState == nil {
 		return nil, fmt.Errorf("usdb returned no current system state")
 	}
+	if err := validateBTCActivationIdentity(
+		systemState.ActivationRegistryID,
+		systemState.ActiveVersionSet,
+		systemState.ActiveVersionSetID,
+	); err != nil {
+		return nil, fmt.Errorf("invalid current usdb activation identity: %w", err)
+	}
 	payload, err := NewProfileSelectorPayload(
 		policy.DifficultyPolicyVersion,
 		systemState.LocalSyncedBlockHeight,
@@ -97,8 +104,13 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if err != nil {
 		return nil, err
 	}
-	if _, err := resolveConsensusProfile(queryCtx, b.client, *payload); err != nil {
+	profile, err := resolveConsensusProfile(queryCtx, b.client, *payload)
+	if err != nil {
 		return nil, fmt.Errorf("configured pass %s is not valid in current usdb state: %w", b.passID.String(), err)
+	}
+	if profile.View.ExternalState.ActivationRegistryID != systemState.ActivationRegistryID ||
+		profile.View.ExternalState.ActiveVersionSetID != systemState.ActiveVersionSetID {
+		return nil, fmt.Errorf("current usdb activation identity changed while building payload")
 	}
 	return payload.MarshalBinary()
 }

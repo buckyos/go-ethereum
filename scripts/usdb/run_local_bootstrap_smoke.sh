@@ -13,7 +13,7 @@ HTTP_PORT=${HTTP_PORT:-18545}
 P2P_PORT=${P2P_PORT:-31303}
 AUTHRPC_PORT=${AUTHRPC_PORT:-18551}
 NETWORK_ID=${NETWORK_ID:-20260323}
-MINER_ETHERBASE=${MINER_ETHERBASE:-0x0000000000000000000000000000000000001003}
+USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x0000000000000000000000000000000000001003}
 RUN_SMOKE=${RUN_SMOKE:-1}
 KEEP_RUNNING=${KEEP_RUNNING:-0}
 RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-45}
@@ -56,7 +56,7 @@ wait_for_rpc() {
     fi
     sleep 1
   done
-  echo "Timed out waiting for USDB RPC at http://${HTTP_ADDR}:${HTTP_PORT} with chainId ${expected_chain_id}" >&2
+  echo "Timed out waiting for USDB-chain RPC at http://${HTTP_ADDR}:${HTTP_PORT} with chainId ${expected_chain_id}" >&2
   return 1
 }
 
@@ -91,13 +91,13 @@ trap cleanup EXIT
     --maxpeers 0 \
     --mine \
     --miner.threads 1 \
-    --miner.etherbase "$MINER_ETHERBASE"
+    --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS"
 ) >"$LOG_FILE" 2>&1 &
 GETH_PID=$!
 
 wait_for_rpc
 
-echo "USDB RPC is ready at http://${HTTP_ADDR}:${HTTP_PORT}"
+echo "USDB-chain RPC is ready at http://${HTTP_ADDR}:${HTTP_PORT}"
 echo "geth log: $LOG_FILE"
 echo "genesis: $GENESIS_JSON"
 
@@ -107,6 +107,7 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
     cd "$SOURCE_DAO_DIR"
     source "$HOME/.nvm/nvm.sh"
     nvm use 24 >/dev/null
+    # SourceDAO owns this external env key; its value is the USDB-chain RPC endpoint.
     SOURCE_DAO_USDB_CONFIG="${SOURCE_DAO_USDB_CONFIG:-$SOURCE_DAO_DIR/tools/config/sourcedao-local.json}" \
     SOURCE_DAO_USDB_RPC_URL="http://${HTTP_ADDR}:${HTTP_PORT}" \
     npm run test:usdb:smoke

@@ -56,15 +56,15 @@ type Config struct {
 	Noverify   bool           // Disable remote mining solution verification(only useful in ethash).
 }
 
-// USDBConfig contains operational settings for the USDB companion service.
+// USDBConfig contains USDB mining settings and explicit usdb-indexer access.
 // ChainConfig, not this structure, decides whether USDB consensus is active.
 type USDBConfig struct {
-	// RPCURL points to the local usdb-indexer JSON-RPC endpoint used by the miner.
-	RPCURL string `toml:",omitempty"`
+	// IndexerRPCURL points to the local usdb-indexer JSON-RPC endpoint used by the miner.
+	IndexerRPCURL string `toml:",omitempty"`
 	// PassID selects the pass committed as selected_pass in header.Extra.
 	PassID string `toml:",omitempty"`
-	// QueryTimeout bounds one current-state payload build against the local USDB service.
-	QueryTimeout time.Duration `toml:",omitempty"`
+	// IndexerQueryTimeout bounds one current-state payload build against usdb-indexer.
+	IndexerQueryTimeout time.Duration `toml:",omitempty"`
 }
 
 // Miner creates blocks and searches for proof-of-work values.

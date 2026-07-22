@@ -136,7 +136,7 @@ def decode_selector(block):
     }
 
 
-def resolve_profile(usdb_rpc_url, selector):
+def resolve_profile(usdb_indexer_rpc_url, selector):
     context = {
         "requested_height": selector["btc_height"],
         "expected_state": {
@@ -145,7 +145,7 @@ def resolve_profile(usdb_rpc_url, selector):
         },
     }
     profile = rpc_call(
-        usdb_rpc_url,
+        usdb_indexer_rpc_url,
         "get_pass_economic_profile",
         [
             {
@@ -217,8 +217,8 @@ def main():
     parser.add_argument("--blocks", required=True)
     parser.add_argument("--coinbase", required=True)
     parser.add_argument("--balance-hex", required=True)
-    parser.add_argument("--eth-rpc-url", required=True)
-    parser.add_argument("--usdb-rpc-url", required=True)
+    parser.add_argument("--usdb-chain-rpc-url", required=True)
+    parser.add_argument("--usdb-indexer-rpc-url", required=True)
     parser.add_argument("--expected-pass-id")
     parser.add_argument("--stage1-end", type=int)
     parser.add_argument("--initial-raw-energy", type=int)
@@ -228,8 +228,8 @@ def main():
     with open(args.blocks, "r", encoding="utf-8") as stream:
         blocks = json.load(stream)
     if not blocks:
-        raise SystemExit("no ETHW blocks supplied")
-    genesis = rpc_call(args.eth_rpc_url, "eth_getBlockByNumber", ["0x0", False])
+        raise SystemExit("no USDB blocks supplied")
+    genesis = rpc_call(args.usdb_chain_rpc_url, "eth_getBlockByNumber", ["0x0", False])
     by_number = {0: genesis}
     expected_balance = 0
     all_raw = []
@@ -260,7 +260,7 @@ def main():
                 f"{selector['pass_id']} != {args.expected_pass_id}"
             )
         raw, contribution, effective, level, factor = resolve_profile(
-            args.usdb_rpc_url, selector
+            args.usdb_indexer_rpc_url, selector
         )
         all_raw.append(raw)
         expected_difficulty = expected_real_difficulty(parent, block, factor)

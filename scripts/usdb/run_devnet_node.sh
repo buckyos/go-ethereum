@@ -15,7 +15,7 @@ HTTP_ADDR=${HTTP_ADDR:-127.0.0.1}
 HTTP_PORT=${HTTP_PORT:-28545}
 P2P_PORT=${P2P_PORT:-32303}
 AUTHRPC_PORT=${AUTHRPC_PORT:-28551}
-MINER_ETHERBASE=${MINER_ETHERBASE:-0x0000000000000000000000000000000000001003}
+USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x0000000000000000000000000000000000001003}
 RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-45}
 KEEP_RUNNING=${KEEP_RUNNING:-1}
 REINIT=${REINIT:-0}
@@ -127,7 +127,7 @@ case "$NODE_ROLE" in
     role_args=(--maxpeers 25)
     ;;
   miner)
-    role_args=(--mine --miner.threads 1 --miner.etherbase "$MINER_ETHERBASE" --maxpeers 25)
+    role_args=(--mine --miner.threads 1 --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" --maxpeers 25)
     ;;
   full)
     role_args=(--maxpeers 25)

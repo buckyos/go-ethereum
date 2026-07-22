@@ -20,7 +20,7 @@ const (
 var (
 	// ErrInvalidProfileEnergy indicates a non-canonical or out-of-range energy value.
 	ErrInvalidProfileEnergy = errors.New("invalid usdb profile energy")
-	// ErrInvalidBaseDifficulty indicates a missing or non-positive ETHW base difficulty.
+	// ErrInvalidBaseDifficulty indicates a missing or non-positive USDB base difficulty.
 	ErrInvalidBaseDifficulty = errors.New("invalid usdb base difficulty")
 	// ErrInvalidDifficultyFactor indicates a factor outside the UIP-0005 v1 range.
 	ErrInvalidDifficultyFactor = errors.New("invalid usdb difficulty factor")
@@ -113,7 +113,7 @@ func DifficultyFactorBpsForLevel(level uint8) uint64 {
 	return factor
 }
 
-// RealDifficultyV1 applies the UIP-0005 factor to an ETHW base difficulty with
+// RealDifficultyV1 applies the UIP-0005 factor to a USDB base difficulty with
 // consensus-safe ceiling division.
 func RealDifficultyV1(baseDifficulty *big.Int, difficultyFactorBps uint64) (*big.Int, error) {
 	if baseDifficulty == nil || baseDifficulty.Sign() <= 0 {

@@ -88,39 +88,39 @@ func newCLIContext(t *testing.T, flagsList []cli.Flag, args ...string) *cli.Cont
 
 func TestSetMinerAppliesUSDBFlags(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
-		MinerUSDBRPCURLFlag,
+		MinerUSDBIndexerRPCURLFlag,
 		MinerUSDBPassIDFlag,
-		MinerUSDBTimeoutFlag,
-	}, "--miner.usdb.rpcurl", "http://127.0.0.1:8548", "--miner.usdb.passid", "abc123i7", "--miner.usdb.timeout", "4s")
+		MinerUSDBIndexerTimeoutFlag,
+	}, "--miner.usdb-indexer.rpcurl", "http://127.0.0.1:8548", "--miner.usdb.passid", "abc123i7", "--miner.usdb-indexer.timeout", "4s")
 
 	cfg := ethconfig.Defaults.Miner
 	setMiner(ctx, &cfg)
 
-	if cfg.USDB.RPCURL != "http://127.0.0.1:8548" {
-		t.Fatalf("unexpected miner usdb rpc url: %s", cfg.USDB.RPCURL)
+	if cfg.USDB.IndexerRPCURL != "http://127.0.0.1:8548" {
+		t.Fatalf("unexpected miner usdb-indexer rpc url: %s", cfg.USDB.IndexerRPCURL)
 	}
 	if cfg.USDB.PassID != "abc123i7" {
 		t.Fatalf("unexpected miner usdb pass id: %s", cfg.USDB.PassID)
 	}
-	if cfg.USDB.QueryTimeout != 4*time.Second {
-		t.Fatalf("unexpected miner usdb timeout: %s", cfg.USDB.QueryTimeout)
+	if cfg.USDB.IndexerQueryTimeout != 4*time.Second {
+		t.Fatalf("unexpected miner usdb-indexer timeout: %s", cfg.USDB.IndexerQueryTimeout)
 	}
 }
 
 func TestSetEthashAppliesUSDBFlags(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
-		EthashUSDBRPCURLFlag,
-		EthashUSDBTimeoutFlag,
-	}, "--ethash.usdb.rpcurl", "http://127.0.0.1:18548", "--ethash.usdb.timeout", "6s")
+		EthashUSDBIndexerRPCURLFlag,
+		EthashUSDBIndexerTimeoutFlag,
+	}, "--ethash.usdb-indexer.rpcurl", "http://127.0.0.1:18548", "--ethash.usdb-indexer.timeout", "6s")
 
 	cfg := ethconfig.Defaults
 	setEthash(ctx, &cfg)
 
-	if cfg.Ethash.USDB.RPCURL != "http://127.0.0.1:18548" {
-		t.Fatalf("unexpected ethash usdb rpc url: %s", cfg.Ethash.USDB.RPCURL)
+	if cfg.Ethash.USDBIndexer.RPCURL != "http://127.0.0.1:18548" {
+		t.Fatalf("unexpected ethash usdb-indexer rpc url: %s", cfg.Ethash.USDBIndexer.RPCURL)
 	}
-	if cfg.Ethash.USDB.QueryTimeout != 6*time.Second {
-		t.Fatalf("unexpected ethash usdb timeout: %s", cfg.Ethash.USDB.QueryTimeout)
+	if cfg.Ethash.USDBIndexer.QueryTimeout != 6*time.Second {
+		t.Fatalf("unexpected ethash usdb-indexer timeout: %s", cfg.Ethash.USDBIndexer.QueryTimeout)
 	}
 }
 

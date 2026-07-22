@@ -436,16 +436,16 @@ type Config struct {
 
 	Log log.Logger `toml:"-"`
 
-	// USDB contains operational access to the local usdb-indexer service.
-	USDB USDBConfig `toml:",omitempty"`
+	// USDBIndexer contains operational access to the local usdb-indexer service.
+	USDBIndexer USDBIndexerConfig `toml:",omitempty"`
 }
 
-// USDBConfig contains operational settings for historical USDB profile resolution.
+// USDBIndexerConfig contains operational settings for historical USDB profile resolution.
 // The chain config is the only source of consensus activation.
-type USDBConfig struct {
+type USDBIndexerConfig struct {
 	// RPCURL points to the local usdb-indexer JSON-RPC endpoint used by validators.
 	RPCURL string `toml:",omitempty"`
-	// QueryTimeout bounds one historical profile replay against the local USDB service.
+	// QueryTimeout bounds one historical profile replay against local usdb-indexer.
 	QueryTimeout time.Duration `toml:",omitempty"`
 }
 
@@ -493,7 +493,7 @@ func New(config Config, notify []string, noverify bool) *Ethash {
 }
 
 // NewWithChainConfig creates a full sized Ethash engine and initializes the
-// USDB companion verifier only when the chain config activates USDB consensus.
+// usdb-indexer verifier only when the chain config activates USDB consensus.
 func NewWithChainConfig(config Config, chainConfig *params.ChainConfig, notify []string, noverify bool) *Ethash {
 	if config.Log == nil {
 		config.Log = log.Root()
@@ -516,7 +516,10 @@ func NewWithChainConfig(config Config, chainConfig *params.ChainConfig, notify [
 		hashrate: metrics.NewMeterForced(),
 	}
 	if chainConfig.HasUSDBConsensus() {
-		verifier, err := usdb.NewRPCVerifier(config.USDB.RPCURL, config.USDB.QueryTimeout)
+		verifier, err := usdb.NewRPCVerifier(
+			config.USDBIndexer.RPCURL,
+			config.USDBIndexer.QueryTimeout,
+		)
 		if err != nil {
 			ethash.usdbProfileResolverErr = fmt.Errorf("failed to initialize usdb profile resolver: %w", err)
 			config.Log.Error("Failed to initialize USDB profile resolver", "err", err)

@@ -15,8 +15,8 @@ The goal is to make three boundaries explicit:
 This document is intentionally separate from:
 
 - `usdb-chain-bootstrap-notes.md`
-- `usdb-ethw-reward-integration.md`
-- `usdb-ethw-fee-split-integration.md`
+- `usdb-reward-integration.md`
+- `usdb-fee-split-integration.md`
 
 because it focuses on **EVM capability and contract compatibility**, not reward, fee split, or chain cold-start flow.
 

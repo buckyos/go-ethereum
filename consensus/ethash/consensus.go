@@ -722,7 +722,7 @@ func applyUSDBDifficultyPolicy(policy *params.USDBConsensusVersions, baseDifficu
 // setting the final state on the header
 func (ethash *Ethash) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header) {
 	// Finalize cannot return an error through the consensus.Engine interface.
-	// When USDB-backed reward resolution fails during block import, keep the state
+	// When usdb-indexer-backed reward resolution fails during block import, keep the state
 	// unchanged apart from recomputing the root. The imported block header still
 	// carries the rewarded state root from the producer side, so the caller will
 	// reject the block later via state-root mismatch instead of silently accepting it.

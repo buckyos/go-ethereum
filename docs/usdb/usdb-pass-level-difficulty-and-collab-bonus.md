@@ -14,7 +14,7 @@ quote/candidate factor 等待 UIP-0014。
 当前已经落地的 `v1` 方向是：
 
 - 主矿工证 `pass` 的历史 `energy / level`
-- 只影响 ETHW 侧矿工主奖励
+- 只影响 USDB chain 侧矿工主奖励
 - 通过 `header.Extra` 中的 `RewardPayloadV1` 绑定到历史 USDB 状态
 
 目前正在讨论的增强方向是：
@@ -22,7 +22,7 @@ quote/candidate factor 等待 UIP-0014。
 1. 主 `pass level` 不再影响出块奖励，而是影响 miner 出块难度
    - `level` 越高，目标难度越低
    - 下降方向应从 `1.0` 向下递减，而不是从大于 `1.0` 的放大系数开始
-2. 协作者 `eth_collab` 不参与难度，而是为出块奖励提供额外加法增益
+2. collab pass 不直接进入候选集，而是通过其 Leader 的聚合贡献影响后续链上 policy
    - 主矿工奖励仍由主 `pass` 决定
    - 协作者等级带来一笔额外 bonus
 
@@ -102,15 +102,9 @@ quote/candidate factor 等待 UIP-0014。
 
 ## 3.2 协作者奖励也可行，但前提更多
 
-当前 USDB 协议中：
-
-- `eth_collab` 只是一个可选协作者 ETH 地址
-- 不是协作者 `pass_id`
-- 也不是“协作者 pass 列表”
-
-所以如果协作者 bonus 真的要依赖协作者自己的 `energy / level`，当前还缺一层能力：
-
-- 在历史高度 `H`，根据 `eth_collab` 地址解析它对应的有效协作者矿工证
+当前 USDB 协议中，collab pass 通过 `leader_pass_id` 或 `leader_btc_addr` 指向
+standard Leader；它自身不是候选 pass。若未来 bonus 依赖协作集合，必须从同一历史
+`external_state` 的 `collab_breakdown` 解析，不能依赖 EVM 地址反查。
 
 也就是说，协作者 bonus 不是直接拿现有接口就能完全闭环的。
 
@@ -142,8 +136,8 @@ quote/candidate factor 等待 UIP-0014。
 
 这要求以下两种方案之一成立：
 
-1. USDB 提供“按历史高度通过 `eth_collab` 地址解析协作者 active pass”的一等 RPC
-2. ETHW payload 显式携带 `collab_pass_id`
+1. BTC-side USDB state view 提供同一历史高度下可冻结、可分页重放的 `collab_breakdown`
+2. USDB chain payload 继续只选择 standard pass，由 validator 从 historical profile 派生协作集合
 
 如果做不到其中之一，协作者 bonus 就不适合进入共识。
 
@@ -209,7 +203,7 @@ Ethash 下 `Difficulty` 还参与：
 
 ## 5.4 协作者可能出现“一人多协作”放大问题
 
-当前 `eth_collab` 是地址，不是唯一绑定关系。
+当前 collab 关系由 pass 的 Leader reference 唯一解释，但多个 collab pass 可以指向同一 Leader。
 
 如果没有额外限制，可能出现：
 
@@ -226,14 +220,8 @@ Ethash 下 `Difficulty` 还参与：
 
 ## 5.5 协作者解析路径当前不够明确
 
-由于当前模型只有：
-
-- `eth_main`
-- `eth_collab`
-
-而没有：
-
-- `collab_pass_id`
+当前模型由 standard pass 的 `usdb_main` 和 collab pass 的
+`leader_pass_id` / `leader_btc_addr` 组成；不再存在单独的 EVM 协作者地址字段。
 
 所以协作者 bonus 真正进入共识之前，需要先定清楚：
 
@@ -296,10 +284,10 @@ Ethash 下 `Difficulty` 还参与：
 1. 协作者的历史 `pass / level` 如何确定
 2. 协作者 bonus 是发给：
    - `coinbase`
-   - 还是 `eth_collab`
+   - 还是由后续协议定义的协作者 USDB-chain account address
 3. 一个协作者是否允许同时协作多个 miner
 
-在这些问题未确定前，不建议让 `eth_collab` 进入共识路径。
+在这些问题未确定前，不建议让协作者收款地址进入共识路径。
 
 ## 7. 协作者 bonus 的实现建议
 
@@ -316,7 +304,7 @@ Ethash 下 `Difficulty` 还参与：
 
 如果未来再做“协作者链上直接分润”，可以另开一个版本。
 
-## 8. 对 payload / USDB RPC 的建议
+## 8. 对 payload / usdb-indexer RPC 的建议
 
 如果协作者进入共识，建议优先考虑以下两个方向：
 
@@ -324,12 +312,12 @@ Ethash 下 `Difficulty` 还参与：
 
 例如提供一类接口：
 
-- `get_active_pass_by_eth_main_at_height`
+- `get_active_pass_by_usdb_main_at_height`
 - 或更高层的 `get_effective_mining_profile_at_height`
 
 优点：
 
-- ETHW payload 仍可保持较小
+- USDB chain payload 仍可保持较小
 
 缺点：
 
@@ -350,7 +338,7 @@ Ethash 下 `Difficulty` 还参与：
 缺点：
 
 - payload 会变大
-- 需要额外校验 `collab_pass_id` 与主 `pass` 中的 `eth_collab` 的一致性
+- 需要额外校验 collab pass、resolved Leader 与 historical breakdown 的一致性
 
 从共识可验证性角度，我更倾向这个方向。
 

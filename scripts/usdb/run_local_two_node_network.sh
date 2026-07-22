@@ -16,7 +16,7 @@ NODE1_HTTP_ADDR=${NODE1_HTTP_ADDR:-127.0.0.1}
 NODE1_HTTP_PORT=${NODE1_HTTP_PORT:-18545}
 NODE1_P2P_PORT=${NODE1_P2P_PORT:-31303}
 NODE1_AUTHRPC_PORT=${NODE1_AUTHRPC_PORT:-18551}
-NODE1_MINER_ETHERBASE=${NODE1_MINER_ETHERBASE:-0x0000000000000000000000000000000000001003}
+NODE1_USDB_CHAIN_MINER_ADDRESS=${NODE1_USDB_CHAIN_MINER_ADDRESS:-0x0000000000000000000000000000000000001003}
 NODE1_LOG=${NODE1_LOG:-"$WORK_DIR/node1.log"}
 
 NODE2_DATADIR=${NODE2_DATADIR:-"$WORK_DIR/node2"}
@@ -150,7 +150,7 @@ echo "Starting node 1 (mining)"
     --nodiscover \
     --mine \
     --miner.threads 1 \
-    --miner.etherbase "$NODE1_MINER_ETHERBASE"
+    --miner.etherbase "$NODE1_USDB_CHAIN_MINER_ADDRESS"
 ) >"$NODE1_LOG" 2>&1 &
 NODE1_PID=$!
 
@@ -206,6 +206,7 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
     cd "$SOURCE_DAO_DIR"
     source "$HOME/.nvm/nvm.sh"
     nvm use 24 >/dev/null
+    # SourceDAO owns this external env key; its value is the USDB-chain RPC endpoint.
     SOURCE_DAO_USDB_CONFIG="$USDB_CONFIG" \
     SOURCE_DAO_USDB_RPC_URL="$NODE1_RPC" \
     npm run test:usdb:smoke

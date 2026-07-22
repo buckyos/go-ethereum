@@ -301,10 +301,10 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 			worker.usdbPayloadBuilderErr = errors.New("usdb selected pass is not configured")
 		} else {
 			builder, err := usdb.NewRPCPayloadBuilder(
-				config.USDB.RPCURL,
+				config.USDB.IndexerRPCURL,
 				config.USDB.PassID,
 				chainConfig,
-				config.USDB.QueryTimeout,
+				config.USDB.IndexerQueryTimeout,
 			)
 			if err != nil {
 				worker.usdbPayloadBuilderErr = fmt.Errorf("failed to initialize usdb payload builder: %w", err)

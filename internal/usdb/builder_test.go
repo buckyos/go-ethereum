@@ -22,11 +22,7 @@ func testBuilderChainConfig(payloadVersion byte, difficultyPolicyVersion uint16)
 func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	client := &stubProfileClient{
-		system: &SystemStateInfo{
-			LocalSyncedBlockHeight: 123,
-			UpstreamSnapshotID:     selector.SnapshotIDHex(),
-			SystemStateID:          selector.SystemStateIDHex(),
-		},
+		system:  newTestSystemStateInfo(t, selector),
 		profile: newTestProfileView(t, selector, "1000000", "500000"),
 	}
 	builder, err := NewPayloadBuilder(client, selector.PassID.String(), testBuilderChainConfig(ProfileSelectorPayloadVersionV1, 7), 0)
@@ -65,11 +61,7 @@ func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	client := &stubProfileClient{
-		system: &SystemStateInfo{
-			LocalSyncedBlockHeight: selector.BTCHeight,
-			UpstreamSnapshotID:     selector.SnapshotIDHex(),
-			SystemStateID:          selector.SystemStateIDHex(),
-		},
+		system:  newTestSystemStateInfo(t, selector),
 		profile: newTestProfileView(t, selector, "0", "0"),
 	}
 	config := &params.ChainConfig{USDB: &params.USDBConsensusConfig{
@@ -119,11 +111,7 @@ func TestPayloadBuilderRejectsNonCandidateConfiguredPass(t *testing.T) {
 			profile.Pass.State = test.state
 			profile.Pass.PassKind = test.kind
 			client := &stubProfileClient{
-				system: &SystemStateInfo{
-					LocalSyncedBlockHeight: selector.BTCHeight,
-					UpstreamSnapshotID:     selector.SnapshotIDHex(),
-					SystemStateID:          selector.SystemStateIDHex(),
-				},
+				system:  newTestSystemStateInfo(t, selector),
 				profile: profile,
 			}
 			builder, err := NewPayloadBuilder(client, selector.PassID.String(), testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0)
@@ -172,11 +160,7 @@ func TestPayloadBuilderRejectsUnavailableCurrentStateAndProfile(t *testing.T) {
 		client *stubProfileClient
 	}{
 		{name: "missing current state", client: &stubProfileClient{}},
-		{name: "missing profile", client: &stubProfileClient{system: &SystemStateInfo{
-			LocalSyncedBlockHeight: selector.BTCHeight,
-			UpstreamSnapshotID:     selector.SnapshotIDHex(),
-			SystemStateID:          selector.SystemStateIDHex(),
-		}}},
+		{name: "missing profile", client: &stubProfileClient{system: newTestSystemStateInfo(t, selector)}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -188,5 +172,31 @@ func TestPayloadBuilderRejectsUnavailableCurrentStateAndProfile(t *testing.T) {
 				t.Fatal("expected unavailable current profile state to stop payload generation")
 			}
 		})
+	}
+}
+
+func TestPayloadBuilderRejectsInvalidOrChangingActivationIdentity(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	config := testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1)
+
+	invalidState := newTestSystemStateInfo(t, selector)
+	invalidState.ActiveVersionSetID = repeatHex("88", 32)
+	client := &stubProfileClient{
+		system:  invalidState,
+		profile: newTestProfileView(t, selector, "0", "0"),
+	}
+	builder, err := NewPayloadBuilder(client, selector.PassID.String(), config, 0)
+	if err != nil {
+		t.Fatalf("failed to construct builder: %v", err)
+	}
+	if _, err := builder.BuildCurrentPayload(context.Background(), 42); err == nil {
+		t.Fatal("expected invalid current activation identity to stop payload generation")
+	}
+
+	client.system = newTestSystemStateInfo(t, selector)
+	client.profile = newTestProfileView(t, selector, "0", "0")
+	client.profile.ExternalState.ActivationRegistryID = repeatHex("99", 32)
+	if _, err := builder.BuildCurrentPayload(context.Background(), 42); err == nil {
+		t.Fatal("expected activation identity drift to stop payload generation")
 	}
 }

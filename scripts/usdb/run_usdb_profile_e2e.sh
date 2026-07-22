@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
 
-E2E_WORK_DIR=${WORK_DIR:-/tmp/usdb-ethw-reward-e2e}
-ETHW_WORK_DIR=${ETHW_WORK_DIR:-"$E2E_WORK_DIR/geth"}
-DATADIR=${DATADIR:-"$ETHW_WORK_DIR/datadir"}
-GENESIS_JSON=${GENESIS_JSON:-"$ETHW_WORK_DIR/usdb-genesis.json"}
-GETH_LOG_FILE=${GETH_LOG_FILE:-"$ETHW_WORK_DIR/geth.log"}
+E2E_WORK_DIR=${WORK_DIR:-/tmp/usdb-profile-e2e}
+USDB_CHAIN_WORK_DIR=${USDB_CHAIN_WORK_DIR:-"$E2E_WORK_DIR/geth"}
+DATADIR=${DATADIR:-"$USDB_CHAIN_WORK_DIR/datadir"}
+GENESIS_JSON=${GENESIS_JSON:-"$USDB_CHAIN_WORK_DIR/usdb-genesis.json"}
+GETH_LOG_FILE=${GETH_LOG_FILE:-"$USDB_CHAIN_WORK_DIR/geth.log"}
 
 HTTP_ADDR=${HTTP_ADDR:-127.0.0.1}
 HTTP_PORT=${HTTP_PORT:-19545}
@@ -21,8 +21,8 @@ BLOCK_WAIT_SECONDS=${BLOCK_WAIT_SECONDS:-180}
 ENERGY_TOPUP_AMOUNT_BTC=${ENERGY_TOPUP_AMOUNT_BTC:-1.0}
 ENERGY_GROWTH_BLOCKS=${ENERGY_GROWTH_BLOCKS:-2}
 
-MINER_ETHERBASE=${MINER_ETHERBASE:-0x1111111111111111111111111111111111111111}
-MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$MINER_ETHERBASE}
+USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x1111111111111111111111111111111111111111}
+MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$USDB_CHAIN_MINER_ADDRESS}
 
 export REPO_ROOT="${USDB_REPO_DIR}"
 export WORK_DIR="${E2E_WORK_DIR}/usdb"
@@ -33,11 +33,11 @@ export USDB_INDEXER_ROOT="${USDB_INDEXER_ROOT:-$WORK_DIR/usdb-indexer}"
 export BTC_RPC_PORT="${BTC_RPC_PORT:-39932}"
 export BTC_P2P_PORT="${BTC_P2P_PORT:-39933}"
 export BH_RPC_PORT="${BH_RPC_PORT:-39910}"
-export USDB_RPC_PORT="${USDB_RPC_PORT:-39920}"
+export USDB_INDEXER_RPC_PORT="${USDB_INDEXER_RPC_PORT:-39920}"
 export ORD_RPC_PORT="${ORD_RPC_PORT:-39930}"
-export WALLET_NAME="${WALLET_NAME:-usdbethwreward}"
-export ORD_WALLET_NAME="${ORD_WALLET_NAME:-ord-usdb-ethw-reward-a}"
-export ORD_WALLET_NAME_B="${ORD_WALLET_NAME_B:-ord-usdb-ethw-reward-b}"
+export WALLET_NAME="${WALLET_NAME:-usdbprofile}"
+export ORD_WALLET_NAME="${ORD_WALLET_NAME:-ord-usdb-profile-a}"
+export ORD_WALLET_NAME_B="${ORD_WALLET_NAME_B:-ord-usdb-profile-b}"
 export PREMINE_BLOCKS="${PREMINE_BLOCKS:-130}"
 export FUND_CONFIRM_BLOCKS="${FUND_CONFIRM_BLOCKS:-2}"
 export INSCRIBE_CONFIRM_BLOCKS="${INSCRIBE_CONFIRM_BLOCKS:-2}"
@@ -45,7 +45,7 @@ export SYNC_TIMEOUT_SEC="${SYNC_TIMEOUT_SEC:-300}"
 export BALANCE_HISTORY_LOG_FILE="${BALANCE_HISTORY_LOG_FILE:-$WORK_DIR/balance-history.log}"
 export USDB_INDEXER_LOG_FILE="${USDB_INDEXER_LOG_FILE:-$WORK_DIR/usdb-indexer.log}"
 export ORD_SERVER_LOG_FILE="${ORD_SERVER_LOG_FILE:-$WORK_DIR/ord-server.log}"
-export REGTEST_LOG_PREFIX="[usdb-ethw-reward-e2e/usdb]"
+export REGTEST_LOG_PREFIX="[usdb-profile-e2e/usdb]"
 
 GETH_BIN=${GETH_BIN:-}
 GETH_GO=${GETH_GO:-/usr/local/go/bin/go}
@@ -66,11 +66,11 @@ run_geth() {
   )
 }
 
-ethw_log() {
-  echo "[usdb-ethw-reward-e2e/geth] $*"
+usdb_chain_log() {
+  echo "[usdb-profile-e2e/geth] $*"
 }
 
-eth_rpc_call() {
+usdb_chain_rpc_call() {
   local method="$1"
   local params="${2:-[]}"
   curl -s --connect-timeout 2 --max-time 8 \
@@ -79,28 +79,28 @@ eth_rpc_call() {
     --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"${method}\",\"params\":${params}}"
 }
 
-eth_wait_rpc_ready() {
+usdb_chain_wait_rpc_ready() {
   local expected_chain_id
   expected_chain_id="$(printf '0x%x' "$NETWORK_ID")"
   local deadline=$((SECONDS + RPC_WAIT_SECONDS))
   while (( SECONDS < deadline )); do
     local response
-    response="$(eth_rpc_call "eth_chainId" "[]" || true)"
+    response="$(usdb_chain_rpc_call "eth_chainId" "[]" || true)"
     if [[ "$response" == *"\"result\":\"${expected_chain_id}\""* ]]; then
       return 0
     fi
     sleep 1
   done
-  echo "Timed out waiting for ETHW RPC at http://${HTTP_ADDR}:${HTTP_PORT}" >&2
+  echo "Timed out waiting for USDB-chain RPC at http://${HTTP_ADDR}:${HTTP_PORT}" >&2
   return 1
 }
 
-eth_wait_block_height() {
+usdb_chain_wait_block_height() {
   local target_height="$1"
   local deadline=$((SECONDS + BLOCK_WAIT_SECONDS))
   while (( SECONDS < deadline )); do
     local response block_hex current_height
-    response="$(eth_rpc_call "eth_blockNumber" "[]" || true)"
+    response="$(usdb_chain_rpc_call "eth_blockNumber" "[]" || true)"
     block_hex="$(printf '%s' "$response" | python3 -c 'import json,sys; payload=json.load(sys.stdin); print(payload.get("result") or "0x0")' 2>/dev/null || echo 0x0)"
     current_height=$((block_hex))
     if (( current_height >= target_height )); then
@@ -109,18 +109,18 @@ eth_wait_block_height() {
     fi
     sleep 0.2
   done
-  echo "Timed out waiting for ETHW block height >= ${target_height}" >&2
+  echo "Timed out waiting for USDB block height >= ${target_height}" >&2
   return 1
 }
 
-eth_stop_mining() {
-  eth_rpc_call "miner_stop" "[]" >/dev/null || true
+usdb_chain_stop_mining() {
+  usdb_chain_rpc_call "miner_stop" "[]" >/dev/null || true
 }
 
-eth_stop_residual_nodes() {
+usdb_chain_stop_residual_nodes() {
   while IFS= read -r pid; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-      ethw_log "Stopping residual geth process pid=${pid} for datadir=${DATADIR}, http_port=${HTTP_PORT}"
+      usdb_chain_log "Stopping residual geth process pid=${pid} for datadir=${DATADIR}, http_port=${HTTP_PORT}"
       regtest_stop_process "$pid"
     fi
   done < <(
@@ -134,9 +134,9 @@ eth_stop_residual_nodes() {
 
 eth_print_failure_diagnostics() {
   if [[ -f "$GETH_LOG_FILE" ]]; then
-    ethw_log "---- geth log (tail -n 120) ----"
+    usdb_chain_log "---- geth log (tail -n 120) ----"
     tail -n 120 "$GETH_LOG_FILE" || true
-    ethw_log "---- end geth log ----"
+    usdb_chain_log "---- end geth log ----"
   fi
 }
 
@@ -146,7 +146,7 @@ cleanup() {
   if [[ -n "${GETH_PID:-}" ]] && kill -0 "$GETH_PID" 2>/dev/null; then
     regtest_stop_process "$GETH_PID"
   fi
-  eth_stop_residual_nodes
+  usdb_chain_stop_residual_nodes
   if [[ "$exit_code" -ne 0 ]]; then
     eth_print_failure_diagnostics
   fi
@@ -159,12 +159,12 @@ verify_profile_blocks() {
   local balance_hex="$3"
   local expected_pass_id="$4"
 
-  python3 "$ROOT_DIR/scripts/usdb/verify_usdb_ethw_profile_e2e.py" \
+  python3 "$ROOT_DIR/scripts/usdb/verify_usdb_profile_e2e.py" \
     --blocks "$blocks_file" \
     --coinbase "$coinbase" \
     --balance-hex "$balance_hex" \
-    --eth-rpc-url "http://${HTTP_ADDR}:${HTTP_PORT}" \
-    --usdb-rpc-url "http://127.0.0.1:${USDB_RPC_PORT}" \
+    --usdb-chain-rpc-url "http://${HTTP_ADDR}:${HTTP_PORT}" \
+    --usdb-indexer-rpc-url "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
     --expected-pass-id "$expected_pass_id"
 }
 
@@ -182,8 +182,8 @@ main() {
   fi
 
   regtest_ensure_workspace_dirs
-  mkdir -p "$ETHW_WORK_DIR"
-  eth_stop_residual_nodes
+  mkdir -p "$USDB_CHAIN_WORK_DIR"
+  usdb_chain_stop_residual_nodes
   rm -rf "$DATADIR"
   mkdir -p "$DATADIR"
 
@@ -207,7 +207,7 @@ main() {
   regtest_mine_blocks "$FUND_CONFIRM_BLOCKS" "$miner_btc_address"
   regtest_wait_until_ord_server_synced_to_bitcoind
 
-  mint_content_file="$WORK_DIR/usdb_ethw_reward_mint.json"
+  mint_content_file="$WORK_DIR/usdb_profile_mint.json"
   cat >"$mint_content_file" <<EOF
 {"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
 EOF
@@ -240,7 +240,7 @@ EOF
 
   # Fresh ord mint flows may leave the owner at a zero-energy floor at the mint
   # height. Fund the same address once more and mine a few growth blocks so the
-  # first ETHW smoke gets a best-effort retry toward a positive level so the
+  # first USDB-chain smoke gets a best-effort retry toward a positive level so the
   # real-difficulty path exercises a non-default factor when possible.
   if [[ "$current_energy" == "0" ]]; then
     regtest_log "Current pass energy is zero; funding owner address ${ord_receive_address} with ${ENERGY_TOPUP_AMOUNT_BTC} BTC"
@@ -263,19 +263,19 @@ EOF
     current_energy="$(regtest_json_expr "$pass_profile_resp" "(data.get('result') or {}).get('pass', {}).get('raw_energy')")"
   fi
   if [[ "$current_energy" == "0" ]]; then
-    ethw_log "Pass energy is still zero after retry; proceeding with difficulty factor 10000"
+    usdb_chain_log "Pass energy is still zero after retry; proceeding with difficulty factor 10000"
   fi
 
-  ethw_log "Using pass_id=${pass_id}"
-  ethw_log "Current USDB system state: ${system_state_resp}"
-  ethw_log "Current pass economic profile: ${pass_profile_resp}"
+  usdb_chain_log "Using pass_id=${pass_id}"
+  usdb_chain_log "Current USDB system state: ${system_state_resp}"
+  usdb_chain_log "Current pass economic profile: ${pass_profile_resp}"
 
-  ethw_log "Generating canonical USDB genesis"
+  usdb_chain_log "Generating canonical USDB genesis"
   run_geth dumpgenesis --usdb >"$GENESIS_JSON"
-  ethw_log "Initializing ETHW datadir ${DATADIR}"
+  usdb_chain_log "Initializing USDB-chain datadir ${DATADIR}"
   run_geth init --datadir "$DATADIR" "$GENESIS_JSON" >/dev/null
 
-  ethw_log "Starting ETHW node with USDB reward integration"
+  usdb_chain_log "Starting USDB-chain node with USDB profile/difficulty integration"
   (
     cd "$ROOT_DIR"
     exec "${GETH_CMD[@]}" \
@@ -292,24 +292,24 @@ EOF
       --maxpeers 0 \
       --mine \
       --miner.threads 1 \
-      --miner.etherbase "$MINER_ETHERBASE" \
-      --miner.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}" \
+      --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
+      --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
       --miner.usdb.passid "$pass_id" \
-      --ethash.usdb.rpcurl "http://127.0.0.1:${USDB_RPC_PORT}"
+      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
   ) >"$GETH_LOG_FILE" 2>&1 &
   GETH_PID=$!
 
-  eth_wait_rpc_ready
-  final_block_height="$(eth_wait_block_height "$TARGET_BLOCKS")"
-  ethw_log "ETHW reached block height ${final_block_height}; stopping mining for deterministic verification"
-  eth_stop_mining
+  usdb_chain_wait_rpc_ready
+  final_block_height="$(usdb_chain_wait_block_height "$TARGET_BLOCKS")"
+  usdb_chain_log "USDB chain reached block height ${final_block_height}; stopping mining for deterministic verification"
+  usdb_chain_stop_mining
   sleep 2
 
-  final_block_height="$(printf '%s' "$(eth_rpc_call "eth_blockNumber" "[]")" | python3 -c 'import json,sys; print(int((json.load(sys.stdin).get("result") or "0x0"), 16))')"
-  balance_resp="$(eth_rpc_call "eth_getBalance" "[\"${MINER_ETHERBASE}\",\"latest\"]")"
+  final_block_height="$(printf '%s' "$(usdb_chain_rpc_call "eth_blockNumber" "[]")" | python3 -c 'import json,sys; print(int((json.load(sys.stdin).get("result") or "0x0"), 16))')"
+  balance_resp="$(usdb_chain_rpc_call "eth_getBalance" "[\"${USDB_CHAIN_MINER_ADDRESS}\",\"latest\"]")"
   latest_balance_hex="$(printf '%s' "$balance_resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result") or "0x0")')"
 
-  blocks_file="$ETHW_WORK_DIR/mined_blocks.json"
+  blocks_file="$USDB_CHAIN_WORK_DIR/mined_blocks.json"
   python3 - "$final_block_height" "$blocks_file" "$HTTP_ADDR" "$HTTP_PORT" <<'PY'
 import json
 import sys
@@ -344,11 +344,11 @@ with open(output_path, "w", encoding="utf-8") as f:
     json.dump(blocks, f, indent=2)
 PY
 
-  ethw_log "Verifying payloads and reward totals across ${final_block_height} mined blocks"
-  verify_profile_blocks "$blocks_file" "$MINER_ETHERBASE" "$latest_balance_hex" "$pass_id"
+  usdb_chain_log "Verifying payloads and reward totals across ${final_block_height} mined blocks"
+  verify_profile_blocks "$blocks_file" "$USDB_CHAIN_MINER_ADDRESS" "$latest_balance_hex" "$pass_id"
 
-  ethw_log "USDB + ETHW reward E2E succeeded."
-  ethw_log "pass_id=${pass_id}, coinbase=${MINER_ETHERBASE}, blocks=${final_block_height}, balance=${latest_balance_hex}"
+  usdb_chain_log "USDB-chain profile/difficulty E2E succeeded."
+  usdb_chain_log "pass_id=${pass_id}, coinbase=${USDB_CHAIN_MINER_ADDRESS}, blocks=${final_block_height}, balance=${latest_balance_hex}"
 }
 
 main "$@"
