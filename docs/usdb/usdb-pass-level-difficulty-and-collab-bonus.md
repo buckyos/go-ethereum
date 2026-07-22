@@ -4,6 +4,11 @@
 > 当前 `ProfileSelectorPayload`、effective energy、level/factor 和版本激活语义以对应 UIP
 > 与现行实现为准，文中的 `RewardPayloadV1` 和旧 collab 字段不再是有效接口。
 
+当前实现状态：UIP-0005 level/factor 已由 USDB profile 返回，UIP-0007 selector
+携带其历史状态引用，UIP-0008/UIP-0009 activation registry 决定预期版本。实际
+difficulty 已消费该 profile；reward multiplier mock 已删除，奖励公式等待 UIP-0011，
+quote/candidate factor 等待 UIP-0014。
+
 ## 1. 背景
 
 当前已经落地的 `v1` 方向是：

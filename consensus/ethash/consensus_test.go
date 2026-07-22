@@ -17,6 +17,7 @@
 package ethash
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -25,6 +26,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -277,32 +279,38 @@ func BenchmarkDifficultyCalculator(b *testing.B) {
 
 type stubChainHeaderReader struct {
 	config *params.ChainConfig
+	header *types.Header
 }
 
-func (s *stubChainHeaderReader) Config() *params.ChainConfig                 { return s.config }
-func (s *stubChainHeaderReader) CurrentHeader() *types.Header                { return nil }
-func (s *stubChainHeaderReader) GetHeader(common.Hash, uint64) *types.Header { return nil }
-func (s *stubChainHeaderReader) GetHeaderByNumber(uint64) *types.Header      { return nil }
-func (s *stubChainHeaderReader) GetHeaderByHash(common.Hash) *types.Header   { return nil }
-func (s *stubChainHeaderReader) GetTd(common.Hash, uint64) *big.Int          { return nil }
+func (s *stubChainHeaderReader) Config() *params.ChainConfig  { return s.config }
+func (s *stubChainHeaderReader) CurrentHeader() *types.Header { return nil }
+func (s *stubChainHeaderReader) GetHeader(hash common.Hash, number uint64) *types.Header {
+	if s.header != nil && s.header.Hash() == hash && s.header.Number.Uint64() == number {
+		return s.header
+	}
+	return nil
+}
+func (s *stubChainHeaderReader) GetHeaderByNumber(uint64) *types.Header    { return nil }
+func (s *stubChainHeaderReader) GetHeaderByHash(common.Hash) *types.Header { return nil }
+func (s *stubChainHeaderReader) GetTd(common.Hash, uint64) *big.Int        { return nil }
 
-type stubRewardVerifier struct {
-	resolved    *usdb.ResolvedReward
-	err         error
-	lastExtra   []byte
-	lastBlockNo uint64
+type stubProfileResolver struct {
+	resolved  *usdb.ResolvedConsensusProfile
+	err       error
+	lastExtra []byte
+	calls     int
 }
 
-func (s *stubRewardVerifier) ResolveReward(_ context.Context, headerExtra []byte, blockNumber uint64) (*usdb.ResolvedReward, error) {
+func (s *stubProfileResolver) ResolveProfile(_ context.Context, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error) {
 	s.lastExtra = append([]byte(nil), headerExtra...)
-	s.lastBlockNo = blockNumber
+	s.calls++
 	if s.err != nil {
 		return nil, s.err
 	}
 	return s.resolved, nil
 }
 
-func (s *stubRewardVerifier) Close() {}
+func (s *stubProfileResolver) Close() {}
 
 func newTestStateDB(t *testing.T) *state.StateDB {
 	t.Helper()
@@ -338,13 +346,17 @@ func newTestUSDBChainConfig() *params.ChainConfig {
 	return &params.ChainConfig{
 		HomesteadBlock: big.NewInt(0),
 		USDB: &params.USDBConsensusConfig{
-			PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
-			DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+			Activations: []params.USDBConsensusActivation{{
+				Versions: params.USDBConsensusVersions{
+					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+					DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+				},
+			}},
 		},
 	}
 }
 
-func TestVerifyHeaderValidatesUsdbProfileSelectorWithoutRPC(t *testing.T) {
+func TestVerifyHeaderValidatesUsdbProfileSelectorBeforeResolution(t *testing.T) {
 	config := newTestUSDBChainConfig()
 	chain := &stubChainHeaderReader{config: config}
 	parent := &types.Header{
@@ -363,9 +375,13 @@ func TestVerifyHeaderValidatesUsdbProfileSelectorWithoutRPC(t *testing.T) {
 			Extra:      append([]byte(nil), extra...),
 		}
 	}
-	engine := &Ethash{}
+	resolver := &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{DifficultyFactorBps: usdb.BasisPointDenominator}}
+	engine := &Ethash{usdbProfileResolver: resolver}
 	if err := engine.verifyHeader(chain, newHeader(validExtra), parent, false, false, 2_000); err != nil {
 		t.Fatalf("valid selector header rejected: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("valid selector resolved profile %d times, want 1", resolver.calls)
 	}
 
 	tests := []struct {
@@ -382,26 +398,152 @@ func TestVerifyHeaderValidatesUsdbProfileSelectorWithoutRPC(t *testing.T) {
 	tests[3].extra[2] = 2
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			calls := resolver.calls
 			if err := engine.verifyHeader(chain, newHeader(test.extra), parent, false, false, 2_000); !errors.Is(err, test.expectedError) {
 				t.Fatalf("expected %v, got %v", test.expectedError, err)
+			}
+			if resolver.calls != calls {
+				t.Fatal("malformed payload reached the profile resolver")
 			}
 		})
 	}
 }
 
-func TestFinalizeAndAssembleUsesUsdbReward(t *testing.T) {
-	coinbase := common.HexToAddress("0x1001")
-	verifier := &stubRewardVerifier{
-		resolved: &usdb.ResolvedReward{
-			BaseReward:  big.NewInt(100),
-			MinerReward: big.NewInt(250),
+func TestVerifyHeaderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
+	config := newTestUSDBChainConfig()
+	config.USDB.Activations = append(config.USDB.Activations, params.USDBConsensusActivation{
+		Block: 2,
+		Versions: params.USDBConsensusVersions{
+			PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+			DifficultyPolicyVersion: 2,
 		},
+	})
+	parent := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+	}
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(2),
+		Time:       1_001,
+		Difficulty: CalcDifficulty(config, 1_001, parent),
+		GasLimit:   parent.GasLimit,
+		Extra:      newTestPayloadBytes(t),
+	}
+	resolver := &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{DifficultyFactorBps: usdb.BasisPointDenominator}}
+	engine := &Ethash{usdbProfileResolver: resolver}
+	err := engine.verifyHeader(&stubChainHeaderReader{config: config}, header, parent, false, false, 2_000)
+	if !errors.Is(err, usdb.ErrDifficultyPolicyVersionMismatch) {
+		t.Fatalf("activation-boundary mismatch returned %v", err)
+	}
+	if resolver.calls != 0 {
+		t.Fatal("version-mismatched payload reached the profile resolver")
+	}
+}
+
+func TestPrepareAndVerifyHeaderApplySameUsdbDifficultyProfile(t *testing.T) {
+	config := newTestUSDBChainConfig()
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+	}
+	chain := &stubChainHeaderReader{config: config, header: parent}
+	resolver := &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{DifficultyFactorBps: 9_900}}
+	engine := &Ethash{
+		config:              Config{Log: log.Root()},
+		usdbProfileResolver: resolver,
+	}
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(1),
+		Time:       1_001,
+		GasLimit:   parent.GasLimit,
+		Extra:      newTestPayloadBytes(t),
+	}
+	baseDifficulty := CalcDifficulty(config, header.Time, parent)
+	wantDifficulty, err := usdb.RealDifficultyV1(baseDifficulty, resolver.resolved.DifficultyFactorBps)
+	if err != nil {
+		t.Fatalf("failed to calculate expected real difficulty: %v", err)
+	}
+	if err := engine.Prepare(chain, header); err != nil {
+		t.Fatalf("failed to prepare USDB header: %v", err)
+	}
+	if header.Difficulty.Cmp(wantDifficulty) != 0 {
+		t.Fatalf("prepared difficulty mismatch: have %s want %s", header.Difficulty, wantDifficulty)
+	}
+	if header.Difficulty.Cmp(baseDifficulty) == 0 {
+		t.Fatal("profile factor did not change the base difficulty")
+	}
+	if err := engine.verifyHeader(chain, header, parent, false, false, 2_000); err != nil {
+		t.Fatalf("prepared header rejected by validator: %v", err)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("miner and validator profile resolution count mismatch: have %d want 2", resolver.calls)
+	}
+
+	header.Difficulty = baseDifficulty
+	if err := engine.verifyHeader(chain, header, parent, false, false, 2_000); err == nil || !strings.Contains(err.Error(), "invalid difficulty") {
+		t.Fatalf("unadjusted base difficulty was not rejected: %v", err)
+	}
+}
+
+func TestPrepareAndVerifyHeaderFailWhenProfileServiceIsUnavailable(t *testing.T) {
+	config := newTestUSDBChainConfig()
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+	}
+	chain := &stubChainHeaderReader{config: config, header: parent}
+	engine := &Ethash{
+		config:              Config{Log: log.Root()},
+		usdbProfileResolver: &stubProfileResolver{err: context.DeadlineExceeded},
+	}
+	newHeader := func() *types.Header {
+		return &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     big.NewInt(1),
+			Time:       1_001,
+			Difficulty: CalcDifficulty(config, 1_001, parent),
+			GasLimit:   parent.GasLimit,
+			Extra:      newTestPayloadBytes(t),
+		}
+	}
+	if err := engine.Prepare(chain, newHeader()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("miner prepare did not fail closed: %v", err)
+	}
+	if err := engine.verifyHeader(chain, newHeader(), parent, false, false, 2_000); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("validator did not fail closed: %v", err)
+	}
+}
+
+func TestApplyUSDBDifficultyPolicyRejectsUnimplementedVersions(t *testing.T) {
+	profile := &usdb.ResolvedConsensusProfile{DifficultyFactorBps: usdb.BasisPointDenominator}
+	for _, policy := range []*params.USDBConsensusVersions{
+		{DifficultyPolicyVersion: 2},
+		{DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1, QuotePolicyVersion: 1},
+	} {
+		if _, err := applyUSDBDifficultyPolicy(policy, big.NewInt(100), profile); err == nil {
+			t.Fatalf("unimplemented policy unexpectedly accepted: %+v", policy)
+		}
+	}
+}
+
+func TestFinalizeAndAssembleValidatesProfileBeforeLegacyReward(t *testing.T) {
+	coinbase := common.HexToAddress("0x1001")
+	resolver := &stubProfileResolver{
+		resolved: &usdb.ResolvedConsensusProfile{DifficultyFactorBps: usdb.BasisPointDenominator},
 	}
 	engine := &Ethash{
 		config: Config{
 			Log: log.Root(),
 		},
-		usdbRewardVerifier: verifier,
+		usdbProfileResolver: resolver,
 	}
 	header := &types.Header{
 		Number:   big.NewInt(1),
@@ -418,11 +560,11 @@ func TestFinalizeAndAssembleUsesUsdbReward(t *testing.T) {
 	if block == nil {
 		t.Fatalf("expected block to be assembled")
 	}
-	if verifier.lastBlockNo != 1 {
-		t.Fatalf("unexpected verifier block number: have %d want 1", verifier.lastBlockNo)
+	if resolver.calls != 1 || !bytes.Equal(resolver.lastExtra, header.Extra) {
+		t.Fatalf("unexpected profile resolution: calls=%d extra=%x", resolver.calls, resolver.lastExtra)
 	}
-	if got := statedb.GetBalance(coinbase); got.Cmp(big.NewInt(250)) != 0 {
-		t.Fatalf("unexpected miner balance: have %s want %s", got, "250")
+	if got := statedb.GetBalance(coinbase); got.Cmp(FrontierBlockReward) != 0 {
+		t.Fatalf("unexpected miner balance: have %s want %s", got, FrontierBlockReward)
 	}
 }
 
@@ -432,7 +574,7 @@ func TestFinalizeAndAssembleReturnsErrorWhenUsdbVerifierFails(t *testing.T) {
 		config: Config{
 			Log: log.Root(),
 		},
-		usdbRewardVerifier: &stubRewardVerifier{err: errInvalidPoW},
+		usdbProfileResolver: &stubProfileResolver{err: errInvalidPoW},
 	}
 	header := &types.Header{
 		Number:   big.NewInt(1),
@@ -454,13 +596,35 @@ func TestFinalizeAndAssembleReturnsErrorWhenUsdbVerifierFails(t *testing.T) {
 	}
 }
 
+func TestFinalizeAndAssembleRejectsUnimplementedRewardActivation(t *testing.T) {
+	coinbase := common.HexToAddress("0x1005")
+	config := newTestUSDBChainConfig()
+	config.USDB.Activations[0].Versions.RewardRuleVersion = 1
+	config.USDB.Activations[0].Versions.CoinbaseEmissionPolicyVersion = 1
+	engine := &Ethash{
+		config:              Config{Log: log.Root()},
+		usdbProfileResolver: &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{}},
+	}
+	header := &types.Header{Number: big.NewInt(1), Coinbase: coinbase, Extra: newTestPayloadBytes(t)}
+	statedb := newTestStateDB(t)
+	chain := &stubChainHeaderReader{config: config}
+
+	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "unsupported usdb reward policies") {
+		t.Fatalf("unimplemented reward activation did not fail closed: block=%v err=%v", block, err)
+	}
+	if got := statedb.GetBalance(coinbase); got.Sign() != 0 {
+		t.Fatalf("unimplemented reward activation changed balance: %s", got)
+	}
+}
+
 func TestFinalizeLeavesStateUnchangedWhenUsdbVerifierFails(t *testing.T) {
 	coinbase := common.HexToAddress("0x1003")
 	engine := &Ethash{
 		config: Config{
 			Log: log.Root(),
 		},
-		usdbRewardVerifier: &stubRewardVerifier{err: errInvalidPoW},
+		usdbProfileResolver: &stubProfileResolver{err: errInvalidPoW},
 	}
 	header := &types.Header{
 		Number:   big.NewInt(1),
@@ -481,10 +645,10 @@ func TestFinalizeLeavesStateUnchangedWhenUsdbVerifierFails(t *testing.T) {
 
 func TestFinalizeUsesLegacyRewardWhenChainConfigDoesNotActivateUsdb(t *testing.T) {
 	coinbase := common.HexToAddress("0x1004")
-	verifier := &stubRewardVerifier{err: errors.New("must not be called")}
+	resolver := &stubProfileResolver{err: errors.New("must not be called")}
 	engine := &Ethash{
-		config:             Config{Log: log.Root()},
-		usdbRewardVerifier: verifier,
+		config:              Config{Log: log.Root()},
+		usdbProfileResolver: resolver,
 	}
 	header := &types.Header{
 		Number:   big.NewInt(1),
@@ -500,8 +664,8 @@ func TestFinalizeUsesLegacyRewardWhenChainConfigDoesNotActivateUsdb(t *testing.T
 	if block == nil {
 		t.Fatal("expected legacy block to be assembled")
 	}
-	if verifier.lastBlockNo != 0 {
-		t.Fatalf("USDB verifier called on inactive chain at block %d", verifier.lastBlockNo)
+	if resolver.calls != 0 {
+		t.Fatalf("USDB resolver called %d times on inactive chain", resolver.calls)
 	}
 	if got := statedb.GetBalance(coinbase); got.Cmp(FrontierBlockReward) != 0 {
 		t.Fatalf("unexpected legacy reward: have %s want %s", got, FrontierBlockReward)

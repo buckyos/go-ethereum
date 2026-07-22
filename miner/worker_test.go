@@ -228,8 +228,12 @@ func (s *stubPayloadBuilder) Close() {}
 func testWorkerUSDBChainConfig() *params.ChainConfig {
 	config := *params.AllEthashProtocolChanges
 	config.USDB = &params.USDBConsensusConfig{
-		PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
-		DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+		Activations: []params.USDBConsensusActivation{{
+			Versions: params.USDBConsensusVersions{
+				PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+				DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+			},
+		}},
 	}
 	return &config
 }
@@ -260,6 +264,32 @@ func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
 	}
 	if builder.blockNumber != 1 {
 		t.Fatalf("builder received block number %d, want 1", builder.blockNumber)
+	}
+}
+
+func TestPrepareWorkBeforeUsdbActivationKeepsStaticExtra(t *testing.T) {
+	config := testWorkerUSDBChainConfig()
+	config.USDB.Activations[0].Block = 10
+	w, _ := newTestWorker(t, config, ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
+	defer w.close()
+
+	builder := &stubPayloadBuilder{payload: bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size)}
+	w.usdbPayloadBuilder = builder
+	w.usdbPayloadBuilderErr = errors.New("must not be observed before activation")
+	w.setExtra([]byte("static-extra"))
+
+	env, err := w.prepareWork(&generateParams{
+		timestamp: uint64(time.Now().Unix()) + 1,
+		coinbase:  testBankAddress,
+	})
+	if err != nil {
+		t.Fatalf("pre-activation work failed: %v", err)
+	}
+	if !bytes.Equal(env.header.Extra, []byte("static-extra")) {
+		t.Fatalf("unexpected pre-activation extra: %x", env.header.Extra)
+	}
+	if builder.blockNumber != 0 {
+		t.Fatalf("pre-activation work called profile builder for block %d", builder.blockNumber)
 	}
 }
 

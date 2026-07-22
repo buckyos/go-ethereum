@@ -153,6 +153,9 @@ func TestUSDBDividendBootstrapIntegration(t *testing.T) {
 		BootstrapAdminBalance: new(big.Int).Mul(big.NewInt(10), big.NewInt(params.Ether)),
 		DividendFeeSplitBlock: big.NewInt(16),
 	})
+	// This fixture exercises only the SourceDAO bootstrap contracts. Consensus
+	// profile resolution is covered by ethash tests with an explicit resolver.
+	genesis.Config.USDB = nil
 	chainID := genesis.Config.EffectiveChainID(big.NewInt(0))
 	auth := newSourceDAOTransactor(t, bootstrapKeyHex, chainID)
 	backend := backends.NewSimulatedBackendWithGenesis(genesis)

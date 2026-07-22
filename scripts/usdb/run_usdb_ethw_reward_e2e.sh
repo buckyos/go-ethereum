@@ -22,7 +22,7 @@ ENERGY_TOPUP_AMOUNT_BTC=${ENERGY_TOPUP_AMOUNT_BTC:-1.0}
 ENERGY_GROWTH_BLOCKS=${ENERGY_GROWTH_BLOCKS:-2}
 
 MINER_ETHERBASE=${MINER_ETHERBASE:-0x1111111111111111111111111111111111111111}
-MINER_PASS_ETH_MAIN=${MINER_PASS_ETH_MAIN:-$MINER_ETHERBASE}
+MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$MINER_ETHERBASE}
 
 export REPO_ROOT="${USDB_REPO_DIR}"
 export WORK_DIR="${E2E_WORK_DIR}/usdb"
@@ -153,136 +153,19 @@ cleanup() {
   regtest_cleanup
 }
 
-verify_reward_sum() {
+verify_profile_blocks() {
   local blocks_file="$1"
   local coinbase="$2"
   local balance_hex="$3"
+  local expected_pass_id="$4"
 
-  python3 - "$blocks_file" "$coinbase" "$balance_hex" "$USDB_RPC_PORT" "$MINER_PASS_ETH_MAIN" <<'PY'
-import json
-import sys
-import urllib.request
-from fractions import Fraction
-
-blocks_path, coinbase, balance_hex, usdb_rpc_port, expected_eth_main = sys.argv[1:6]
-with open(blocks_path, "r", encoding="utf-8") as f:
-    blocks = json.load(f)
-
-BASE_REWARD = 5 * 10**18
-PAYLOAD_SIZE = 105
-MIN_LEVEL = 1
-MAX_LEVEL = 50
-MIN_BPS = 5000
-MAX_BPS = 20000
-LEVEL_BASE = Fraction(1_000_000, 1)
-LEVEL_RATIO = Fraction(118, 100)
-
-def rpc_call(method, params):
-    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{usdb_rpc_port}",
-        data=payload,
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        body = json.loads(resp.read().decode())
-    if body.get("error") is not None:
-        raise SystemExit(f"USDB RPC {method} failed: {body['error']}")
-    return body["result"]
-
-def level_for_energy(energy: int) -> int:
-    if energy == 0:
-        return 0
-    remaining = Fraction(energy, 1)
-    increment = LEVEL_BASE
-    level = 0
-    while remaining >= increment:
-        remaining -= increment
-        level += 1
-        increment *= LEVEL_RATIO
-    return level
-
-def multiplier_bps(level: int) -> int:
-    if level <= MIN_LEVEL:
-        return MIN_BPS
-    if level >= MAX_LEVEL:
-        return MAX_BPS
-    span = MAX_BPS - MIN_BPS
-    offset = level - MIN_LEVEL
-    steps = MAX_LEVEL - MIN_LEVEL
-    return MIN_BPS + (span * offset) // steps
-
-actual_balance = int(balance_hex, 16)
-expected_total = 0
-
-for block in blocks:
-    number = int(block["number"], 16)
-    block_coinbase = (block.get("miner") or block.get("author") or "").lower()
-    if block_coinbase != coinbase.lower():
-        raise SystemExit(f"unexpected block coinbase at height {number}: {block_coinbase} != {coinbase}")
-
-    extra_hex = (block.get("extraData") or "0x")[2:]
-    if len(extra_hex) != PAYLOAD_SIZE * 2:
-        raise SystemExit(f"unexpected extraData size at block {number}: have {len(extra_hex)//2} want {PAYLOAD_SIZE}")
-
-    payload = bytes.fromhex(extra_hex)
-    if payload[0] != 1:
-        raise SystemExit(f"unexpected payload version at block {number}: {payload[0]}")
-
-    btc_height = int.from_bytes(payload[1:5], "big")
-    snapshot_id = payload[5:37].hex()
-    system_state_id = payload[37:69].hex()
-    pass_txid = payload[69:101].hex()
-    pass_index = int.from_bytes(payload[101:105], "big")
-    pass_id = f"{pass_txid}i{pass_index}"
-
-    context = {
-        "requested_height": btc_height,
-        "expected_state": {
-            "snapshot_id": snapshot_id,
-            "system_state_id": system_state_id,
-        },
-    }
-    snapshot = rpc_call("get_pass_snapshot", [{
-        "inscription_id": pass_id,
-        "at_height": btc_height,
-        "context": context,
-    }])
-    if snapshot.get("eth_main", "").lower() != expected_eth_main.lower():
-        raise SystemExit(
-            f"unexpected eth_main at block {number}: {snapshot.get('eth_main')} != {expected_eth_main}"
-        )
-
-    energy_info = rpc_call("get_pass_energy", [{
-        "inscription_id": pass_id,
-        "block_height": btc_height,
-        "mode": "at_or_before",
-        "context": context,
-    }])
-    energy = int(energy_info["energy"])
-    level = level_for_energy(energy)
-    reward = (BASE_REWARD * multiplier_bps(level)) // 10_000
-    expected_total += reward
-    print(
-        json.dumps(
-            {
-                "eth_block": number,
-                "btc_height": btc_height,
-                "pass_id": pass_id,
-                "energy": energy,
-                "level": level,
-                "reward": reward,
-            }
-        )
-    )
-
-if expected_total != actual_balance:
-    raise SystemExit(
-        f"unexpected coinbase balance: have {actual_balance} want {expected_total}"
-    )
-print(json.dumps({"status": "ok", "expected_total": expected_total, "actual_balance": actual_balance}))
-PY
+  python3 "$ROOT_DIR/scripts/usdb/verify_usdb_ethw_profile_e2e.py" \
+    --blocks "$blocks_file" \
+    --coinbase "$coinbase" \
+    --balance-hex "$balance_hex" \
+    --eth-rpc-url "http://${HTTP_ADDR}:${HTTP_PORT}" \
+    --usdb-rpc-url "http://127.0.0.1:${USDB_RPC_PORT}" \
+    --expected-pass-id "$expected_pass_id"
 }
 
 main() {
@@ -308,7 +191,7 @@ main() {
   regtest_ensure_wallet
 
   local miner_btc_address ord_receive_address mint_content_file pass_id current_tip_height
-  local system_state_resp pass_snapshot_resp pass_energy_resp
+  local system_state_resp pass_profile_resp
   local final_block_height balance_resp blocks_file latest_balance_hex current_energy
 
   miner_btc_address="$(regtest_get_new_address)"
@@ -326,7 +209,7 @@ main() {
 
   mint_content_file="$WORK_DIR/usdb_ethw_reward_mint.json"
   cat >"$mint_content_file" <<EOF
-{"p":"usdb","op":"mint","eth_main":"${MINER_PASS_ETH_MAIN}","prev":[]}
+{"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
 EOF
 
   pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$mint_content_file" "$ord_receive_address")"
@@ -348,17 +231,17 @@ EOF
 
   system_state_resp="$(regtest_rpc_call_usdb_indexer "get_system_state_info" "[]")"
   regtest_assert_json_expr "$system_state_resp" "data.get('error') is None" "True"
-  pass_snapshot_resp="$(regtest_rpc_call_usdb_indexer "get_pass_snapshot" "[{\"inscription_id\":\"${pass_id}\"}]")"
-  regtest_assert_json_expr "$pass_snapshot_resp" "data.get('error') is None" "True"
-  regtest_assert_json_expr "$pass_snapshot_resp" "(data.get('result') or {}).get('eth_main')" "$MINER_PASS_ETH_MAIN"
-  pass_energy_resp="$(regtest_rpc_call_usdb_indexer "get_pass_energy" "[{\"inscription_id\":\"${pass_id}\",\"mode\":\"at_or_before\"}]")"
-  regtest_assert_json_expr "$pass_energy_resp" "data.get('error') is None" "True"
-  current_energy="$(regtest_json_expr "$pass_energy_resp" "(data.get('result') or {}).get('energy')")"
+  pass_profile_resp="$(regtest_get_pass_economic_profile_response "$pass_id" "$current_tip_height")"
+  regtest_assert_json_expr "$pass_profile_resp" "data.get('error') is None" "True"
+  regtest_assert_json_expr "$pass_profile_resp" "(data.get('result') or {}).get('pass', {}).get('pass_id')" "$pass_id"
+  regtest_assert_json_expr "$pass_profile_resp" "(data.get('result') or {}).get('pass', {}).get('state')" "active"
+  regtest_assert_json_expr "$pass_profile_resp" "(data.get('result') or {}).get('pass', {}).get('pass_kind')" "standard"
+  current_energy="$(regtest_json_expr "$pass_profile_resp" "(data.get('result') or {}).get('pass', {}).get('raw_energy')")"
 
   # Fresh ord mint flows may leave the owner at a zero-energy floor at the mint
   # height. Fund the same address once more and mine a few growth blocks so the
-  # first ETHW smoke gets a best-effort retry toward a positive reward level
-  # before falling back to the minimum multiplier band.
+  # first ETHW smoke gets a best-effort retry toward a positive level so the
+  # real-difficulty path exercises a non-default factor when possible.
   if [[ "$current_energy" == "0" ]]; then
     regtest_log "Current pass energy is zero; funding owner address ${ord_receive_address} with ${ENERGY_TOPUP_AMOUNT_BTC} BTC"
     regtest_fund_address "$ord_receive_address" "$ENERGY_TOPUP_AMOUNT_BTC"
@@ -375,20 +258,17 @@ EOF
 
     system_state_resp="$(regtest_rpc_call_usdb_indexer "get_system_state_info" "[]")"
     regtest_assert_json_expr "$system_state_resp" "data.get('error') is None" "True"
-    pass_snapshot_resp="$(regtest_rpc_call_usdb_indexer "get_pass_snapshot" "[{\"inscription_id\":\"${pass_id}\"}]")"
-    regtest_assert_json_expr "$pass_snapshot_resp" "data.get('error') is None" "True"
-    pass_energy_resp="$(regtest_rpc_call_usdb_indexer "get_pass_energy" "[{\"inscription_id\":\"${pass_id}\",\"mode\":\"at_or_before\"}]")"
-    regtest_assert_json_expr "$pass_energy_resp" "data.get('error') is None" "True"
-    current_energy="$(regtest_json_expr "$pass_energy_resp" "(data.get('result') or {}).get('energy')")"
+    pass_profile_resp="$(regtest_get_pass_economic_profile_response "$pass_id" "$current_tip_height")"
+    regtest_assert_json_expr "$pass_profile_resp" "data.get('error') is None" "True"
+    current_energy="$(regtest_json_expr "$pass_profile_resp" "(data.get('result') or {}).get('pass', {}).get('raw_energy')")"
   fi
   if [[ "$current_energy" == "0" ]]; then
-    ethw_log "Pass energy is still zero after retry; proceeding with the minimum reward multiplier path"
+    ethw_log "Pass energy is still zero after retry; proceeding with difficulty factor 10000"
   fi
 
   ethw_log "Using pass_id=${pass_id}"
   ethw_log "Current USDB system state: ${system_state_resp}"
-  ethw_log "Current pass snapshot: ${pass_snapshot_resp}"
-  ethw_log "Current pass energy: ${pass_energy_resp}"
+  ethw_log "Current pass economic profile: ${pass_profile_resp}"
 
   ethw_log "Generating canonical USDB genesis"
   run_geth dumpgenesis --usdb >"$GENESIS_JSON"
@@ -465,7 +345,7 @@ with open(output_path, "w", encoding="utf-8") as f:
 PY
 
   ethw_log "Verifying payloads and reward totals across ${final_block_height} mined blocks"
-  verify_reward_sum "$blocks_file" "$MINER_ETHERBASE" "$latest_balance_hex"
+  verify_profile_blocks "$blocks_file" "$MINER_ETHERBASE" "$latest_balance_hex" "$pass_id"
 
   ethw_log "USDB + ETHW reward E2E succeeded."
   ethw_log "pass_id=${pass_id}, coinbase=${MINER_ETHERBASE}, blocks=${final_block_height}, balance=${latest_balance_hex}"

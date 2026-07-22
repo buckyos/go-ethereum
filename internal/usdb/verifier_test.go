@@ -5,6 +5,8 @@ import (
 	"errors"
 	"math/big"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 func TestVerifierResolveProfileValidatesUIP0006View(t *testing.T) {
@@ -34,29 +36,6 @@ func TestVerifierResolveProfileValidatesUIP0006View(t *testing.T) {
 		client.lastQuery.ExpectedState.SnapshotID != selector.SnapshotIDHex() ||
 		client.lastQuery.ExpectedState.SystemStateID != selector.SystemStateIDHex() {
 		t.Fatalf("historical query was not pinned to selector: %+v", client.lastQuery)
-	}
-}
-
-func TestVerifierResolveRewardUsesValidatedProfileLevel(t *testing.T) {
-	selector := newTestSelector(t, 123)
-	client := &stubProfileClient{profile: newTestProfileView(t, selector, "1000000", "0")}
-	verifier, err := NewVerifier(client, 0)
-	if err != nil {
-		t.Fatalf("failed to build verifier: %v", err)
-	}
-
-	resolved, err := verifier.ResolveReward(context.Background(), marshalTestSelector(t, selector), 99)
-	if err != nil {
-		t.Fatalf("failed to resolve reward: %v", err)
-	}
-	if resolved.Profile.Level != 1 {
-		t.Fatalf("unexpected profile level: have %d want 1", resolved.Profile.Level)
-	}
-	if resolved.MultiplierBps != MinimumMultiplierBps {
-		t.Fatalf("unexpected multiplier: have %d want %d", resolved.MultiplierBps, MinimumMultiplierBps)
-	}
-	if resolved.MinerReward.Cmp(RewardForLevel(99, 1)) != 0 {
-		t.Fatalf("unexpected miner reward: have %s want %s", resolved.MinerReward, RewardForLevel(99, 1))
 	}
 }
 
@@ -210,5 +189,97 @@ func TestVerifierResolveProfileAcceptsSaturatedEffectiveEnergy(t *testing.T) {
 	}
 	if resolved.EffectiveEnergy.Cmp(maximumEnergyValue) != 0 || resolved.Level != MaximumLevel {
 		t.Fatalf("unexpected saturated profile: effective=%s level=%d", resolved.EffectiveEnergy, resolved.Level)
+	}
+}
+
+func TestVerifierHistoricalReplayIgnoresCurrentHead(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	client := &stubProfileClient{
+		system:  &SystemStateInfo{LocalSyncedBlockHeight: 500},
+		profile: newTestProfileView(t, selector, "1000000", "500000"),
+	}
+	verifier, err := NewVerifier(client, 0)
+	if err != nil {
+		t.Fatalf("failed to build verifier: %v", err)
+	}
+	encoded := marshalTestSelector(t, selector)
+	first, err := verifier.ResolveProfile(context.Background(), encoded)
+	if err != nil {
+		t.Fatalf("initial historical replay failed: %v", err)
+	}
+	client.system.LocalSyncedBlockHeight = 900
+	second, err := verifier.ResolveProfile(context.Background(), encoded)
+	if err != nil {
+		t.Fatalf("historical replay after head advance failed: %v", err)
+	}
+	if first.Selector != second.Selector || first.EffectiveEnergy.Cmp(second.EffectiveEnergy) != 0 {
+		t.Fatalf("historical replay changed after current head advance: first=%+v second=%+v", first, second)
+	}
+	if client.lastQuery.RequestedHeight != selector.BTCHeight {
+		t.Fatalf("historical replay used current height instead of selector: %+v", client.lastQuery)
+	}
+}
+
+func TestVerifierRejectsSameHeightReorgStateReplacement(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	client := &stubProfileClient{profile: newTestProfileView(t, selector, "1000000", "0")}
+	verifier, err := NewVerifier(client, 0)
+	if err != nil {
+		t.Fatalf("failed to build verifier: %v", err)
+	}
+	encoded := marshalTestSelector(t, selector)
+	if _, err := verifier.ResolveProfile(context.Background(), encoded); err != nil {
+		t.Fatalf("canonical state rejected before reorg: %v", err)
+	}
+	replaced := *client.profile
+	replaced.ExternalState = client.profile.ExternalState
+	replaced.ExternalState.SnapshotID = repeatHex("aa", 32)
+	replaced.ExternalState.SystemStateID = repeatHex("bb", 32)
+	client.profile = &replaced
+	if _, err := verifier.ResolveProfile(context.Background(), encoded); !errors.Is(err, ErrProfileStateMismatch) {
+		t.Fatalf("same-height replacement did not invalidate old selector: %v", err)
+	}
+}
+
+func TestVerifierRejectsTamperedSelectorFields(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	profile := newTestProfileView(t, selector, "1000000", "0")
+	encoded := marshalTestSelector(t, selector)
+	tests := []struct {
+		name   string
+		offset int
+	}{
+		{name: "btc height", offset: btcHeightOffset + 3},
+		{name: "snapshot id", offset: snapshotIDOffset},
+		{name: "system state id", offset: systemStateIDOffset},
+		{name: "pass txid", offset: passIDOffset},
+		{name: "pass index", offset: passIDOffset + common.HashLength + 3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tampered := append([]byte(nil), encoded...)
+			tampered[test.offset] ^= 0x01
+			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+			if err != nil {
+				t.Fatalf("failed to build verifier: %v", err)
+			}
+			if _, err := verifier.ResolveProfile(context.Background(), tampered); !errors.Is(err, ErrProfileStateMismatch) {
+				t.Fatalf("tampered %s did not fail identity validation: %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestVerifierPropagatesHistoricalAndServiceFailures(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	encoded := marshalTestSelector(t, selector)
+	for _, expected := range []error{ErrSnapshotIDMismatch, ErrHistoryNotAvailable, ErrStateNotRetained, context.DeadlineExceeded} {
+		verifier, err := NewVerifier(&stubProfileClient{profileErr: expected}, 0)
+		if err != nil {
+			t.Fatalf("failed to build verifier: %v", err)
+		}
+		if _, err := verifier.ResolveProfile(context.Background(), encoded); !errors.Is(err, expected) {
+			t.Fatalf("expected %v to propagate, got %v", expected, err)
+		}
 	}
 }

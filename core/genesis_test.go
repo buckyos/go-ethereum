@@ -17,6 +17,7 @@
 package core
 
 import (
+	"encoding/json"
 	"math/big"
 	"reflect"
 	"testing"
@@ -182,6 +183,37 @@ func TestGenesisHashes(t *testing.T) {
 		if have := c.genesis.ToBlock().Hash(); have != c.want {
 			t.Errorf("case: %d a), want: %s, got: %s", i, c.want.Hex(), have.Hex())
 		}
+	}
+}
+
+func TestDefaultUSDBGenesisJSONRoundTrip(t *testing.T) {
+	genesis := DefaultUSDBGenesisBlock()
+	encoded, err := json.Marshal(genesis)
+	if err != nil {
+		t.Fatalf("failed to encode USDB genesis: %v", err)
+	}
+	var decoded Genesis
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("failed to decode USDB genesis: %v", err)
+	}
+	if decoded.Config == nil {
+		t.Fatal("round-tripped USDB genesis lost chain config")
+	}
+	if !reflect.DeepEqual(decoded.Config.USDB, genesis.Config.USDB) {
+		t.Fatalf("round-tripped USDB activation registry changed: have %+v want %+v", decoded.Config.USDB, genesis.Config.USDB)
+	}
+	versions, err := decoded.Config.USDBConsensusAt(0)
+	if err != nil {
+		t.Fatalf("failed to resolve round-tripped genesis activation: %v", err)
+	}
+	if versions == nil || versions.PayloadVersion != 1 || versions.DifficultyPolicyVersion != 1 ||
+		versions.RewardRuleVersion != 0 || versions.CoinbaseEmissionPolicyVersion != 0 ||
+		versions.CollaborationEfficiencyPolicyVersion != 0 || versions.PricePolicyVersion != 0 ||
+		versions.QuotePolicyVersion != 0 || versions.AuxPoolPolicyVersion != 0 {
+		t.Fatalf("round-tripped genesis returned unexpected USDB versions: %+v", versions)
+	}
+	if got, want := decoded.ToBlock().Hash(), genesis.ToBlock().Hash(); got != want {
+		t.Fatalf("round-tripped genesis hash changed: have %s want %s", got, want)
 	}
 }
 

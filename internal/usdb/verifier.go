@@ -35,17 +35,6 @@ type ResolvedConsensusProfile struct {
 	DifficultyFactorBps uint64
 }
 
-// ResolvedReward is the current reward adapter over a verified consensus profile.
-//
-// UIP-0007 only establishes the profile boundary. The final reward policy remains
-// versioned separately and will be replaced by the corresponding reward UIP.
-type ResolvedReward struct {
-	Profile       *ResolvedConsensusProfile
-	MultiplierBps uint64
-	BaseReward    *big.Int
-	MinerReward   *big.Int
-}
-
 // Verifier resolves historical consensus profiles from the USDB RPC surface.
 type Verifier struct {
 	client       Client
@@ -103,22 +92,6 @@ func (v *Verifier) ResolveProfile(ctx context.Context, headerExtra []byte) (*Res
 	queryCtx, cancel := context.WithTimeout(ctx, v.queryTimeout)
 	defer cancel()
 	return resolveConsensusProfile(queryCtx, v.client, selector)
-}
-
-// ResolveReward adapts a verified profile to the current development reward policy.
-func (v *Verifier) ResolveReward(ctx context.Context, headerExtra []byte, blockNumber uint64) (*ResolvedReward, error) {
-	profile, err := v.ResolveProfile(ctx, headerExtra)
-	if err != nil {
-		return nil, err
-	}
-	baseReward := BaseReward(blockNumber)
-	minerReward := RewardForLevel(blockNumber, profile.Level)
-	return &ResolvedReward{
-		Profile:       profile,
-		MultiplierBps: MultiplierBpsForLevel(profile.Level),
-		BaseReward:    baseReward,
-		MinerReward:   minerReward,
-	}, nil
 }
 
 func resolveConsensusProfile(ctx context.Context, client Client, selector ProfileSelectorPayload) (*ResolvedConsensusProfile, error) {

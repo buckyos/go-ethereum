@@ -159,20 +159,60 @@ func TestUSDBConsensusAtUsesChainConfigVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to resolve built-in USDB policy: %v", err)
 	}
-	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 {
+	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 ||
+		policy.RewardRuleVersion != 0 || policy.CoinbaseEmissionPolicyVersion != 0 ||
+		policy.CollaborationEfficiencyPolicyVersion != 0 || policy.PricePolicyVersion != 0 ||
+		policy.QuotePolicyVersion != 0 || policy.AuxPoolPolicyVersion != 0 {
 		t.Fatalf("unexpected built-in USDB policy: %+v", policy)
 	}
 	policy.DifficultyPolicyVersion = 9
-	if USDBChainConfig.USDB.DifficultyPolicyVersion != 1 {
+	if USDBChainConfig.USDB.Activations[0].Versions.DifficultyPolicyVersion != 1 {
 		t.Fatal("policy lookup must return a copy of chain config state")
 	}
 
 	for _, config := range []*ChainConfig{
-		{USDB: &USDBConsensusConfig{DifficultyPolicyVersion: 1}},
-		{USDB: &USDBConsensusConfig{PayloadVersion: 1}},
+		{USDB: &USDBConsensusConfig{}},
+		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{Versions: USDBConsensusVersions{DifficultyPolicyVersion: 1}}}}},
+		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{Versions: USDBConsensusVersions{PayloadVersion: 1}}}}},
+		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+			{Block: 7, Versions: testUSDBConsensusVersions(1)},
+			{Block: 7, Versions: testUSDBConsensusVersions(2)},
+		}}},
 	} {
 		if _, err := config.USDBConsensusAt(7); err == nil {
 			t.Fatalf("expected invalid USDB policy to fail: %+v", config.USDB)
+		}
+	}
+}
+
+func TestUSDBConsensusAtActivationBoundary(t *testing.T) {
+	config := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+		{Block: 10, Versions: testUSDBConsensusVersions(1)},
+		{Block: 20, Versions: testUSDBConsensusVersions(2)},
+	}}}
+	tests := []struct {
+		block       uint64
+		wantVersion uint16
+	}{
+		{block: 9, wantVersion: 0},
+		{block: 10, wantVersion: 1},
+		{block: 19, wantVersion: 1},
+		{block: 20, wantVersion: 2},
+		{block: 21, wantVersion: 2},
+	}
+	for _, test := range tests {
+		versions, err := config.USDBConsensusAt(test.block)
+		if err != nil {
+			t.Fatalf("block %d lookup failed: %v", test.block, err)
+		}
+		if test.wantVersion == 0 {
+			if versions != nil {
+				t.Fatalf("block %d activated unexpectedly: %+v", test.block, versions)
+			}
+			continue
+		}
+		if versions == nil || versions.DifficultyPolicyVersion != test.wantVersion {
+			t.Fatalf("block %d returned %+v, want difficulty version %d", test.block, versions, test.wantVersion)
 		}
 	}
 }
@@ -181,6 +221,20 @@ func TestUSDBConsensusConfigJSONRoundTrip(t *testing.T) {
 	encoded, err := json.Marshal(USDBChainConfig)
 	if err != nil {
 		t.Fatalf("failed to encode USDB chain config: %v", err)
+	}
+	for _, field := range []string{
+		`"activations"`,
+		`"rewardRuleVersion":0`,
+		`"coinbaseEmissionPolicyVersion":0`,
+		`"feeSplitPolicyVersion":0`,
+		`"collaborationEfficiencyPolicyVersion":0`,
+		`"pricePolicyVersion":0`,
+		`"quotePolicyVersion":0`,
+		`"auxPoolPolicyVersion":0`,
+	} {
+		if !strings.Contains(string(encoded), field) {
+			t.Fatalf("encoded USDB chain config is missing %s: %s", field, encoded)
+		}
 	}
 	var decoded ChainConfig
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
@@ -193,8 +247,61 @@ func TestUSDBConsensusConfigJSONRoundTrip(t *testing.T) {
 	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 {
 		t.Fatalf("unexpected round-tripped USDB policy: %+v", policy)
 	}
-	if banner := decoded.String(); !strings.Contains(banner, "USDB profile selector: payload v1, difficulty policy v1 (genesis)") {
+	if banner := decoded.String(); !strings.Contains(banner, "USDB consensus: payload v1, difficulty policy v1 from block 0 (1 activation(s))") {
 		t.Fatalf("USDB consensus versions missing from chain banner:\n%s", banner)
+	}
+}
+
+func TestUSDBConsensusCheckCompatible(t *testing.T) {
+	stored := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+		{Block: 0, Versions: testUSDBConsensusVersions(1)},
+		{Block: 100, Versions: testUSDBConsensusVersions(2)},
+	}}}
+	changedFuture := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+		{Block: 0, Versions: testUSDBConsensusVersions(1)},
+		{Block: 100, Versions: testUSDBConsensusVersions(3)},
+	}}}
+	if err := stored.CheckCompatible(changedFuture, 99); err != nil {
+		t.Fatalf("future activation change must remain compatible: %v", err)
+	}
+	if err := stored.CheckCompatible(changedFuture, 100); err == nil || err.What != "USDB consensus activation" || err.RewindTo != 99 {
+		t.Fatalf("active version change returned unexpected compatibility result: %+v", err)
+	}
+
+	changedReward := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+		{Block: 0, Versions: testUSDBConsensusVersions(1)},
+		{Block: 100, Versions: testUSDBConsensusVersions(2)},
+	}}}
+	changedReward.USDB.Activations[1].Versions.RewardRuleVersion = 2
+	if err := stored.CheckCompatible(changedReward, 100); err == nil || err.RewindTo != 99 {
+		t.Fatalf("active reward-version change returned unexpected compatibility result: %+v", err)
+	}
+
+	shiftedFuture := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+		{Block: 0, Versions: testUSDBConsensusVersions(1)},
+		{Block: 120, Versions: testUSDBConsensusVersions(2)},
+	}}}
+	if err := stored.CheckCompatible(shiftedFuture, 110); err == nil || err.RewindTo != 99 {
+		t.Fatalf("shifted active boundary returned unexpected compatibility result: %+v", err)
+	}
+
+	changedGenesis := &ChainConfig{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
+		{Block: 0, Versions: testUSDBConsensusVersions(2)},
+	}}}
+	if err := stored.CheckCompatible(changedGenesis, 0); err == nil || err.RewindTo != 0 {
+		t.Fatalf("genesis version change returned unexpected compatibility result: %+v", err)
+	}
+}
+
+func testUSDBConsensusVersions(version uint16) USDBConsensusVersions {
+	return USDBConsensusVersions{
+		PayloadVersion:                       1,
+		DifficultyPolicyVersion:              version,
+		RewardRuleVersion:                    1,
+		CoinbaseEmissionPolicyVersion:        1,
+		CollaborationEfficiencyPolicyVersion: 1,
+		PricePolicyVersion:                   1,
+		QuotePolicyVersion:                   1,
 	}
 }
 

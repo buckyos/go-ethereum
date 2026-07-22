@@ -20,7 +20,11 @@ const (
 var (
 	// ErrInvalidProfileEnergy indicates a non-canonical or out-of-range energy value.
 	ErrInvalidProfileEnergy = errors.New("invalid usdb profile energy")
-	maximumEnergyValue      = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
+	// ErrInvalidBaseDifficulty indicates a missing or non-positive ETHW base difficulty.
+	ErrInvalidBaseDifficulty = errors.New("invalid usdb base difficulty")
+	// ErrInvalidDifficultyFactor indicates a factor outside the UIP-0005 v1 range.
+	ErrInvalidDifficultyFactor = errors.New("invalid usdb difficulty factor")
+	maximumEnergyValue         = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
 )
 
 // UIP-0005 freezes these integer thresholds so every implementation has identical boundaries.
@@ -107,6 +111,20 @@ func DifficultyFactorBpsForLevel(level uint8) uint64 {
 		return MinimumDifficultyFactorBps
 	}
 	return factor
+}
+
+// RealDifficultyV1 applies the UIP-0005 factor to an ETHW base difficulty with
+// consensus-safe ceiling division.
+func RealDifficultyV1(baseDifficulty *big.Int, difficultyFactorBps uint64) (*big.Int, error) {
+	if baseDifficulty == nil || baseDifficulty.Sign() <= 0 {
+		return nil, ErrInvalidBaseDifficulty
+	}
+	if difficultyFactorBps < MinimumDifficultyFactorBps || difficultyFactorBps > BasisPointDenominator {
+		return nil, fmt.Errorf("%w: %d", ErrInvalidDifficultyFactor, difficultyFactorBps)
+	}
+	numerator := new(big.Int).Mul(baseDifficulty, new(big.Int).SetUint64(difficultyFactorBps))
+	numerator.Add(numerator, new(big.Int).SetUint64(BasisPointDenominator-1))
+	return numerator.Div(numerator, new(big.Int).SetUint64(BasisPointDenominator)), nil
 }
 
 func parseEnergyDecimal(field, value string) (*big.Int, error) {

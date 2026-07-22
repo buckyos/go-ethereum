@@ -4,6 +4,13 @@
 > 当前 header selector、economic profile 和 chain-config 边界分别以 UIP-0006、
 > UIP-0007、UIP-0008/UIP-0009 及 `internal/usdb` 实现为准。
 
+当前实现状态：
+
+- header 使用 107-byte `ProfileSelectorPayloadV1`，而非本文的旧 reward payload；
+- chain config 使用按 ETHW block 生效的完整 activation registry；
+- miner 和 validator 均通过同一份历史 `get_pass_economic_profile` 解析结果计算实际难度；
+- level/reward multiplier mock 已删除；在 UIP-0011 激活前仍沿用既有 Ethash 静态奖励。
+
 ## 1. 需求
 
 当前需要在 ETHW 侧引入一条新的奖励逻辑：

@@ -10,8 +10,12 @@ import (
 
 func testBuilderChainConfig(payloadVersion byte, difficultyPolicyVersion uint16) *params.ChainConfig {
 	return &params.ChainConfig{USDB: &params.USDBConsensusConfig{
-		PayloadVersion:          payloadVersion,
-		DifficultyPolicyVersion: difficultyPolicyVersion,
+		Activations: []params.USDBConsensusActivation{{
+			Versions: params.USDBConsensusVersions{
+				PayloadVersion:          payloadVersion,
+				DifficultyPolicyVersion: difficultyPolicyVersion,
+			},
+		}},
 	}}
 }
 
@@ -55,6 +59,47 @@ func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 		client.lastQuery.ExpectedState.SnapshotID != selector.SnapshotIDHex() ||
 		client.lastQuery.ExpectedState.SystemStateID != selector.SystemStateIDHex() {
 		t.Fatalf("profile query was not pinned to selector state: %+v", client.lastQuery)
+	}
+}
+
+func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	client := &stubProfileClient{
+		system: &SystemStateInfo{
+			LocalSyncedBlockHeight: selector.BTCHeight,
+			UpstreamSnapshotID:     selector.SnapshotIDHex(),
+			SystemStateID:          selector.SystemStateIDHex(),
+		},
+		profile: newTestProfileView(t, selector, "0", "0"),
+	}
+	config := &params.ChainConfig{USDB: &params.USDBConsensusConfig{
+		Activations: []params.USDBConsensusActivation{
+			{Block: 0, Versions: params.USDBConsensusVersions{PayloadVersion: 1, DifficultyPolicyVersion: 1}},
+			{Block: 100, Versions: params.USDBConsensusVersions{PayloadVersion: 1, DifficultyPolicyVersion: 2}},
+		},
+	}}
+	builder, err := NewPayloadBuilder(client, selector.PassID.String(), config, 0)
+	if err != nil {
+		t.Fatalf("failed to build payload builder: %v", err)
+	}
+	for _, test := range []struct {
+		block uint64
+		want  uint16
+	}{
+		{block: 99, want: 1},
+		{block: 100, want: 2},
+	} {
+		encoded, err := builder.BuildCurrentPayload(context.Background(), test.block)
+		if err != nil {
+			t.Fatalf("block %d payload failed: %v", test.block, err)
+		}
+		var payload ProfileSelectorPayload
+		if err := payload.UnmarshalBinary(encoded); err != nil {
+			t.Fatalf("block %d payload decode failed: %v", test.block, err)
+		}
+		if payload.DifficultyPolicyVersion != test.want {
+			t.Fatalf("block %d used difficulty version %d, want %d", test.block, payload.DifficultyPolicyVersion, test.want)
+		}
 	}
 }
 

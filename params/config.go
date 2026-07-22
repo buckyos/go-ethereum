@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/big"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"golang.org/x/crypto/sha3"
@@ -113,8 +114,16 @@ var (
 		TerminalTotalDifficulty: nil,
 		Ethash:                  new(EthashConfig),
 		USDB: &USDBConsensusConfig{
-			PayloadVersion:          1,
-			DifficultyPolicyVersion: 1,
+			Activations: []USDBConsensusActivation{
+				{
+					Block: 0,
+					Versions: USDBConsensusVersions{
+						PayloadVersion:          1,
+						DifficultyPolicyVersion: 1,
+						AuxPoolPolicyVersion:    0,
+					},
+				},
+			},
 		},
 	}
 
@@ -502,17 +511,38 @@ type ChainConfig struct {
 	Ethash *EthashConfig `json:"ethash,omitempty"`
 	Clique *CliqueConfig `json:"clique,omitempty"`
 
-	// USDB activates the USDB profile-selector consensus rules. The v1 network
-	// config is active from genesis; future height-based schedules are resolved
-	// through USDBConsensusAt rather than runtime flags.
+	// USDB contains the height-indexed UIP-0008 activation registry for ETHW-side
+	// USDB consensus rules. Operational companion-service settings do not belong
+	// in chain config.
 	USDB *USDBConsensusConfig `json:"usdb,omitempty"`
 }
 
-// USDBConsensusConfig contains the consensus-owned UIP-0007 versions.
-// Operational companion-service settings intentionally do not belong here.
+// USDBConsensusConfig is the chain-owned activation registry for USDB consensus.
 type USDBConsensusConfig struct {
-	PayloadVersion          uint8  `json:"payloadVersion"`
-	DifficultyPolicyVersion uint16 `json:"difficultyPolicyVersion"`
+	Activations []USDBConsensusActivation `json:"activations"`
+}
+
+// USDBConsensusActivation activates one complete version set at an ETHW block.
+// Records must be strictly ordered and may not share an activation block.
+type USDBConsensusActivation struct {
+	Block    uint64                `json:"block"`
+	Versions USDBConsensusVersions `json:"versions"`
+}
+
+// USDBConsensusVersions is the active ETHW-side version set defined by UIP-0008
+// and UIP-0009. Zero is a development staging value for a family that has not
+// activated; each defining UIP decides whether zero is valid on a final network.
+// Payload and difficulty versions are mandatory for every activation record.
+type USDBConsensusVersions struct {
+	PayloadVersion                       uint8  `json:"payloadVersion"`
+	DifficultyPolicyVersion              uint16 `json:"difficultyPolicyVersion"`
+	RewardRuleVersion                    uint16 `json:"rewardRuleVersion"`
+	CoinbaseEmissionPolicyVersion        uint16 `json:"coinbaseEmissionPolicyVersion"`
+	FeeSplitPolicyVersion                uint16 `json:"feeSplitPolicyVersion"`
+	CollaborationEfficiencyPolicyVersion uint16 `json:"collaborationEfficiencyPolicyVersion"`
+	PricePolicyVersion                   uint32 `json:"pricePolicyVersion"`
+	QuotePolicyVersion                   uint16 `json:"quotePolicyVersion"`
+	AuxPoolPolicyVersion                 uint16 `json:"auxPoolPolicyVersion"`
 }
 
 // EthashConfig is the consensus engine configs for proof-of-work based sealing.
@@ -565,7 +595,18 @@ func (c *ChainConfig) String() string {
 		banner += "Consensus: unknown\n"
 	}
 	if c.USDB != nil {
-		banner += fmt.Sprintf("USDB profile selector: payload v%d, difficulty policy v%d (genesis)\n", c.USDB.PayloadVersion, c.USDB.DifficultyPolicyVersion)
+		if len(c.USDB.Activations) == 0 {
+			banner += "USDB consensus: invalid empty activation registry\n"
+		} else {
+			activation := c.USDB.Activations[0]
+			banner += fmt.Sprintf(
+				"USDB consensus: payload v%d, difficulty policy v%d from block %d (%d activation(s))\n",
+				activation.Versions.PayloadVersion,
+				activation.Versions.DifficultyPolicyVersion,
+				activation.Block,
+				len(c.USDB.Activations),
+			)
+		}
 	}
 	banner += "\n"
 
@@ -784,27 +825,66 @@ func (c *ChainConfig) HasMergeTransition() bool {
 	return c != nil && (c.TerminalTotalDifficulty != nil || c.TerminalTotalDifficultyPassed)
 }
 
-// HasUSDBConsensus reports whether this network activates USDB consensus rules.
-// Presence means genesis activation for the current v1 chain configuration.
+// HasUSDBConsensus reports whether this network defines USDB consensus rules.
+// The first activation may be in the future, so callers that process a specific
+// block must use USDBConsensusAt as the authoritative activation check.
 func (c *ChainConfig) HasUSDBConsensus() bool {
 	return c != nil && c.USDB != nil
 }
 
 // USDBConsensusAt returns the USDB consensus versions expected at blockNumber.
-// The explicit height input keeps consumers compatible with future UIP-0008
-// activation schedules even though the current v1 config activates at genesis.
-func (c *ChainConfig) USDBConsensusAt(blockNumber uint64) (*USDBConsensusConfig, error) {
+// It returns nil before the first activation and a copy of the latest active
+// version set thereafter. Invalid or conflicting registries fail closed.
+func (c *ChainConfig) USDBConsensusAt(blockNumber uint64) (*USDBConsensusVersions, error) {
 	if !c.HasUSDBConsensus() {
 		return nil, nil
 	}
-	if c.USDB.PayloadVersion == 0 {
-		return nil, fmt.Errorf("invalid USDB payload version 0 at block %d", blockNumber)
+	if err := c.USDB.validate(); err != nil {
+		return nil, err
 	}
-	if c.USDB.DifficultyPolicyVersion == 0 {
-		return nil, fmt.Errorf("invalid USDB difficulty policy version 0 at block %d", blockNumber)
+	for i := len(c.USDB.Activations) - 1; i >= 0; i-- {
+		activation := c.USDB.Activations[i]
+		if activation.Block <= blockNumber {
+			versions := activation.Versions
+			return &versions, nil
+		}
 	}
-	config := *c.USDB
-	return &config, nil
+	return nil, nil
+}
+
+func (c *USDBConsensusConfig) validate() error {
+	if c == nil {
+		return nil
+	}
+	if len(c.Activations) == 0 {
+		return fmt.Errorf("invalid USDB consensus activation registry: no activation records")
+	}
+	for i, activation := range c.Activations {
+		if i > 0 && activation.Block <= c.Activations[i-1].Block {
+			return fmt.Errorf(
+				"invalid USDB consensus activation registry: block %d is not after block %d",
+				activation.Block,
+				c.Activations[i-1].Block,
+			)
+		}
+		if err := activation.Versions.validate(activation.Block); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (v USDBConsensusVersions) validate(block uint64) error {
+	if v.PayloadVersion == 0 {
+		return fmt.Errorf("invalid USDB payload version 0 at block %d", block)
+	}
+	if v.DifficultyPolicyVersion == 0 {
+		return fmt.Errorf("invalid USDB difficulty policy version 0 at block %d", block)
+	}
+	if v.RewardRuleVersion == 0 && (v.CoinbaseEmissionPolicyVersion != 0 || v.FeeSplitPolicyVersion != 0) {
+		return fmt.Errorf("invalid USDB reward policy dependencies at block %d", block)
+	}
+	return nil
 }
 
 // IsTerminalPoWBlock returns whether the given block is the last block of PoW stage.
@@ -891,6 +971,11 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 			lastFork = cur
 		}
 	}
+	if c.USDB != nil {
+		if err := c.USDB.validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -968,7 +1053,80 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, head *big.Int) *Confi
 	if c.IsDividendFeeSplit(head) && c.DividendAddress != newcfg.DividendAddress {
 		return newCompatError("Dividend fee split address", c.DividendFeeSplitBlock, newcfg.DividendFeeSplitBlock)
 	}
+	if err := checkUSDBCompatible(c.USDB, newcfg.USDB, head.Uint64()); err != nil {
+		return err
+	}
 	return nil
+}
+
+func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *ConfigCompatError {
+	var boundaries []uint64
+	boundaries = appendUSDBActivationBoundaries(boundaries, stored, head)
+	boundaries = appendUSDBActivationBoundaries(boundaries, updated, head)
+	if len(boundaries) == 0 {
+		return nil
+	}
+	sort.Slice(boundaries, func(i, j int) bool { return boundaries[i] < boundaries[j] })
+	for i, block := range boundaries {
+		if i > 0 && block == boundaries[i-1] {
+			continue
+		}
+		storedVersions, storedBlock := lookupUSDBActivation(stored, block)
+		updatedVersions, updatedBlock := lookupUSDBActivation(updated, block)
+		if !equalUSDBVersions(storedVersions, updatedVersions) {
+			err := newCompatError(
+				"USDB consensus activation",
+				uint64BlockNumber(storedBlock),
+				uint64BlockNumber(updatedBlock),
+			)
+			if block > 0 {
+				err.RewindTo = block - 1
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func appendUSDBActivationBoundaries(boundaries []uint64, config *USDBConsensusConfig, head uint64) []uint64 {
+	if config == nil {
+		return boundaries
+	}
+	for _, activation := range config.Activations {
+		if activation.Block <= head {
+			boundaries = append(boundaries, activation.Block)
+		}
+	}
+	return boundaries
+}
+
+func lookupUSDBActivation(config *USDBConsensusConfig, block uint64) (*USDBConsensusVersions, *uint64) {
+	if config == nil {
+		return nil, nil
+	}
+	for i := len(config.Activations) - 1; i >= 0; i-- {
+		activation := config.Activations[i]
+		if activation.Block <= block {
+			versions := activation.Versions
+			activationBlock := activation.Block
+			return &versions, &activationBlock
+		}
+	}
+	return nil, nil
+}
+
+func equalUSDBVersions(a, b *USDBConsensusVersions) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func uint64BlockNumber(block *uint64) *big.Int {
+	if block == nil {
+		return nil
+	}
+	return new(big.Int).SetUint64(*block)
 }
 
 // isForkIncompatible returns true if a fork scheduled at s1 cannot be rescheduled to

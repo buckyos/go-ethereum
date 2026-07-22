@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -14,6 +15,15 @@ type stubJSONRPCClient struct {
 	args     []interface{}
 	closed   bool
 }
+
+type stubRPCError struct {
+	code int
+	data interface{}
+}
+
+func (e *stubRPCError) Error() string          { return "TEST_RPC_ERROR" }
+func (e *stubRPCError) ErrorCode() int         { return e.code }
+func (e *stubRPCError) ErrorData() interface{} { return e.data }
 
 func (s *stubJSONRPCClient) CallContext(_ context.Context, result interface{}, method string, args ...interface{}) error {
 	s.method = method
@@ -183,5 +193,47 @@ func TestRPCClientPropagatesProfileCallErrorsAndNull(t *testing.T) {
 	profile, err := client.GetPassEconomicProfile(context.Background(), selector.PassID, query)
 	if err != nil || profile != nil {
 		t.Fatalf("expected null profile, got profile=%+v err=%v", profile, err)
+	}
+}
+
+func TestRPCClientMapsConsensusErrors(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	query := QueryContext{RequestedHeight: selector.BTCHeight}
+	tests := []struct {
+		code int
+		kind error
+	}{
+		{code: rpcErrPassNotFound, kind: ErrPassNotFound},
+		{code: rpcErrInternalInvariantBroken, kind: ErrInternalInvariantBroken},
+		{code: rpcErrHeightNotSynced, kind: ErrHeightNotSynced},
+		{code: rpcErrSnapshotNotReady, kind: ErrSnapshotNotReady},
+		{code: rpcErrSnapshotIDMismatch, kind: ErrSnapshotIDMismatch},
+		{code: rpcErrBlockHashMismatch, kind: ErrBlockHashMismatch},
+		{code: rpcErrVersionMismatch, kind: ErrVersionMismatch},
+		{code: rpcErrLocalStateCommitMismatch, kind: ErrLocalStateCommitMismatch},
+		{code: rpcErrSystemStateIDMismatch, kind: ErrSystemStateIDMismatch},
+		{code: rpcErrNoRecord, kind: ErrNoRecord},
+		{code: rpcErrStateNotRetained, kind: ErrStateNotRetained},
+		{code: rpcErrHistoryNotAvailable, kind: ErrHistoryNotAvailable},
+		{code: rpcErrViewVersionMismatch, kind: ErrViewVersionMismatch},
+		{code: rpcErrProtocolVersionMismatch, kind: ErrProtocolVersionMismatch},
+		{code: rpcErrFormulaVersionMismatch, kind: ErrFormulaVersionMismatch},
+	}
+	for _, test := range tests {
+		t.Run(test.kind.Error(), func(t *testing.T) {
+			data := map[string]interface{}{"requested_height": float64(selector.BTCHeight)}
+			client := &RPCClient{client: &stubJSONRPCClient{err: &stubRPCError{code: test.code, data: data}}}
+			_, err := client.GetPassEconomicProfile(context.Background(), selector.PassID, query)
+			if !errors.Is(err, test.kind) {
+				t.Fatalf("code %d mapped to unexpected error: %v", test.code, err)
+			}
+			var rpcErr *RPCError
+			if !errors.As(err, &rpcErr) {
+				t.Fatalf("code %d did not preserve structured RPC error: %v", test.code, err)
+			}
+			if rpcErr.Code != test.code || !reflect.DeepEqual(rpcErr.Data, data) {
+				t.Fatalf("unexpected structured RPC error: %+v", rpcErr)
+			}
+		})
 	}
 }

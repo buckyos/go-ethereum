@@ -45,6 +45,40 @@ func TestDifficultyFactorBpsForLevelClamps(t *testing.T) {
 	}
 }
 
+func TestRealDifficultyV1UsesCeilingDivision(t *testing.T) {
+	tests := []struct {
+		base   int64
+		factor uint64
+		want   int64
+	}{
+		{base: 101, factor: 9_900, want: 100},
+		{base: 8_192, factor: 10_000, want: 8_192},
+		{base: 8_193, factor: 5_000, want: 4_097},
+	}
+	for _, test := range tests {
+		got, err := RealDifficultyV1(big.NewInt(test.base), test.factor)
+		if err != nil {
+			t.Fatalf("base=%d factor=%d failed: %v", test.base, test.factor, err)
+		}
+		if got.Cmp(big.NewInt(test.want)) != 0 {
+			t.Fatalf("base=%d factor=%d: have %s want %d", test.base, test.factor, got, test.want)
+		}
+	}
+}
+
+func TestRealDifficultyV1RejectsInvalidInputs(t *testing.T) {
+	for _, base := range []*big.Int{nil, big.NewInt(0), big.NewInt(-1)} {
+		if _, err := RealDifficultyV1(base, BasisPointDenominator); !errors.Is(err, ErrInvalidBaseDifficulty) {
+			t.Fatalf("base=%v: expected invalid base difficulty, got %v", base, err)
+		}
+	}
+	for _, factor := range []uint64{MinimumDifficultyFactorBps - 1, BasisPointDenominator + 1} {
+		if _, err := RealDifficultyV1(big.NewInt(1), factor); !errors.Is(err, ErrInvalidDifficultyFactor) {
+			t.Fatalf("factor=%d: expected invalid factor, got %v", factor, err)
+		}
+	}
+}
+
 func TestParseEnergyDecimalRequiresCanonicalUint128(t *testing.T) {
 	valid := []string{"0", "1", maximumEnergyValue.String()}
 	for _, value := range valid {

@@ -440,12 +440,12 @@ type Config struct {
 	USDB USDBConfig `toml:",omitempty"`
 }
 
-// USDBConfig contains operational settings for USDB-backed reward verification.
+// USDBConfig contains operational settings for historical USDB profile resolution.
 // The chain config is the only source of consensus activation.
 type USDBConfig struct {
 	// RPCURL points to the local usdb-indexer JSON-RPC endpoint used by validators.
 	RPCURL string `toml:",omitempty"`
-	// QueryTimeout bounds one historical reward replay against the local USDB service.
+	// QueryTimeout bounds one historical profile replay against the local USDB service.
 	QueryTimeout time.Duration `toml:",omitempty"`
 }
 
@@ -469,20 +469,20 @@ type Ethash struct {
 	fakeFail  uint64        // Block number which fails PoW check even in fake mode
 	fakeDelay time.Duration // Time delay to sleep for before returning from verify
 
-	// usdbRewardVerifier replays one header payload into a deterministic reward input.
-	// It is only populated when USDB-backed rewards are enabled for this node.
-	usdbRewardVerifier rewardVerifier
-	// usdbRewardVerifierErr preserves verifier initialization failures so reward
-	// finalization can fail closed later without silently falling back to legacy rewards.
-	usdbRewardVerifierErr error
+	// usdbProfileResolver replays the UIP-0007 selector into one deterministic
+	// profile shared by the difficulty and reward consensus paths.
+	usdbProfileResolver consensusProfileResolver
+	// usdbProfileResolverErr preserves initialization failures so every profile-
+	// dependent consensus path fails closed instead of using unverified data.
+	usdbProfileResolverErr error
 
 	lock      sync.Mutex // Ensures thread safety for the in-memory caches and mining fields
 	closeOnce sync.Once  // Ensures exit channel will not be closed twice.
 }
 
-type rewardVerifier interface {
-	// ResolveReward reconstructs the miner reward input from one header payload.
-	ResolveReward(ctx context.Context, headerExtra []byte, blockNumber uint64) (*usdb.ResolvedReward, error)
+type consensusProfileResolver interface {
+	// ResolveProfile reconstructs the selector-bound UIP-0006 economic profile.
+	ResolveProfile(ctx context.Context, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error)
 	// Close releases any verifier-owned resources such as RPC connections.
 	Close()
 }
@@ -518,10 +518,10 @@ func NewWithChainConfig(config Config, chainConfig *params.ChainConfig, notify [
 	if chainConfig.HasUSDBConsensus() {
 		verifier, err := usdb.NewRPCVerifier(config.USDB.RPCURL, config.USDB.QueryTimeout)
 		if err != nil {
-			ethash.usdbRewardVerifierErr = fmt.Errorf("failed to initialize usdb reward verifier: %w", err)
-			config.Log.Error("Failed to initialize USDB reward verifier", "err", err)
+			ethash.usdbProfileResolverErr = fmt.Errorf("failed to initialize usdb profile resolver: %w", err)
+			config.Log.Error("Failed to initialize USDB profile resolver", "err", err)
 		} else {
-			ethash.usdbRewardVerifier = verifier
+			ethash.usdbProfileResolver = verifier
 		}
 	}
 	if config.PowMode == ModeShared {
@@ -600,8 +600,8 @@ func (ethash *Ethash) Close() error {
 // StopRemoteSealer stops the remote sealer
 func (ethash *Ethash) StopRemoteSealer() error {
 	ethash.closeOnce.Do(func() {
-		if ethash.usdbRewardVerifier != nil {
-			ethash.usdbRewardVerifier.Close()
+		if ethash.usdbProfileResolver != nil {
+			ethash.usdbProfileResolver.Close()
 		}
 		// Short circuit if the exit channel is not allocated.
 		if ethash.remote == nil {
