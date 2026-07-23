@@ -7,17 +7,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"sort"
 	"sync"
 )
 
 const (
-	goActivationGoldenSchemaVersion = "uip-0008-go-btc-activation-golden:v1"
+	goActivationGoldenSchemaVersion = "uip-0008-go-btc-activation-golden:v2"
 	btcActivationRegistrySchemaV1   = "uip-0008-btc-activation-registry:v1"
 
 	// BTCMainnetActivationRegistryIDV1 is generated from btc-mainnet.json.
 	BTCMainnetActivationRegistryIDV1 = "bb751626eb1415bbc349e77f58cb412908584842cbf7d786262b7bd1f6a7d39e"
 	// BTCRegtestActivationRegistryIDV1 is generated from btc-regtest.json.
 	BTCRegtestActivationRegistryIDV1 = "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
+	// BTCRegtestActivationRegistryIDRevision2 is the staged append-only regtest
+	// revision used to exercise registry rollout without activating a new formula.
+	BTCRegtestActivationRegistryIDRevision2 = "25a39e8022e8351a40f59736b86cf81321c08042121cdb74b85a8f3918a2b973"
 )
 
 var (
@@ -47,6 +52,8 @@ type btcActivationGoldenArtifact struct {
 
 type btcActivationRegistry struct {
 	NetworkID            string               `json:"network_id"`
+	Revision             uint32               `json:"revision"`
+	Current              bool                 `json:"current"`
 	ActivationRegistryID string               `json:"activation_registry_id"`
 	Activations          []btcActivationPoint `json:"activations"`
 }
@@ -92,16 +99,15 @@ func parseBTCActivationGolden(input []byte) (map[string]*btcActivationRegistry, 
 	}
 
 	registries := make(map[string]*btcActivationRegistry, len(artifact.Registries))
-	networks := make(map[string]struct{}, len(artifact.Registries))
+	networkRevisions := make(map[string][]*btcActivationRegistry)
 	for index := range artifact.Registries {
 		registry := &artifact.Registries[index]
 		if registry.NetworkID == "" {
 			return nil, fmt.Errorf("Go BTC activation registry has an empty network_id")
 		}
-		if _, exists := networks[registry.NetworkID]; exists {
-			return nil, fmt.Errorf("duplicate Go BTC activation network %q", registry.NetworkID)
+		if registry.Revision == 0 {
+			return nil, fmt.Errorf("Go BTC activation registry %s has revision 0", registry.NetworkID)
 		}
-		networks[registry.NetworkID] = struct{}{}
 		if _, err := parseCanonicalHex32("activation_registry_id", registry.ActivationRegistryID); err != nil {
 			return nil, err
 		}
@@ -131,8 +137,42 @@ func parseBTCActivationGolden(input []byte) (map[string]*btcActivationRegistry, 
 			}
 		}
 		registries[registry.ActivationRegistryID] = registry
+		networkRevisions[registry.NetworkID] = append(networkRevisions[registry.NetworkID], registry)
+	}
+	for networkID, revisions := range networkRevisions {
+		if err := validateBTCActivationRevisionHistory(networkID, revisions); err != nil {
+			return nil, err
+		}
 	}
 	return registries, nil
+}
+
+func validateBTCActivationRevisionHistory(networkID string, revisions []*btcActivationRegistry) error {
+	sort.Slice(revisions, func(i, j int) bool { return revisions[i].Revision < revisions[j].Revision })
+	currentCount := 0
+	for index, revision := range revisions {
+		if revision.Current {
+			currentCount++
+		}
+		if index > 0 {
+			previous := revisions[index-1]
+			if revision.Revision != previous.Revision+1 {
+				return fmt.Errorf("Go BTC activation registry %s has non-contiguous revisions %d and %d", networkID, previous.Revision, revision.Revision)
+			}
+			if len(revision.Activations) < len(previous.Activations) {
+				return fmt.Errorf("Go BTC activation registry %s revision %d removes activation history", networkID, revision.Revision)
+			}
+			for activationIndex := range previous.Activations {
+				if !reflect.DeepEqual(previous.Activations[activationIndex], revision.Activations[activationIndex]) {
+					return fmt.Errorf("Go BTC activation registry %s revision %d rewrites activation index %d", networkID, revision.Revision, activationIndex)
+				}
+			}
+		}
+	}
+	if currentCount != 1 {
+		return fmt.Errorf("Go BTC activation registry %s must mark exactly one revision current", networkID)
+	}
+	return nil
 }
 
 func requireJSONEOF(decoder *json.Decoder) error {

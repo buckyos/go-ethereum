@@ -114,10 +114,10 @@ var (
 		TerminalTotalDifficulty: nil,
 		Ethash:                  new(EthashConfig),
 		USDB: &USDBConsensusConfig{
-			BTCActivationRegistryID: "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d",
 			Activations: []USDBConsensusActivation{
 				{
-					Block: 0,
+					Block:                   0,
+					BTCActivationRegistryID: "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d",
 					Versions: USDBConsensusVersions{
 						PayloadVersion:          1,
 						DifficultyPolicyVersion: 1,
@@ -520,18 +520,16 @@ type ChainConfig struct {
 
 // USDBConsensusConfig is the chain-owned activation registry for USDB consensus.
 type USDBConsensusConfig struct {
-	// BTCActivationRegistryID commits the network-scoped BTC registry used to
-	// validate every selector-pinned economic profile on this USDB network.
-	// It does not select USDB-chain payload, difficulty, or reward versions.
-	BTCActivationRegistryID string                    `json:"btcActivationRegistryId"`
-	Activations             []USDBConsensusActivation `json:"activations"`
+	Activations []USDBConsensusActivation `json:"activations"`
 }
 
-// USDBConsensusActivation activates one complete version set at a USDB block.
-// Records must be strictly ordered and may not share an activation block.
+// USDBConsensusActivation activates one complete USDB-chain version set and
+// one immutable BTC registry revision at a USDB block. Records must be strictly
+// ordered and may not share an activation block.
 type USDBConsensusActivation struct {
-	Block    uint64                `json:"block"`
-	Versions USDBConsensusVersions `json:"versions"`
+	Block                   uint64                `json:"block"`
+	BTCActivationRegistryID string                `json:"btcActivationRegistryId"`
+	Versions                USDBConsensusVersions `json:"versions"`
 }
 
 // USDBConsensusVersions is the active USDB-chain version set defined by UIP-0008
@@ -837,10 +835,10 @@ func (c *ChainConfig) HasUSDBConsensus() bool {
 	return c != nil && c.USDB != nil
 }
 
-// USDBConsensusAt returns the USDB consensus versions expected at blockNumber.
-// It returns nil before the first activation and a copy of the latest active
-// version set thereafter. Invalid or conflicting registries fail closed.
-func (c *ChainConfig) USDBConsensusAt(blockNumber uint64) (*USDBConsensusVersions, error) {
+// USDBActivationAt returns the complete USDB consensus activation expected at
+// blockNumber. It returns nil before the first activation and a copy of the
+// latest active record thereafter. Invalid registries fail closed.
+func (c *ChainConfig) USDBActivationAt(blockNumber uint64) (*USDBConsensusActivation, error) {
 	if !c.HasUSDBConsensus() {
 		return nil, nil
 	}
@@ -850,19 +848,25 @@ func (c *ChainConfig) USDBConsensusAt(blockNumber uint64) (*USDBConsensusVersion
 	for i := len(c.USDB.Activations) - 1; i >= 0; i-- {
 		activation := c.USDB.Activations[i]
 		if activation.Block <= blockNumber {
-			versions := activation.Versions
-			return &versions, nil
+			return &activation, nil
 		}
 	}
 	return nil, nil
 }
 
+// USDBConsensusAt returns the USDB-chain version set expected at blockNumber.
+func (c *ChainConfig) USDBConsensusAt(blockNumber uint64) (*USDBConsensusVersions, error) {
+	activation, err := c.USDBActivationAt(blockNumber)
+	if err != nil || activation == nil {
+		return nil, err
+	}
+	versions := activation.Versions
+	return &versions, nil
+}
+
 func (c *USDBConsensusConfig) validate() error {
 	if c == nil {
 		return nil
-	}
-	if !isCanonicalUSDBRegistryID(c.BTCActivationRegistryID) {
-		return fmt.Errorf("invalid USDB BTC activation registry id %q", c.BTCActivationRegistryID)
 	}
 	if len(c.Activations) == 0 {
 		return fmt.Errorf("invalid USDB consensus activation registry: no activation records")
@@ -873,6 +877,13 @@ func (c *USDBConsensusConfig) validate() error {
 				"invalid USDB consensus activation registry: block %d is not after block %d",
 				activation.Block,
 				c.Activations[i-1].Block,
+			)
+		}
+		if !isCanonicalUSDBRegistryID(activation.BTCActivationRegistryID) {
+			return fmt.Errorf(
+				"invalid USDB BTC activation registry id %q at block %d",
+				activation.BTCActivationRegistryID,
+				activation.Block,
 			)
 		}
 		if err := activation.Versions.validate(activation.Block); err != nil {
@@ -1079,9 +1090,9 @@ func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *Con
 		if i > 0 && block == boundaries[i-1] {
 			continue
 		}
-		storedVersions, storedBlock := lookupUSDBActivation(stored, block)
-		updatedVersions, updatedBlock := lookupUSDBActivation(updated, block)
-		if !equalUSDBVersions(storedVersions, updatedVersions) {
+		storedActivation, storedBlock := lookupUSDBActivation(stored, block)
+		updatedActivation, updatedBlock := lookupUSDBActivation(updated, block)
+		if !equalUSDBVersions(storedActivation, updatedActivation) {
 			err := newCompatError(
 				"USDB consensus activation",
 				uint64BlockNumber(storedBlock),
@@ -1092,7 +1103,7 @@ func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *Con
 			}
 			return err
 		}
-		if storedVersions != nil && usdbBTCActivationRegistryID(stored) != usdbBTCActivationRegistryID(updated) {
+		if storedActivation != nil && storedActivation.BTCActivationRegistryID != updatedActivation.BTCActivationRegistryID {
 			err := newCompatError(
 				"USDB BTC activation registry",
 				uint64BlockNumber(storedBlock),
@@ -1107,13 +1118,6 @@ func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *Con
 	return nil
 }
 
-func usdbBTCActivationRegistryID(config *USDBConsensusConfig) string {
-	if config == nil {
-		return ""
-	}
-	return config.BTCActivationRegistryID
-}
-
 func appendUSDBActivationBoundaries(boundaries []uint64, config *USDBConsensusConfig, head uint64) []uint64 {
 	if config == nil {
 		return boundaries
@@ -1126,26 +1130,25 @@ func appendUSDBActivationBoundaries(boundaries []uint64, config *USDBConsensusCo
 	return boundaries
 }
 
-func lookupUSDBActivation(config *USDBConsensusConfig, block uint64) (*USDBConsensusVersions, *uint64) {
+func lookupUSDBActivation(config *USDBConsensusConfig, block uint64) (*USDBConsensusActivation, *uint64) {
 	if config == nil {
 		return nil, nil
 	}
 	for i := len(config.Activations) - 1; i >= 0; i-- {
 		activation := config.Activations[i]
 		if activation.Block <= block {
-			versions := activation.Versions
 			activationBlock := activation.Block
-			return &versions, &activationBlock
+			return &activation, &activationBlock
 		}
 	}
 	return nil, nil
 }
 
-func equalUSDBVersions(a, b *USDBConsensusVersions) bool {
+func equalUSDBVersions(a, b *USDBConsensusActivation) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	return *a == *b
+	return a.Versions == b.Versions
 }
 
 func isCanonicalUSDBRegistryID(value string) bool {

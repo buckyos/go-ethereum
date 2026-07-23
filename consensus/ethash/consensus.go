@@ -275,11 +275,12 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	if header.Number == nil || !header.Number.IsUint64() {
 		return consensus.ErrInvalidNumber
 	}
-	policy, err := chain.Config().USDBConsensusAt(header.Number.Uint64())
+	activation, err := chain.Config().USDBActivationAt(header.Number.Uint64())
 	if err != nil {
 		return fmt.Errorf("invalid usdb consensus config: %w", err)
 	}
-	if policy != nil {
+	if activation != nil {
+		policy := &activation.Versions
 		if err := usdb.ValidateProfileSelectorPayload(header.Extra, policy.PayloadVersion, policy.DifficultyPolicyVersion); err != nil {
 			return fmt.Errorf("invalid usdb profile selector: %w", err)
 		}
@@ -295,8 +296,9 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	}
 	// Verify the block's difficulty based on its timestamp and parent's difficulty
 	expected := ethash.CalcDifficulty(chain, header.Time, parent)
-	if policy != nil {
-		profile, err := ethash.resolveUSDBProfile(header.Extra)
+	if activation != nil {
+		policy := &activation.Versions
+		profile, err := ethash.resolveUSDBProfile(activation.BTCActivationRegistryID, header.Extra)
 		if err != nil {
 			return fmt.Errorf("failed to resolve usdb difficulty profile: %w", err)
 		}
@@ -668,18 +670,19 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 		return consensus.ErrUnknownAncestor
 	}
 	baseDifficulty := ethash.CalcDifficulty(chain, header.Time, parent)
-	policy, err := chain.Config().USDBConsensusAt(header.Number.Uint64())
+	activation, err := chain.Config().USDBActivationAt(header.Number.Uint64())
 	if err != nil {
 		return fmt.Errorf("invalid usdb consensus config: %w", err)
 	}
-	if policy == nil || ethash.config.PowMode == ModeFake || ethash.config.PowMode == ModeFullFake {
+	if activation == nil || ethash.config.PowMode == ModeFake || ethash.config.PowMode == ModeFullFake {
 		header.Difficulty = baseDifficulty
 		return nil
 	}
+	policy := &activation.Versions
 	if err := usdb.ValidateProfileSelectorPayload(header.Extra, policy.PayloadVersion, policy.DifficultyPolicyVersion); err != nil {
 		return fmt.Errorf("invalid usdb profile selector: %w", err)
 	}
-	profile, err := ethash.resolveUSDBProfile(header.Extra)
+	profile, err := ethash.resolveUSDBProfile(activation.BTCActivationRegistryID, header.Extra)
 	if err != nil {
 		return fmt.Errorf("failed to resolve usdb difficulty profile: %w", err)
 	}
@@ -690,14 +693,14 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 	return nil
 }
 
-func (ethash *Ethash) resolveUSDBProfile(headerExtra []byte) (*usdb.ResolvedConsensusProfile, error) {
+func (ethash *Ethash) resolveUSDBProfile(btcActivationRegistryID string, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error) {
 	if ethash.usdbProfileResolverErr != nil {
 		return nil, ethash.usdbProfileResolverErr
 	}
 	if ethash.usdbProfileResolver == nil {
 		return nil, errors.New("usdb profile resolver not configured")
 	}
-	return ethash.usdbProfileResolver.ResolveProfile(context.Background(), headerExtra)
+	return ethash.usdbProfileResolver.ResolveProfile(context.Background(), btcActivationRegistryID, headerExtra)
 }
 
 func applyUSDBDifficultyPolicy(policy *params.USDBConsensusVersions, baseDifficulty *big.Int, profile *usdb.ResolvedConsensusProfile) (*big.Int, error) {
@@ -714,6 +717,13 @@ func applyUSDBDifficultyPolicy(policy *params.USDBConsensusVersions, baseDifficu
 	case usdb.DifficultyPolicyVersionV1:
 		return usdb.RealDifficultyV1(baseDifficulty, profile.DifficultyFactorBps)
 	default:
+		if difficulty, handled, err := usdb.ApplyActivationConformanceDifficultyPolicy(
+			policy.DifficultyPolicyVersion,
+			baseDifficulty,
+			profile.DifficultyFactorBps,
+		); handled {
+			return difficulty, err
+		}
 		return nil, fmt.Errorf("unsupported usdb difficulty policy version %d", policy.DifficultyPolicyVersion)
 	}
 }
@@ -810,28 +820,30 @@ func (ethash *Ethash) accumulateRewards(config *params.ChainConfig, state *state
 	if header.Number == nil || !header.Number.IsUint64() {
 		return consensus.ErrInvalidNumber
 	}
-	policy, err := config.USDBConsensusAt(header.Number.Uint64())
+	activation, err := config.USDBActivationAt(header.Number.Uint64())
 	if err != nil {
 		return fmt.Errorf("invalid usdb consensus config: %w", err)
 	}
-	if policy == nil {
+	if activation == nil {
 		accumulateLegacyRewards(config, state, header, uncles)
 		return nil
 	}
+	policy := &activation.Versions
 	if err := usdb.ValidateProfileSelectorPayload(header.Extra, policy.PayloadVersion, policy.DifficultyPolicyVersion); err != nil {
 		return fmt.Errorf("invalid usdb profile selector: %w", err)
 	}
-	return ethash.accumulateUSDBRewards(config, policy, state, header, uncles)
+	return ethash.accumulateUSDBRewards(config, activation, state, header, uncles)
 }
 
-func (ethash *Ethash) accumulateUSDBRewards(config *params.ChainConfig, policy *params.USDBConsensusVersions, state *state.StateDB, header *types.Header, uncles []*types.Header) error {
-	profile, err := ethash.resolveUSDBProfile(header.Extra)
+func (ethash *Ethash) accumulateUSDBRewards(config *params.ChainConfig, activation *params.USDBConsensusActivation, state *state.StateDB, header *types.Header, uncles []*types.Header) error {
+	profile, err := ethash.resolveUSDBProfile(activation.BTCActivationRegistryID, header.Extra)
 	if err != nil {
 		return fmt.Errorf("failed to resolve usdb profile selector: %w", err)
 	}
 	if profile == nil {
 		return errors.New("usdb profile resolver returned nil profile")
 	}
+	policy := &activation.Versions
 	if policy.RewardRuleVersion != 0 || policy.CoinbaseEmissionPolicyVersion != 0 || policy.FeeSplitPolicyVersion != 0 {
 		return fmt.Errorf(
 			"unsupported usdb reward policies: reward=%d coinbase=%d fee_split=%d",

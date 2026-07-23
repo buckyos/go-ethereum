@@ -10,6 +10,9 @@ VIEW_VERSION = "uip-0006-usdb-economic-state-view:v1"
 BTC_REGTEST_ACTIVATION_REGISTRY_ID = (
     "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
 )
+BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID = (
+    "25a39e8022e8351a40f59736b86cf81321c08042121cdb74b85a8f3918a2b973"
+)
 BTC_V1_ACTIVE_VERSION_SET_ID = (
     "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
 )
@@ -136,10 +139,6 @@ def decode_selector(block):
     if payload[0] != 1:
         raise SystemExit(f"unexpected payload version at block {number}: {payload[0]}")
     difficulty_policy_version = int.from_bytes(payload[1:3], "big")
-    if difficulty_policy_version != 1:
-        raise SystemExit(
-            f"unexpected difficulty policy at block {number}: {difficulty_policy_version}"
-        )
     btc_height = int.from_bytes(payload[3:7], "big")
     snapshot_id = payload[7:39].hex()
     system_state_id = payload[39:71].hex()
@@ -150,6 +149,7 @@ def decode_selector(block):
         "snapshot_id": snapshot_id,
         "system_state_id": system_state_id,
         "pass_id": f"{pass_txid}i{pass_index}",
+        "difficulty_policy_version": difficulty_policy_version,
     }
 
 
@@ -244,6 +244,17 @@ def expected_real_difficulty(parent, block, factor):
     return (base * factor + BPS_DENOMINATOR - 1) // BPS_DENOMINATOR
 
 
+def expected_policy_difficulty(parent, block, factor, policy_version):
+    difficulty = expected_real_difficulty(parent, block, factor)
+    if policy_version == 1:
+        return difficulty
+    if policy_version == 65_535:
+        # The build-tagged conformance policy is intentionally v1 + 1. It has
+        # no production protocol meaning and exists only for activation tests.
+        return difficulty + 1
+    raise SystemExit(f"unsupported expected difficulty policy: {policy_version}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--blocks", required=True)
@@ -258,6 +269,11 @@ def main():
     parser.add_argument(
         "--expected-active-version-set-id",
         default=BTC_V1_ACTIVE_VERSION_SET_ID,
+    )
+    parser.add_argument("--activation-conformance-block", type=int)
+    parser.add_argument(
+        "--post-activation-registry-id",
+        default=BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID,
     )
     parser.add_argument("--expected-pass-id")
     parser.add_argument("--stage1-end", type=int)
@@ -294,6 +310,20 @@ def main():
             raise SystemExit(f"deterministic E2E does not permit uncles at block {number}")
 
         selector = decode_selector(block)
+        expected_policy_version = 1
+        expected_registry_id = args.expected_activation_registry_id
+        if (
+            args.activation_conformance_block is not None
+            and number >= args.activation_conformance_block
+        ):
+            expected_policy_version = 65_535
+            expected_registry_id = args.post_activation_registry_id
+        if selector["difficulty_policy_version"] != expected_policy_version:
+            raise SystemExit(
+                f"unexpected difficulty policy at block {number}: "
+                f"have {selector['difficulty_policy_version']} "
+                f"want {expected_policy_version}"
+            )
         if args.expected_pass_id and selector["pass_id"] != args.expected_pass_id:
             raise SystemExit(
                 f"unexpected pass id at block {number}: "
@@ -302,11 +332,16 @@ def main():
         raw, contribution, effective, level, factor = resolve_profile(
             args.usdb_indexer_rpc_url,
             selector,
-            args.expected_activation_registry_id,
+            expected_registry_id,
             args.expected_active_version_set_id,
         )
         all_raw.append(raw)
-        expected_difficulty = expected_real_difficulty(parent, block, factor)
+        expected_difficulty = expected_policy_difficulty(
+            parent,
+            block,
+            factor,
+            expected_policy_version,
+        )
         actual_difficulty = int(block["difficulty"], 16)
         if actual_difficulty != expected_difficulty:
             raise SystemExit(
@@ -327,6 +362,8 @@ def main():
                     "effective_energy": effective,
                     "level": level,
                     "difficulty_factor_bps": factor,
+                    "difficulty_policy_version": expected_policy_version,
+                    "activation_registry_id": expected_registry_id,
                     "difficulty": actual_difficulty,
                     "reward": LEGACY_BLOCK_REWARD,
                 },

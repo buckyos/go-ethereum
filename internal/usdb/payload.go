@@ -16,6 +16,9 @@ const (
 	ProfileSelectorPayloadVersionV1 byte = 1
 	// DifficultyPolicyVersionV1 identifies the first UIP-0005 difficulty policy.
 	DifficultyPolicyVersionV1 uint16 = 1
+	// DifficultyPolicyVersionActivationConformance is reserved for build-tagged
+	// activation tests. Production builds deliberately reject this version.
+	DifficultyPolicyVersionActivationConformance uint16 = 0xffff
 
 	// PassIDEncodedSize stores a compact inscription outpoint: 32-byte txid + 4-byte index.
 	PassIDEncodedSize = common.HashLength + 4

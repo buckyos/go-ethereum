@@ -13,7 +13,6 @@ type PayloadBuilder struct {
 	client       Client
 	passID       PassID
 	chainConfig  *params.ChainConfig
-	btcRegistry  *btcActivationRegistry
 	queryTimeout time.Duration
 }
 
@@ -28,10 +27,6 @@ func NewPayloadBuilder(client Client, passID string, chainConfig *params.ChainCo
 	if !chainConfig.HasUSDBConsensus() {
 		return nil, fmt.Errorf("chain config has no usdb consensus configuration")
 	}
-	btcRegistry, err := loadBTCActivationRegistry(chainConfig.USDB.BTCActivationRegistryID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid chain-config BTC activation registry: %w", err)
-	}
 	parsedPassID, err := ParsePassID(passID)
 	if err != nil {
 		return nil, err
@@ -43,7 +38,6 @@ func NewPayloadBuilder(client Client, passID string, chainConfig *params.ChainCo
 		client:       client,
 		passID:       parsedPassID,
 		chainConfig:  chainConfig,
-		btcRegistry:  btcRegistry,
 		queryTimeout: queryTimeout,
 	}, nil
 }
@@ -75,15 +69,20 @@ func (b *PayloadBuilder) Close() {
 // BuildCurrentPayload emits a selector for blockNumber only after resolving its
 // consensus policy and validating the configured pass in current state.
 func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64) ([]byte, error) {
-	policy, err := b.chainConfig.USDBConsensusAt(blockNumber)
+	activation, err := b.chainConfig.USDBActivationAt(blockNumber)
 	if err != nil {
 		return nil, err
 	}
-	if policy == nil {
+	if activation == nil {
 		return nil, fmt.Errorf("usdb consensus is not active at block %d", blockNumber)
 	}
+	policy := &activation.Versions
 	if policy.PayloadVersion != ProfileSelectorPayloadVersionV1 {
 		return nil, fmt.Errorf("%w: chain config expects %d, builder supports %d", ErrProfileSelectorVersion, policy.PayloadVersion, ProfileSelectorPayloadVersionV1)
+	}
+	btcRegistry, err := loadBTCActivationRegistry(activation.BTCActivationRegistryID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid chain-config BTC activation registry at block %d: %w", blockNumber, err)
 	}
 
 	queryCtx, cancel := context.WithTimeout(ctx, b.queryTimeout)
@@ -96,11 +95,12 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if systemState == nil {
 		return nil, fmt.Errorf("usdb returned no current system state")
 	}
-	if _, err := b.btcRegistry.validateIdentity(
+	if err := validateCurrentActivationIdentity(
 		systemState.LocalSyncedBlockHeight,
-		systemState.ActivationRegistryID,
 		systemState.ActiveVersionSet,
 		systemState.ActiveVersionSetID,
+		systemState.ActivationRegistryID,
+		btcRegistry,
 	); err != nil {
 		return nil, fmt.Errorf("invalid current usdb activation identity: %w", err)
 	}
@@ -114,13 +114,42 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if err != nil {
 		return nil, err
 	}
-	profile, err := resolveConsensusProfile(queryCtx, b.client, b.btcRegistry, *payload)
+	profile, err := resolveConsensusProfile(queryCtx, b.client, btcRegistry, *payload)
 	if err != nil {
 		return nil, fmt.Errorf("configured pass %s is not valid in current usdb state: %w", b.passID.String(), err)
 	}
-	if profile.View.ExternalState.ActivationRegistryID != systemState.ActivationRegistryID ||
-		profile.View.ExternalState.ActiveVersionSetID != systemState.ActiveVersionSetID {
+	if profile.View.ExternalState.ActiveVersionSetID != systemState.ActiveVersionSetID {
 		return nil, fmt.Errorf("current usdb activation identity changed while building payload")
 	}
 	return payload.MarshalBinary()
+}
+
+func validateCurrentActivationIdentity(
+	btcHeight uint32,
+	activeVersionSet ActiveVersionSet,
+	activeVersionSetID string,
+	actualRegistryID string,
+	expectedRegistry *btcActivationRegistry,
+) error {
+	actualRegistry, err := loadBTCActivationRegistry(actualRegistryID)
+	if err != nil {
+		return fmt.Errorf("current service registry is not in the local catalog: %w", err)
+	}
+	if _, err := actualRegistry.validateIdentity(
+		btcHeight,
+		actualRegistryID,
+		activeVersionSet,
+		activeVersionSetID,
+	); err != nil {
+		return err
+	}
+	if _, err := expectedRegistry.validateIdentity(
+		btcHeight,
+		expectedRegistry.ActivationRegistryID,
+		activeVersionSet,
+		activeVersionSetID,
+	); err != nil {
+		return fmt.Errorf("chain-config registry does not preserve current BTC state: %w", err)
+	}
+	return nil
 }

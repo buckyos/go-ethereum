@@ -10,8 +10,8 @@ import (
 
 func testBuilderChainConfig(payloadVersion byte, difficultyPolicyVersion uint16) *params.ChainConfig {
 	return &params.ChainConfig{USDB: &params.USDBConsensusConfig{
-		BTCActivationRegistryID: BTCRegtestActivationRegistryIDV1,
 		Activations: []params.USDBConsensusActivation{{
+			BTCActivationRegistryID: BTCRegtestActivationRegistryIDV1,
 			Versions: params.USDBConsensusVersions{
 				PayloadVersion:          payloadVersion,
 				DifficultyPolicyVersion: difficultyPolicyVersion,
@@ -68,10 +68,9 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 		profile: newTestProfileView(t, selector, "0", "0"),
 	}
 	config := &params.ChainConfig{USDB: &params.USDBConsensusConfig{
-		BTCActivationRegistryID: BTCRegtestActivationRegistryIDV1,
 		Activations: []params.USDBConsensusActivation{
-			{Block: 0, Versions: params.USDBConsensusVersions{PayloadVersion: 1, DifficultyPolicyVersion: 1}},
-			{Block: 100, Versions: params.USDBConsensusVersions{PayloadVersion: 1, DifficultyPolicyVersion: 2}},
+			{Block: 0, BTCActivationRegistryID: BTCRegtestActivationRegistryIDV1, Versions: params.USDBConsensusVersions{PayloadVersion: 1, DifficultyPolicyVersion: 1}},
+			{Block: 100, BTCActivationRegistryID: BTCRegtestActivationRegistryIDRevision2, Versions: params.USDBConsensusVersions{PayloadVersion: 1, DifficultyPolicyVersion: 2}},
 		},
 	}}
 	builder, err := NewPayloadBuilder(client, selector.PassID.String(), config, 0)
@@ -79,12 +78,14 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 		t.Fatalf("failed to build payload builder: %v", err)
 	}
 	for _, test := range []struct {
-		block uint64
-		want  uint16
+		block        uint64
+		want         uint16
+		wantRegistry string
 	}{
-		{block: 99, want: 1},
-		{block: 100, want: 2},
+		{block: 99, want: 1, wantRegistry: BTCRegtestActivationRegistryIDV1},
+		{block: 100, want: 2, wantRegistry: BTCRegtestActivationRegistryIDRevision2},
 	} {
+		client.profile.ExternalState.ActivationRegistryID = test.wantRegistry
 		encoded, err := builder.BuildCurrentPayload(context.Background(), test.block)
 		if err != nil {
 			t.Fatalf("block %d payload failed: %v", test.block, err)
@@ -95,6 +96,9 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 		}
 		if payload.DifficultyPolicyVersion != test.want {
 			t.Fatalf("block %d used difficulty version %d, want %d", test.block, payload.DifficultyPolicyVersion, test.want)
+		}
+		if client.lastQuery.ExpectedState.ActivationRegistryID != test.wantRegistry {
+			t.Fatalf("block %d queried registry %s, want %s", test.block, client.lastQuery.ExpectedState.ActivationRegistryID, test.wantRegistry)
 		}
 	}
 }
@@ -135,8 +139,12 @@ func TestPayloadBuilderRejectsUnavailableConsensusPolicy(t *testing.T) {
 		t.Fatal("expected nil chain config to be rejected")
 	}
 	unknownRegistry := testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1)
-	unknownRegistry.USDB.BTCActivationRegistryID = repeatHex("99", 32)
-	if _, err := NewPayloadBuilder(&stubProfileClient{}, selector.PassID.String(), unknownRegistry, 0); !errors.Is(err, ErrBTCActivationRegistryNotSupported) {
+	unknownRegistry.USDB.Activations[0].BTCActivationRegistryID = repeatHex("99", 32)
+	unknownBuilder, err := NewPayloadBuilder(&stubProfileClient{}, selector.PassID.String(), unknownRegistry, 0)
+	if err != nil {
+		t.Fatalf("future registry must not fail builder construction: %v", err)
+	}
+	if _, err := unknownBuilder.BuildCurrentPayload(context.Background(), 42); !errors.Is(err, ErrBTCActivationRegistryNotSupported) {
 		t.Fatalf("expected unknown chain-config registry to fail closed, got %v", err)
 	}
 	tests := []struct {

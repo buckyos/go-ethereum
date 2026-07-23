@@ -1,9 +1,11 @@
 {
-  "schema_version": "uip-0008-go-btc-activation-golden:v1",
+  "schema_version": "uip-0008-go-btc-activation-golden:v2",
   "source_registry_schema_version": "uip-0008-btc-activation-registry:v1",
   "registries": [
     {
       "network_id": "btc-mainnet",
+      "revision": 1,
+      "current": true,
       "activation_registry_id": "bb751626eb1415bbc349e77f58cb412908584842cbf7d786262b7bd1f6a7d39e",
       "activations": [
         {
@@ -25,7 +27,32 @@
     },
     {
       "network_id": "btc-regtest",
+      "revision": 1,
+      "current": true,
       "activation_registry_id": "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d",
+      "activations": [
+        {
+          "btc_height": 0,
+          "active_version_set": {
+            "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
+            "pass_state_machine_version": "uip-0002-pass-state-machine:v1",
+            "energy_formula_version": "uip-0003-pass-energy-formula:v1",
+            "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
+            "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1"
+          },
+          "active_version_set_id": "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
+        }
+      ]
+    },
+    {
+      "network_id": "btc-regtest",
+      "revision": 2,
+      "current": false,
+      "activation_registry_id": "25a39e8022e8351a40f59736b86cf81321c08042121cdb74b85a8f3918a2b973",
       "activations": [
         {
           "btc_height": 0,

@@ -11,7 +11,7 @@ The built-in development chain activates these policies from USDB block `0`:
 
 - `payload_version = 1`
 - `difficulty_policy_version = 1`
-- `btcActivationRegistryId = 22d820e6...aaf83d` (`btc-regtest`)
+- activation record `btcActivationRegistryId = 22d820e6...aaf83d` (`btc-regtest` revision 1)
 
 The remaining UIP-0009 version families are present in the chain-config
 activation record but remain `0` until their defining UIP is implemented. In
@@ -57,7 +57,7 @@ thresholds, and rounding cannot drift between scenarios.
 For every mined block the common validator checks:
 
 - `header.Extra` is exactly 107 bytes.
-- `payload_version` and `difficulty_policy_version` are both `1`.
+- `payload_version = 1`; the normal runners require `difficulty_policy_version = 1`, while the activation runner selects the expected policy from the USDB block.
 - `btc_height`, `snapshot_id`, `system_state_id`, and `pass_id` reproduce one
   exact historical UIP-0006 profile.
 - `activation_registry_id` equals the chain-config-bound `btc-regtest` registry.
@@ -103,6 +103,18 @@ For every mined block the common validator checks:
 - Replays old selectors against their committed historical state rather than the
   new BTC head.
 
+### Activation Upgrade and Binary Restart
+
+`scripts/usdb/run_usdb_activation_upgrade_e2e.sh`
+
+- Builds one default geth and one `usdb_activation_conformance` geth.
+- Adds a test-only block-4 activation that selects BTC regtest registry revision
+  2 and reserved difficulty policy `65535`.
+- Requires the default binary to mine blocks 1-3 and fail closed at block 4.
+- Restarts the tagged binary on the same datadir and mines through the activation.
+- Replays every profile with the per-block registry revision and independently
+  checks the test policy's deterministic `v1 difficulty + 1` result.
+
 ## Fail-Closed Matrix
 
 Rust and Go unit/integration tests cover exact codec boundaries, activation
@@ -114,18 +126,17 @@ same-height state replacement, service timeout, selector-field tampering, and
 miner/validator difficulty agreement. The Rust generator `--check` command
 cross-checks the committed Go artifact against both Rust registry files.
 
-The next live-only additions should reuse the same common validator and cover:
+The remaining live-only additions should reuse the same common validator and cover:
 
 - stopping usdb-indexer while mining and syncing;
 - tampering each selector field in an imported block fixture;
 - replacing the referenced BTC state at the same height and proving the old
   selector is rejected;
-- activation-boundary replay after a second supported policy version exists.
+- fresh-validator peer sync across the test-only activation boundary.
 
-The last item cannot be a production-like live test while the only implemented
-and active formula set is v1. Until a second supported version exists, the
-cross-activation rollback/restart behavior is covered with synthetic Rust/Go
-registries and fail-closed v2 dispatch tests.
+Production still has only policy v1. The reserved policy `65535` is compiled only
+with `usdb_activation_conformance`; normal binaries reject it. This proves the
+activation machinery without defining or accidentally shipping a mock production v2.
 
 ## Latest Execution
 
@@ -137,6 +148,10 @@ On 2026-07-22 the current-source geth binary and BTC-side services completed:
   after BTC advanced from height 134 to 137 and raw energy changed from 0 to
   2000, a fresh node 2 synchronized the same head and replayed all height-134
   profiles successfully.
+- `run_usdb_activation_upgrade_e2e.sh`: the default binary stopped at block 3;
+  the tagged binary reused the datadir and mined through block 13. Blocks 1-3
+  replayed registry revision 1/policy 1, while blocks 4-13 replayed revision
+  2/policy 65535 with exact profile, difficulty, and reward agreement.
 
 ## Deferred Policy Work
 
@@ -144,6 +159,6 @@ On 2026-07-22 the current-source geth binary and BTC-side services completed:
   and issued-supply state transitions.
 - UIP-0014 defines quote activity and the candidate difficulty factor. Until it
   activates, difficulty v1 uses the nominal UIP-0006 factor.
-- A real cross-activation live scenario remains deferred until a second formula
-  or policy version is implemented and intentionally activated in a test-only
-  network configuration.
+- A production-version cross-activation scenario remains deferred until a real
+  second formula or policy is specified. The test-only tagged scenario remains a
+  permanent activation/restart conformance gate.

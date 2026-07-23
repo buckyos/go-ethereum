@@ -20,6 +20,7 @@ RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-90}
 BLOCK_WAIT_SECONDS=${BLOCK_WAIT_SECONDS:-180}
 ENERGY_TOPUP_AMOUNT_BTC=${ENERGY_TOPUP_AMOUNT_BTC:-1.0}
 ENERGY_GROWTH_BLOCKS=${ENERGY_GROWTH_BLOCKS:-2}
+ACTIVATION_CONFORMANCE_BLOCK=${ACTIVATION_CONFORMANCE_BLOCK:-}
 
 USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x1111111111111111111111111111111111111111}
 MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$USDB_CHAIN_MINER_ADDRESS}
@@ -49,11 +50,23 @@ export REGTEST_LOG_PREFIX="[usdb-profile-e2e/usdb]"
 
 GETH_BIN=${GETH_BIN:-}
 GETH_GO=${GETH_GO:-/usr/local/go/bin/go}
+PRE_ACTIVATION_GETH_BIN=${PRE_ACTIVATION_GETH_BIN:-}
+POST_ACTIVATION_GETH_BIN=${POST_ACTIVATION_GETH_BIN:-}
 
 if [[ -n "$GETH_BIN" ]]; then
   GETH_CMD=("$GETH_BIN")
 else
   GETH_CMD=("$GETH_GO" run -ldflags=-checklinkname=0 ./cmd/geth)
+fi
+if [[ -n "$PRE_ACTIVATION_GETH_BIN" ]]; then
+  PRE_ACTIVATION_GETH_CMD=("$PRE_ACTIVATION_GETH_BIN")
+else
+  PRE_ACTIVATION_GETH_CMD=("${GETH_CMD[@]}")
+fi
+if [[ -n "$POST_ACTIVATION_GETH_BIN" ]]; then
+  POST_ACTIVATION_GETH_CMD=("$POST_ACTIVATION_GETH_BIN")
+else
+  POST_ACTIVATION_GETH_CMD=("${GETH_CMD[@]}")
 fi
 
 # shellcheck source=/dev/null
@@ -117,6 +130,55 @@ usdb_chain_stop_mining() {
   usdb_chain_rpc_call "miner_stop" "[]" >/dev/null || true
 }
 
+usdb_chain_start_node() {
+  local append_log="$1"
+  shift
+  local -a command=("$@")
+  if [[ "$append_log" != "true" ]]; then
+    : >"$GETH_LOG_FILE"
+  fi
+  (
+    cd "$ROOT_DIR"
+    exec "${command[@]}" \
+      --datadir "$DATADIR" \
+      --networkid "$NETWORK_ID" \
+      --http \
+      --http.addr "$HTTP_ADDR" \
+      --http.port "$HTTP_PORT" \
+      --http.api eth,net,web3,admin,miner,txpool \
+      --authrpc.addr "$HTTP_ADDR" \
+      --authrpc.port "$AUTHRPC_PORT" \
+      --port "$P2P_PORT" \
+      --nodiscover \
+      --maxpeers 0 \
+      --mine \
+      --miner.threads 1 \
+      --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
+      --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
+      --miner.usdb.passid "$pass_id" \
+      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
+  ) >>"$GETH_LOG_FILE" 2>&1 &
+  GETH_PID=$!
+}
+
+usdb_chain_current_height() {
+  usdb_chain_rpc_call "eth_blockNumber" "[]" |
+    python3 -c 'import json,sys; print(int((json.load(sys.stdin).get("result") or "0x0"), 16))'
+}
+
+usdb_chain_wait_log_pattern() {
+  local pattern="$1"
+  local deadline=$((SECONDS + RPC_WAIT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if [[ -f "$GETH_LOG_FILE" ]] && grep -Fq "$pattern" "$GETH_LOG_FILE"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for geth log pattern: ${pattern}" >&2
+  return 1
+}
+
 usdb_chain_stop_residual_nodes() {
   while IFS= read -r pid; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -159,13 +221,19 @@ verify_profile_blocks() {
   local balance_hex="$3"
   local expected_pass_id="$4"
 
+  local -a activation_args=()
+  if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
+    activation_args+=(--activation-conformance-block "$ACTIVATION_CONFORMANCE_BLOCK")
+  fi
+
   python3 "$ROOT_DIR/scripts/usdb/verify_usdb_profile_e2e.py" \
     --blocks "$blocks_file" \
     --coinbase "$coinbase" \
     --balance-hex "$balance_hex" \
     --usdb-chain-rpc-url "http://${HTTP_ADDR}:${HTTP_PORT}" \
     --usdb-indexer-rpc-url "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
-    --expected-pass-id "$expected_pass_id"
+    --expected-pass-id "$expected_pass_id" \
+    "${activation_args[@]}"
 }
 
 main() {
@@ -175,6 +243,16 @@ main() {
   regtest_require_cmd cargo
   regtest_require_cmd curl
   regtest_require_cmd python3
+  if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
+    if (( ACTIVATION_CONFORMANCE_BLOCK < 2 )); then
+      echo "ACTIVATION_CONFORMANCE_BLOCK must be at least 2" >&2
+      exit 1
+    fi
+    if (( TARGET_BLOCKS <= ACTIVATION_CONFORMANCE_BLOCK )); then
+      echo "TARGET_BLOCKS must be after ACTIVATION_CONFORMANCE_BLOCK" >&2
+      exit 1
+    fi
+  fi
   regtest_assert_ord_server_port_available
   if [[ ! -x "$ORD_BIN" ]]; then
     echo "Missing required ORD_BIN executable: $ORD_BIN" >&2
@@ -272,34 +350,38 @@ EOF
 
   usdb_chain_log "Generating canonical USDB genesis"
   run_geth dumpgenesis --usdb >"$GENESIS_JSON"
+  if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
+    usdb_chain_log "Adding test-only activation at USDB block ${ACTIVATION_CONFORMANCE_BLOCK}"
+    python3 "$ROOT_DIR/scripts/usdb/configure_usdb_activation_conformance_genesis.py" \
+      --genesis "$GENESIS_JSON" \
+      --activation-block "$ACTIVATION_CONFORMANCE_BLOCK"
+  fi
   usdb_chain_log "Initializing USDB-chain datadir ${DATADIR}"
   run_geth init --datadir "$DATADIR" "$GENESIS_JSON" >/dev/null
 
-  usdb_chain_log "Starting USDB-chain node with USDB profile/difficulty integration"
-  (
-    cd "$ROOT_DIR"
-    exec "${GETH_CMD[@]}" \
-      --datadir "$DATADIR" \
-      --networkid "$NETWORK_ID" \
-      --http \
-      --http.addr "$HTTP_ADDR" \
-      --http.port "$HTTP_PORT" \
-      --http.api eth,net,web3,admin,miner,txpool \
-      --authrpc.addr "$HTTP_ADDR" \
-      --authrpc.port "$AUTHRPC_PORT" \
-      --port "$P2P_PORT" \
-      --nodiscover \
-      --maxpeers 0 \
-      --mine \
-      --miner.threads 1 \
-      --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
-      --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
-      --miner.usdb.passid "$pass_id" \
-      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
-  ) >"$GETH_LOG_FILE" 2>&1 &
-  GETH_PID=$!
-
-  usdb_chain_wait_rpc_ready
+  if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
+    local pre_activation_height=$((ACTIVATION_CONFORMANCE_BLOCK - 1)) stalled_height
+    usdb_chain_log "Starting default binary before the test activation"
+    usdb_chain_start_node false "${PRE_ACTIVATION_GETH_CMD[@]}"
+    usdb_chain_wait_rpc_ready
+    usdb_chain_wait_block_height "$pre_activation_height" >/dev/null
+    usdb_chain_wait_log_pattern "unsupported usdb difficulty policy version 65535"
+    stalled_height="$(usdb_chain_current_height)"
+    if (( stalled_height != pre_activation_height )); then
+      echo "Default binary crossed activation boundary: have ${stalled_height}, want ${pre_activation_height}" >&2
+      exit 1
+    fi
+    usdb_chain_log "Default binary failed closed at block ${ACTIVATION_CONFORMANCE_BLOCK}; restarting tagged binary"
+    regtest_stop_process "$GETH_PID"
+    GETH_PID=""
+    sleep 1
+    usdb_chain_start_node true "${POST_ACTIVATION_GETH_CMD[@]}"
+    usdb_chain_wait_rpc_ready
+  else
+    usdb_chain_log "Starting USDB-chain node with USDB profile/difficulty integration"
+    usdb_chain_start_node false "${GETH_CMD[@]}"
+    usdb_chain_wait_rpc_ready
+  fi
   final_block_height="$(usdb_chain_wait_block_height "$TARGET_BLOCKS")"
   usdb_chain_log "USDB chain reached block height ${final_block_height}; stopping mining for deterministic verification"
   usdb_chain_stop_mining

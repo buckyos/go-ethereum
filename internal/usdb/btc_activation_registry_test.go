@@ -15,15 +15,19 @@ func TestGeneratedBTCActivationGoldenMatchesRustRegistryIDs(t *testing.T) {
 	for _, test := range []struct {
 		networkID  string
 		registryID string
+		revision   uint32
+		current    bool
 	}{
-		{networkID: "btc-mainnet", registryID: BTCMainnetActivationRegistryIDV1},
-		{networkID: "btc-regtest", registryID: BTCRegtestActivationRegistryIDV1},
+		{networkID: "btc-mainnet", registryID: BTCMainnetActivationRegistryIDV1, revision: 1, current: true},
+		{networkID: "btc-regtest", registryID: BTCRegtestActivationRegistryIDV1, revision: 1, current: true},
+		{networkID: "btc-regtest", registryID: BTCRegtestActivationRegistryIDRevision2, revision: 2},
 	} {
 		registry, err := loadBTCActivationRegistry(test.registryID)
 		if err != nil {
 			t.Fatalf("failed to load %s golden registry: %v", test.networkID, err)
 		}
-		if registry.NetworkID != test.networkID || registry.ActivationRegistryID != test.registryID {
+		if registry.NetworkID != test.networkID || registry.ActivationRegistryID != test.registryID ||
+			registry.Revision != test.revision || registry.Current != test.current {
 			t.Fatalf("unexpected golden registry: %+v", registry)
 		}
 		for _, height := range []uint32{0, 1, ^uint32(0)} {
@@ -36,8 +40,8 @@ func TestGeneratedBTCActivationGoldenMatchesRustRegistryIDs(t *testing.T) {
 			}
 		}
 	}
-	if params.USDBChainConfig.USDB.BTCActivationRegistryID != BTCRegtestActivationRegistryIDV1 {
-		t.Fatalf("built-in USDB chain config is not bound to the generated regtest registry: %s", params.USDBChainConfig.USDB.BTCActivationRegistryID)
+	if params.USDBChainConfig.USDB.Activations[0].BTCActivationRegistryID != BTCRegtestActivationRegistryIDV1 {
+		t.Fatalf("built-in USDB chain config is not bound to the generated regtest registry: %s", params.USDBChainConfig.USDB.Activations[0].BTCActivationRegistryID)
 	}
 }
 
@@ -112,6 +116,8 @@ func TestBTCActivationGoldenReloadPreservesCrossActivationReplay(t *testing.T) {
 		SourceRegistrySchemaVersion: btcActivationRegistrySchemaV1,
 		Registries: []btcActivationRegistry{{
 			NetworkID:            "btc-restart-test",
+			Revision:             1,
+			Current:              true,
 			ActivationRegistryID: registryID,
 			Activations: []btcActivationPoint{
 				{BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID},
@@ -146,6 +152,62 @@ func TestBTCActivationGoldenReloadPreservesCrossActivationReplay(t *testing.T) {
 				t.Fatalf("height %d returned %s, want %s", test.height, activation.ActiveVersionSetID, test.wantID)
 			}
 		})
+	}
+}
+
+func TestBTCActivationGoldenCatalogRetainsImmutableRevisions(t *testing.T) {
+	v1 := newTestActiveVersionSet(t)
+	v1ID, err := v1.ID()
+	if err != nil {
+		t.Fatalf("failed to identify v1 set: %v", err)
+	}
+	oldID := strings.Repeat("a", 64)
+	currentID := strings.Repeat("b", 64)
+	artifact := btcActivationGoldenArtifact{
+		SchemaVersion:               goActivationGoldenSchemaVersion,
+		SourceRegistrySchemaVersion: btcActivationRegistrySchemaV1,
+		Registries: []btcActivationRegistry{
+			{
+				NetworkID:            "btc-regtest-revisions",
+				Revision:             1,
+				ActivationRegistryID: oldID,
+				Activations: []btcActivationPoint{{
+					BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID,
+				}},
+			},
+			{
+				NetworkID:            "btc-regtest-revisions",
+				Revision:             2,
+				Current:              true,
+				ActivationRegistryID: currentID,
+				Activations: []btcActivationPoint{{
+					BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID,
+				}},
+			},
+		},
+	}
+	encoded, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatalf("failed to encode revision catalog: %v", err)
+	}
+	registries, err := parseBTCActivationGolden(encoded)
+	if err != nil {
+		t.Fatalf("failed to parse revision catalog: %v", err)
+	}
+	if registries[oldID] == nil || registries[currentID] == nil {
+		t.Fatalf("revision catalog did not retain both registry ids: %+v", registries)
+	}
+
+	rewritten := artifact
+	rewritten.Registries = append([]btcActivationRegistry(nil), artifact.Registries...)
+	rewritten.Registries[1].Activations = append([]btcActivationPoint(nil), artifact.Registries[1].Activations...)
+	rewritten.Registries[1].Activations[0].BTCHeight = 1
+	encoded, err = json.Marshal(rewritten)
+	if err != nil {
+		t.Fatalf("failed to encode rewritten catalog: %v", err)
+	}
+	if _, err := parseBTCActivationGolden(encoded); err == nil || !strings.Contains(err.Error(), "rewrites activation index") {
+		t.Fatalf("expected historical revision rewrite to fail, got %v", err)
 	}
 }
 
@@ -184,8 +246,7 @@ func TestVerifierDispatchesFormulaFromPayloadHeight(t *testing.T) {
 	beforeProfile := newTestProfileView(t, before, "1", "0")
 	beforeProfile.ExternalState.ActivationRegistryID = registryID
 	beforeClient := &stubProfileClient{profile: beforeProfile}
-	beforeVerifier := &Verifier{client: beforeClient, btcRegistry: registry, queryTimeout: DefaultQueryTimeout}
-	if _, err := beforeVerifier.ResolveProfile(context.Background(), marshalTestSelector(t, before)); err != nil {
+	if _, err := resolveConsensusProfile(context.Background(), beforeClient, registry, before); err != nil {
 		t.Fatalf("v1 profile before activation boundary failed: %v", err)
 	}
 	if beforeClient.lastQuery.ExpectedState.ActiveVersionSetID != v1ID {
@@ -198,8 +259,7 @@ func TestVerifierDispatchesFormulaFromPayloadHeight(t *testing.T) {
 	afterProfile.ExternalState.ActiveVersionSet = v2
 	afterProfile.ExternalState.ActiveVersionSetID = v2ID
 	afterClient := &stubProfileClient{profile: afterProfile}
-	afterVerifier := &Verifier{client: afterClient, btcRegistry: registry, queryTimeout: DefaultQueryTimeout}
-	if _, err := afterVerifier.ResolveProfile(context.Background(), marshalTestSelector(t, after)); !errors.Is(err, ErrUnsupportedBTCFormulaVersion) {
+	if _, err := resolveConsensusProfile(context.Background(), afterClient, registry, after); !errors.Is(err, ErrUnsupportedBTCFormulaVersion) {
 		t.Fatalf("expected v2 formula selected at activation boundary to fail closed, got %v", err)
 	}
 	if afterClient.lastQuery.ExpectedState.ActiveVersionSetID != v2ID {

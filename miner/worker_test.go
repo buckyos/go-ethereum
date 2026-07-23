@@ -228,8 +228,8 @@ func (s *stubPayloadBuilder) Close() {}
 func testWorkerUSDBChainConfig() *params.ChainConfig {
 	config := *params.AllEthashProtocolChanges
 	config.USDB = &params.USDBConsensusConfig{
-		BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
 		Activations: []params.USDBConsensusActivation{{
+			BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
 			Versions: params.USDBConsensusVersions{
 				PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
 				DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,

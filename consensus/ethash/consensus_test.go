@@ -295,13 +295,15 @@ func (s *stubChainHeaderReader) GetHeaderByHash(common.Hash) *types.Header { ret
 func (s *stubChainHeaderReader) GetTd(common.Hash, uint64) *big.Int        { return nil }
 
 type stubProfileResolver struct {
-	resolved  *usdb.ResolvedConsensusProfile
-	err       error
-	lastExtra []byte
-	calls     int
+	resolved     *usdb.ResolvedConsensusProfile
+	err          error
+	lastRegistry string
+	lastExtra    []byte
+	calls        int
 }
 
-func (s *stubProfileResolver) ResolveProfile(_ context.Context, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error) {
+func (s *stubProfileResolver) ResolveProfile(_ context.Context, btcActivationRegistryID string, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error) {
+	s.lastRegistry = btcActivationRegistryID
 	s.lastExtra = append([]byte(nil), headerExtra...)
 	s.calls++
 	if s.err != nil {
@@ -324,9 +326,14 @@ func newTestStateDB(t *testing.T) *state.StateDB {
 
 func newTestPayloadBytes(t *testing.T) []byte {
 	t.Helper()
+	return newTestPayloadBytesForDifficultyVersion(t, usdb.DifficultyPolicyVersionV1)
+}
+
+func newTestPayloadBytesForDifficultyVersion(t *testing.T, difficultyPolicyVersion uint16) []byte {
+	t.Helper()
 
 	payload, err := usdb.NewProfileSelectorPayload(
-		usdb.DifficultyPolicyVersionV1,
+		difficultyPolicyVersion,
 		123,
 		common.HexToHash("0x1111").Hex()[2:],
 		common.HexToHash("0x2222").Hex()[2:],
@@ -346,8 +353,8 @@ func newTestUSDBChainConfig() *params.ChainConfig {
 	return &params.ChainConfig{
 		HomesteadBlock: big.NewInt(0),
 		USDB: &params.USDBConsensusConfig{
-			BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
 			Activations: []params.USDBConsensusActivation{{
+				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
 					DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
@@ -413,7 +420,8 @@ func TestVerifyHeaderValidatesUsdbProfileSelectorBeforeResolution(t *testing.T) 
 func TestVerifyHeaderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 	config := newTestUSDBChainConfig()
 	config.USDB.Activations = append(config.USDB.Activations, params.USDBConsensusActivation{
-		Block: 2,
+		Block:                   2,
+		BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
 		Versions: params.USDBConsensusVersions{
 			PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
 			DifficultyPolicyVersion: 2,

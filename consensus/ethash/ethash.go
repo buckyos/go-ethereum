@@ -482,7 +482,7 @@ type Ethash struct {
 
 type consensusProfileResolver interface {
 	// ResolveProfile reconstructs the selector-bound UIP-0006 economic profile.
-	ResolveProfile(ctx context.Context, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error)
+	ResolveProfile(ctx context.Context, btcActivationRegistryID string, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error)
 	// Close releases any verifier-owned resources such as RPC connections.
 	Close()
 }

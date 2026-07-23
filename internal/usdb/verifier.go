@@ -40,25 +40,19 @@ type ResolvedConsensusProfile struct {
 // Verifier resolves historical consensus profiles from the usdb-indexer RPC surface.
 type Verifier struct {
 	client       Client
-	btcRegistry  *btcActivationRegistry
 	queryTimeout time.Duration
 }
 
 // NewVerifier constructs a verifier from an already-configured USDB client.
-func NewVerifier(client Client, btcActivationRegistryID string, queryTimeout time.Duration) (*Verifier, error) {
+func NewVerifier(client Client, queryTimeout time.Duration) (*Verifier, error) {
 	if client == nil {
 		return nil, fmt.Errorf("nil usdb client")
-	}
-	btcRegistry, err := loadBTCActivationRegistry(btcActivationRegistryID)
-	if err != nil {
-		return nil, err
 	}
 	if queryTimeout <= 0 {
 		queryTimeout = DefaultQueryTimeout
 	}
 	return &Verifier{
 		client:       client,
-		btcRegistry:  btcRegistry,
 		queryTimeout: queryTimeout,
 	}, nil
 }
@@ -68,9 +62,6 @@ func NewRPCVerifier(endpoint string, chainConfig *params.ChainConfig, queryTimeo
 	if chainConfig == nil || !chainConfig.HasUSDBConsensus() {
 		return nil, fmt.Errorf("chain config has no usdb consensus configuration")
 	}
-	if _, err := loadBTCActivationRegistry(chainConfig.USDB.BTCActivationRegistryID); err != nil {
-		return nil, fmt.Errorf("invalid chain-config BTC activation registry: %w", err)
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeout)
 	defer cancel()
 
@@ -78,7 +69,7 @@ func NewRPCVerifier(endpoint string, chainConfig *params.ChainConfig, queryTimeo
 	if err != nil {
 		return nil, err
 	}
-	verifier, err := NewVerifier(client, chainConfig.USDB.BTCActivationRegistryID, queryTimeout)
+	verifier, err := NewVerifier(client, queryTimeout)
 	if err != nil {
 		client.Close()
 		return nil, err
@@ -93,10 +84,15 @@ func (v *Verifier) Close() {
 	}
 }
 
-// ResolveProfile decodes header.Extra and validates its historical UIP-0006 profile.
-func (v *Verifier) ResolveProfile(ctx context.Context, headerExtra []byte) (*ResolvedConsensusProfile, error) {
+// ResolveProfile decodes header.Extra and validates its historical UIP-0006
+// profile against the BTC registry revision selected by the USDB block.
+func (v *Verifier) ResolveProfile(ctx context.Context, btcActivationRegistryID string, headerExtra []byte) (*ResolvedConsensusProfile, error) {
 	if len(headerExtra) == 0 {
 		return nil, ErrMissingProfileSelector
+	}
+	btcRegistry, err := loadBTCActivationRegistry(btcActivationRegistryID)
+	if err != nil {
+		return nil, err
 	}
 	var selector ProfileSelectorPayload
 	if err := selector.UnmarshalBinary(headerExtra); err != nil {
@@ -105,7 +101,7 @@ func (v *Verifier) ResolveProfile(ctx context.Context, headerExtra []byte) (*Res
 
 	queryCtx, cancel := context.WithTimeout(ctx, v.queryTimeout)
 	defer cancel()
-	return resolveConsensusProfile(queryCtx, v.client, v.btcRegistry, selector)
+	return resolveConsensusProfile(queryCtx, v.client, btcRegistry, selector)
 }
 
 func resolveConsensusProfile(ctx context.Context, client Client, btcRegistry *btcActivationRegistry, selector ProfileSelectorPayload) (*ResolvedConsensusProfile, error) {
