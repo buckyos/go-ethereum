@@ -106,6 +106,17 @@ For every mined block the common validator checks:
 - Replays old selectors against their committed historical state rather than the
   new BTC head.
 
+### Same-Height BTC State Replacement
+
+`scripts/usdb/run_usdb_profile_same_height_replacement_e2e.sh`
+
+- Mines a USDB chain whose selectors reference one BTC snapshot.
+- Invalidates the referenced BTC tip and mines a different block at the same
+  height.
+- Confirms the BTC snapshot identity changes even though the height does not.
+- Starts a fresh validator and requires it to reject the stale selector with
+  `SNAPSHOT_ID_MISMATCH` without importing any post-genesis block.
+
 ### Activation Upgrade and Binary Restart
 
 `scripts/usdb/run_usdb_activation_upgrade_e2e.sh`
@@ -117,6 +128,21 @@ For every mined block the common validator checks:
 - Restarts the tagged binary on the same datadir and mines through the activation.
 - Replays every profile with the per-block registry revision and independently
   checks the test policy's deterministic `v1 difficulty + 1` result.
+- Starts an independent tagged validator from genesis and requires it to accept
+  the complete activation-spanning chain at the same height and head hash.
+
+### Indexer Outage and Selector Tampering
+
+`scripts/usdb/run_usdb_profile_failure_matrix_e2e.sh`
+
+- Stops usdb-indexer while both the miner and a fresh validator are running.
+- Requires mining to stop and the validator to remain at genesis while the
+  consensus dependency is unavailable.
+- Restarts usdb-indexer and requires both nodes to recover to the same head.
+- Exports one canonical block and imports it into a clean datadir as a control.
+- Mutates each selector field independently and requires offline import to
+  reject `payload_version`, `difficulty_policy_version`, `btc_height`,
+  `snapshot_id`, `system_state_id`, and `pass_id` with the expected reason.
 
 ## Fail-Closed Matrix
 
@@ -129,13 +155,12 @@ same-height state replacement, service timeout, selector-field tampering, and
 miner/validator difficulty agreement. The Rust generator `--check` command
 cross-checks the committed Go artifact against both Rust registry files.
 
-The remaining live-only additions should reuse the same common validator and cover:
-
-- stopping usdb-indexer while mining and syncing;
-- tampering each selector field in an imported block fixture;
-- replacing the referenced BTC state at the same height and proving the old
-  selector is rejected;
-- fresh-validator peer sync across the test-only activation boundary.
+The live runners now cover service outage/recovery, all selector-field tampering,
+same-height BTC state replacement, historical replay after BTC head advancement,
+and fresh-validator sync across the test-only activation boundary. Offline
+`import` and `export` expose the same validator RPC URL and timeout controls as a
+running node; a failed `import --nocompaction` returns a nonzero status so the
+matrix cannot mistake a logged consensus error for success.
 
 Production still has only policy v1. The reserved policy `65535` is compiled only
 with `usdb_activation_conformance`; normal binaries reject it. This proves the
@@ -143,18 +168,32 @@ activation machinery without defining or accidentally shipping a mock production
 
 ## Latest Execution
 
-On 2026-07-22 the current-source geth binary and BTC-side services completed:
+On 2026-07-23 the current-source geth binary and BTC-side services completed:
 
-- `run_usdb_profile_e2e.sh`: 13 mined USDB blocks, with every profile matching
+- `run_usdb_profile_e2e.sh`: 10 mined USDB blocks, with every profile matching
   the regtest registry/set golden and every difficulty/reward recomputation.
+- `run_usdb_profile_energy_growth_e2e.sh`: 12 blocks across zero-energy and
+  2000-energy stages, with selector/profile/difficulty/reward agreement.
 - `run_usdb_profile_historical_stability_e2e.sh`: 12 blocks mined by node 1;
   after BTC advanced from height 134 to 137 and raw energy changed from 0 to
   2000, a fresh node 2 synchronized the same head and replayed all height-134
   profiles successfully.
+- `run_usdb_profile_same_height_replacement_e2e.sh`: replaced the referenced BTC
+  block without changing height; the snapshot ID changed and a fresh validator
+  rejected the stale 11-block chain with `SNAPSHOT_ID_MISMATCH`.
+- `run_usdb_profile_failure_matrix_e2e.sh`: mining stalled at block 16 while
+  usdb-indexer was down, recovered to block 18 after restart, and the fresh
+  validator reached the same head. The canonical import control succeeded and
+  all six independently tampered selector fields were rejected.
 - `run_usdb_activation_upgrade_e2e.sh`: the default binary stopped at block 3;
-  the tagged binary reused the datadir and mined through block 13. Blocks 1-3
-  replayed registry revision 1/policy 1, while blocks 4-13 replayed revision
-  2/policy 65535 with exact profile, difficulty, and reward agreement.
+  the tagged binary reused the datadir and mined through block 19. Blocks 1-3
+  replayed registry revision 1/policy 1, while blocks 4-19 replayed revision
+  2/policy 65535 with exact profile, difficulty, and reward agreement. An
+  independent tagged validator replayed the complete chain to the identical
+  height and head hash.
+- The normal and `usdb_activation_conformance` Go regression suites passed for
+  `internal/usdb`, `consensus/ethash`, `miner`, `params`, `cmd/utils`,
+  `cmd/geth`, and `scripts/usdb`.
 
 ## Deferred Policy Work
 

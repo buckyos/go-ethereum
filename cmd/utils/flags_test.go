@@ -124,6 +124,23 @@ func TestSetEthashAppliesUSDBFlags(t *testing.T) {
 	}
 }
 
+func TestSetEthashUSDBIndexerAppliesOfflineChainFlags(t *testing.T) {
+	ctx := newCLIContext(t, []cli.Flag{
+		EthashUSDBIndexerRPCURLFlag,
+		EthashUSDBIndexerTimeoutFlag,
+	}, "--ethash.usdb-indexer.rpcurl", "http://127.0.0.1:28548", "--ethash.usdb-indexer.timeout", "7s")
+
+	cfg := ethconfig.Defaults.Ethash
+	setEthashUSDBIndexer(ctx, &cfg)
+
+	if cfg.USDBIndexer.RPCURL != "http://127.0.0.1:28548" {
+		t.Fatalf("unexpected offline-chain usdb-indexer rpc url: %s", cfg.USDBIndexer.RPCURL)
+	}
+	if cfg.USDBIndexer.QueryTimeout != 7*time.Second {
+		t.Fatalf("unexpected offline-chain usdb-indexer timeout: %s", cfg.USDBIndexer.QueryTimeout)
+	}
+}
+
 func TestMakeGenesisReturnsUSDBGenesis(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{USDBFlag}, "--usdb")
 

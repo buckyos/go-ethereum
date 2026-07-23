@@ -21,9 +21,21 @@ BLOCK_WAIT_SECONDS=${BLOCK_WAIT_SECONDS:-180}
 ENERGY_TOPUP_AMOUNT_BTC=${ENERGY_TOPUP_AMOUNT_BTC:-1.0}
 ENERGY_GROWTH_BLOCKS=${ENERGY_GROWTH_BLOCKS:-2}
 ACTIVATION_CONFORMANCE_BLOCK=${ACTIVATION_CONFORMANCE_BLOCK:-}
+INDEXER_OUTAGE_CHECK=${INDEXER_OUTAGE_CHECK:-0}
+SELECTOR_TAMPER_CHECK=${SELECTOR_TAMPER_CHECK:-0}
+ACTIVATION_FRESH_VALIDATOR_CHECK=${ACTIVATION_FRESH_VALIDATOR_CHECK:-0}
+OUTAGE_OBSERVE_SECONDS=${OUTAGE_OBSERVE_SECONDS:-4}
+USDB_QUERY_TIMEOUT=${USDB_QUERY_TIMEOUT:-1s}
 
 USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x1111111111111111111111111111111111111111}
 MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$USDB_CHAIN_MINER_ADDRESS}
+
+VALIDATOR_DATADIR=${VALIDATOR_DATADIR:-"$USDB_CHAIN_WORK_DIR/validator"}
+VALIDATOR_LOG_FILE=${VALIDATOR_LOG_FILE:-"$USDB_CHAIN_WORK_DIR/validator.log"}
+VALIDATOR_HTTP_ADDR=${VALIDATOR_HTTP_ADDR:-127.0.0.1}
+VALIDATOR_HTTP_PORT=${VALIDATOR_HTTP_PORT:-19546}
+VALIDATOR_P2P_PORT=${VALIDATOR_P2P_PORT:-31314}
+VALIDATOR_AUTHRPC_PORT=${VALIDATOR_AUTHRPC_PORT:-19552}
 
 export REPO_ROOT="${USDB_REPO_DIR}"
 export WORK_DIR="${E2E_WORK_DIR}/usdb"
@@ -92,6 +104,20 @@ usdb_chain_rpc_call() {
     --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"${method}\",\"params\":${params}}"
 }
 
+usdb_chain_rpc_call_url() {
+  local url="$1"
+  local method="$2"
+  local params="${3:-[]}"
+  curl -s --connect-timeout 2 --max-time 8 \
+    -X POST "$url" \
+    -H 'content-type: application/json' \
+    --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"${method}\",\"params\":${params}}"
+}
+
+usdb_chain_validator_required() {
+  [[ "$INDEXER_OUTAGE_CHECK" == "1" || "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]]
+}
+
 usdb_chain_wait_rpc_ready() {
   local expected_chain_id
   expected_chain_id="$(printf '0x%x' "$NETWORK_ID")"
@@ -105,6 +131,23 @@ usdb_chain_wait_rpc_ready() {
     sleep 1
   done
   echo "Timed out waiting for USDB-chain RPC at http://${HTTP_ADDR}:${HTTP_PORT}" >&2
+  return 1
+}
+
+usdb_chain_wait_rpc_url_ready() {
+  local url="$1"
+  local expected_chain_id
+  expected_chain_id="$(printf '0x%x' "$NETWORK_ID")"
+  local deadline=$((SECONDS + RPC_WAIT_SECONDS))
+  while (( SECONDS < deadline )); do
+    local response
+    response="$(usdb_chain_rpc_call_url "$url" "eth_chainId" "[]" || true)"
+    if [[ "$response" == *"\"result\":\"${expected_chain_id}\""* ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for USDB-chain RPC at ${url}" >&2
   return 1
 }
 
@@ -126,14 +169,41 @@ usdb_chain_wait_block_height() {
   return 1
 }
 
+usdb_chain_wait_block_height_url() {
+  local url="$1"
+  local target_height="$2"
+  local deadline=$((SECONDS + BLOCK_WAIT_SECONDS))
+  while (( SECONDS < deadline )); do
+    local response block_hex current_height
+    response="$(usdb_chain_rpc_call_url "$url" "eth_blockNumber" "[]" || true)"
+    block_hex="$(printf '%s' "$response" | python3 -c 'import json,sys; payload=json.load(sys.stdin); print(payload.get("result") or "0x0")' 2>/dev/null || echo 0x0)"
+    current_height=$((block_hex))
+    if (( current_height >= target_height )); then
+      printf '%d\n' "$current_height"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for USDB block height >= ${target_height} at ${url}" >&2
+  return 1
+}
+
 usdb_chain_stop_mining() {
   usdb_chain_rpc_call "miner_stop" "[]" >/dev/null || true
+}
+
+usdb_chain_start_mining() {
+  usdb_chain_rpc_call "miner_start" "[1]" >/dev/null || true
 }
 
 usdb_chain_start_node() {
   local append_log="$1"
   shift
   local -a command=("$@")
+  local max_peers=0
+  if usdb_chain_validator_required; then
+    max_peers=10
+  fi
   if [[ "$append_log" != "true" ]]; then
     : >"$GETH_LOG_FILE"
   fi
@@ -150,13 +220,15 @@ usdb_chain_start_node() {
       --authrpc.port "$AUTHRPC_PORT" \
       --port "$P2P_PORT" \
       --nodiscover \
-      --maxpeers 0 \
+      --maxpeers "$max_peers" \
       --mine \
       --miner.threads 1 \
       --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
       --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
       --miner.usdb.passid "$pass_id" \
-      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
+      --miner.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
+      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
+      --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT"
   ) >>"$GETH_LOG_FILE" 2>&1 &
   GETH_PID=$!
 }
@@ -164,6 +236,91 @@ usdb_chain_start_node() {
 usdb_chain_current_height() {
   usdb_chain_rpc_call "eth_blockNumber" "[]" |
     python3 -c 'import json,sys; print(int((json.load(sys.stdin).get("result") or "0x0"), 16))'
+}
+
+usdb_chain_height_at() {
+  local url="$1"
+  usdb_chain_rpc_call_url "$url" "eth_blockNumber" "[]" |
+    python3 -c 'import json,sys; print(int((json.load(sys.stdin).get("result") or "0x0"), 16))'
+}
+
+usdb_chain_head_hash_at() {
+  local url="$1"
+  usdb_chain_rpc_call_url "$url" "eth_getBlockByNumber" "[\"latest\", false]" |
+    python3 -c 'import json,sys; print(((json.load(sys.stdin).get("result") or {}).get("hash") or ""))'
+}
+
+usdb_chain_fetch_enode() {
+  local url="$1"
+  local deadline=$((SECONDS + RPC_WAIT_SECONDS))
+  while (( SECONDS < deadline )); do
+    local response enode
+    response="$(usdb_chain_rpc_call_url "$url" "admin_nodeInfo" "[]" || true)"
+    enode="$(printf '%s' "$response" | sed -n 's/.*"enode":"\([^"]*\)".*/\1/p')"
+    if [[ -n "$enode" ]]; then
+      printf '%s\n' "$enode"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for admin_nodeInfo at ${url}" >&2
+  return 1
+}
+
+usdb_chain_start_validator() {
+  local -a command=("${POST_ACTIVATION_GETH_CMD[@]}")
+  : >"$VALIDATOR_LOG_FILE"
+  (
+    cd "$ROOT_DIR"
+    exec "${command[@]}" \
+      --datadir "$VALIDATOR_DATADIR" \
+      --networkid "$NETWORK_ID" \
+      --http \
+      --http.addr "$VALIDATOR_HTTP_ADDR" \
+      --http.port "$VALIDATOR_HTTP_PORT" \
+      --http.api eth,net,web3,admin \
+      --authrpc.addr "$VALIDATOR_HTTP_ADDR" \
+      --authrpc.port "$VALIDATOR_AUTHRPC_PORT" \
+      --port "$VALIDATOR_P2P_PORT" \
+      --nodiscover \
+      --maxpeers 10 \
+      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
+      --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT"
+  ) >"$VALIDATOR_LOG_FILE" 2>&1 &
+  VALIDATOR_PID=$!
+}
+
+usdb_chain_stop_validator() {
+  if [[ -n "${VALIDATOR_PID:-}" ]] && kill -0 "$VALIDATOR_PID" 2>/dev/null; then
+    regtest_stop_process "$VALIDATOR_PID"
+  fi
+  VALIDATOR_PID=""
+}
+
+usdb_chain_connect_validator() {
+  local node_rpc="http://${HTTP_ADDR}:${HTTP_PORT}"
+  local validator_rpc="http://${VALIDATOR_HTTP_ADDR}:${VALIDATOR_HTTP_PORT}"
+  local node_enode
+  node_enode="$(usdb_chain_fetch_enode "$node_rpc")"
+  usdb_chain_rpc_call_url "$validator_rpc" "admin_addPeer" "[\"${node_enode}\"]" >/dev/null
+}
+
+usdb_chain_assert_validator_synced() {
+  local expected_height="$1"
+  local node_rpc="http://${HTTP_ADDR}:${HTTP_PORT}"
+  local validator_rpc="http://${VALIDATOR_HTTP_ADDR}:${VALIDATOR_HTTP_PORT}"
+  local validator_height node_hash validator_hash
+  validator_height="$(usdb_chain_wait_block_height_url "$validator_rpc" "$expected_height")"
+  node_hash="$(usdb_chain_head_hash_at "$node_rpc")"
+  validator_hash="$(usdb_chain_head_hash_at "$validator_rpc")"
+  if (( validator_height != expected_height )); then
+    echo "Validator reached unexpected height: have ${validator_height}, want ${expected_height}" >&2
+    return 1
+  fi
+  if [[ "$validator_hash" != "$node_hash" ]]; then
+    echo "Validator reached unexpected head: have ${validator_hash}, want ${node_hash}" >&2
+    return 1
+  fi
 }
 
 usdb_chain_wait_log_pattern() {
@@ -194,11 +351,31 @@ usdb_chain_stop_residual_nodes() {
   )
 }
 
+usdb_chain_stop_residual_validator() {
+  while IFS= read -r pid; do
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      usdb_chain_log "Stopping residual validator pid=${pid} for datadir=${VALIDATOR_DATADIR}"
+      regtest_stop_process "$pid"
+    fi
+  done < <(
+    ps -eo pid=,args= | awk -v datadir="$VALIDATOR_DATADIR" -v http_port="$VALIDATOR_HTTP_PORT" -v p2p_port="$VALIDATOR_P2P_PORT" '
+      index($0, " --datadir " datadir) && index($0, " --http.port " http_port) && index($0, " --port " p2p_port) {
+        print $1
+      }
+    '
+  )
+}
+
 eth_print_failure_diagnostics() {
   if [[ -f "$GETH_LOG_FILE" ]]; then
     usdb_chain_log "---- geth log (tail -n 120) ----"
     tail -n 120 "$GETH_LOG_FILE" || true
     usdb_chain_log "---- end geth log ----"
+  fi
+  if [[ -f "$VALIDATOR_LOG_FILE" ]]; then
+    usdb_chain_log "---- validator log (tail -n 120) ----"
+    tail -n 120 "$VALIDATOR_LOG_FILE" || true
+    usdb_chain_log "---- end validator log ----"
   fi
 }
 
@@ -208,7 +385,9 @@ cleanup() {
   if [[ -n "${GETH_PID:-}" ]] && kill -0 "$GETH_PID" 2>/dev/null; then
     regtest_stop_process "$GETH_PID"
   fi
+  usdb_chain_stop_validator
   usdb_chain_stop_residual_nodes
+  usdb_chain_stop_residual_validator
   if [[ "$exit_code" -ne 0 ]]; then
     eth_print_failure_diagnostics
   fi
@@ -236,6 +415,160 @@ verify_profile_blocks() {
     "${activation_args[@]}"
 }
 
+run_indexer_outage_recovery_check() {
+  local validator_rpc="http://${VALIDATOR_HTTP_ADDR}:${VALIDATOR_HTTP_PORT}"
+  local stalled_height observed_height validator_height resumed_height
+
+  usdb_chain_log "Stopping mining before the usdb-indexer outage checkpoint"
+  usdb_chain_stop_mining
+  sleep 1
+
+  regtest_log "Stopping usdb-indexer to verify miner and fresh-validator fail-closed behavior"
+  regtest_stop_usdb_indexer
+  sleep 1
+
+  usdb_chain_log "Starting a fresh validator while usdb-indexer is unavailable"
+  usdb_chain_start_validator
+  usdb_chain_wait_rpc_url_ready "$validator_rpc"
+  usdb_chain_connect_validator
+
+  usdb_chain_log "Restarting mining while usdb-indexer is unavailable"
+  usdb_chain_start_mining
+  sleep 2
+  stalled_height="$(usdb_chain_current_height)"
+  sleep "$OUTAGE_OBSERVE_SECONDS"
+  observed_height="$(usdb_chain_current_height)"
+  if (( observed_height != stalled_height )); then
+    echo "USDB miner advanced while usdb-indexer was unavailable: ${stalled_height} -> ${observed_height}" >&2
+    return 1
+  fi
+  validator_height="$(usdb_chain_height_at "$validator_rpc")"
+  if (( validator_height != 0 )); then
+    echo "Fresh validator imported blocks without usdb-indexer: height=${validator_height}" >&2
+    return 1
+  fi
+
+  regtest_log "Restarting usdb-indexer and verifying mining and fresh-validator recovery"
+  regtest_start_usdb_indexer
+  regtest_wait_usdb_rpc_ready
+  regtest_wait_usdb_consensus_ready
+  usdb_chain_connect_validator
+  usdb_chain_stop_mining
+  usdb_chain_start_mining
+  resumed_height="$(usdb_chain_wait_block_height "$((stalled_height + 2))")"
+  usdb_chain_stop_mining
+  sleep 1
+  resumed_height="$(usdb_chain_current_height)"
+  usdb_chain_connect_validator
+  usdb_chain_assert_validator_synced "$resumed_height"
+  usdb_chain_stop_validator
+
+  OUTAGE_RECOVERY_HEIGHT="$resumed_height"
+  usdb_chain_log "usdb-indexer outage check succeeded at stalled_height=${stalled_height}, resumed_height=${resumed_height}"
+}
+
+run_activation_fresh_validator_check() {
+  local expected_height="$1"
+  local validator_rpc="http://${VALIDATOR_HTTP_ADDR}:${VALIDATOR_HTTP_PORT}"
+
+  usdb_chain_log "Starting an independent tagged validator across the activation boundary"
+  usdb_chain_start_validator
+  usdb_chain_wait_rpc_url_ready "$validator_rpc"
+  usdb_chain_connect_validator
+  usdb_chain_assert_validator_synced "$expected_height"
+  usdb_chain_stop_validator
+  usdb_chain_log "Independent validator accepted the activation-spanning head at height=${expected_height}"
+}
+
+run_selector_tamper_import_case() {
+  local canonical_fixture="$1"
+  local helper_bin="$2"
+  local field="$3"
+  local expected_pattern="$4"
+  local case_dir="$USDB_CHAIN_WORK_DIR/import-${field}"
+  local fixture="$USDB_CHAIN_WORK_DIR/block-1-${field}.rlp"
+  local log_file="$USDB_CHAIN_WORK_DIR/import-${field}.log"
+
+  "$helper_bin" --input "$canonical_fixture" --output "$fixture" --field "$field"
+  rm -rf "$case_dir"
+  mkdir -p "$case_dir"
+  run_geth init --datadir "$case_dir" "$GENESIS_JSON" >/dev/null
+  if run_geth \
+    --datadir "$case_dir" \
+    --nocompaction \
+    import \
+    --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
+    --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
+    "$fixture" >"$log_file" 2>&1; then
+    echo "Tampered selector field ${field} unexpectedly imported" >&2
+    return 1
+  fi
+  if ! grep -Fq "$expected_pattern" "$log_file"; then
+    echo "Tampered selector field ${field} failed for an unexpected reason; wanted pattern ${expected_pattern}" >&2
+    tail -n 80 "$log_file" >&2 || true
+    return 1
+  fi
+  usdb_chain_log "Rejected tampered selector field=${field}, reason=${expected_pattern}"
+}
+
+run_selector_tamper_import_matrix() {
+  local canonical_fixture="$USDB_CHAIN_WORK_DIR/block-1-canonical.rlp"
+  local helper_bin="$USDB_CHAIN_WORK_DIR/tamper-usdb-block-fixture"
+  local control_dir="$USDB_CHAIN_WORK_DIR/import-control"
+  local control_log="$USDB_CHAIN_WORK_DIR/import-control.log"
+
+  usdb_chain_log "Stopping the source node and exporting canonical USDB block 1"
+  if [[ -n "${GETH_PID:-}" ]] && kill -0 "$GETH_PID" 2>/dev/null; then
+    regtest_stop_process "$GETH_PID"
+  fi
+  GETH_PID=""
+  usdb_chain_stop_validator
+  usdb_chain_stop_residual_nodes
+  usdb_chain_stop_residual_validator
+  rm -f "$canonical_fixture"
+  run_geth \
+    --datadir "$DATADIR" \
+    export \
+    --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
+    --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
+    "$canonical_fixture" 1 1 >/dev/null
+
+  (
+    cd "$ROOT_DIR"
+    "$GETH_GO" build -o "$helper_bin" ./scripts/usdb
+  )
+
+  usdb_chain_log "Importing the unmodified fixture as a control"
+  rm -rf "$control_dir"
+  mkdir -p "$control_dir"
+  run_geth init --datadir "$control_dir" "$GENESIS_JSON" >/dev/null
+  if ! run_geth \
+    --datadir "$control_dir" \
+    --nocompaction \
+    import \
+    --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
+    --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
+    "$canonical_fixture" >"$control_log" 2>&1; then
+    echo "Canonical selector fixture failed to import" >&2
+    tail -n 80 "$control_log" >&2 || true
+    return 1
+  fi
+
+  run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
+    "payload_version" "usdb profile selector version mismatch"
+  run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
+    "difficulty_policy_version" "usdb difficulty policy version mismatch"
+  run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
+    "btc_height" "SNAPSHOT_ID_MISMATCH"
+  run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
+    "snapshot_id" "SNAPSHOT_ID_MISMATCH"
+  run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
+    "system_state_id" "SYSTEM_STATE_ID_MISMATCH"
+  run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
+    "pass_id" "PASS_NOT_FOUND"
+  usdb_chain_log "Selector tamper import matrix succeeded"
+}
+
 main() {
   trap cleanup EXIT
 
@@ -253,6 +586,20 @@ main() {
       exit 1
     fi
   fi
+  for check_name in INDEXER_OUTAGE_CHECK SELECTOR_TAMPER_CHECK ACTIVATION_FRESH_VALIDATOR_CHECK; do
+    if [[ "${!check_name}" != "0" && "${!check_name}" != "1" ]]; then
+      echo "${check_name} must be 0 or 1" >&2
+      exit 1
+    fi
+  done
+  if [[ "$INDEXER_OUTAGE_CHECK" == "1" && -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
+    echo "INDEXER_OUTAGE_CHECK cannot be combined with ACTIVATION_CONFORMANCE_BLOCK" >&2
+    exit 1
+  fi
+  if [[ "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" && -z "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
+    echo "ACTIVATION_FRESH_VALIDATOR_CHECK requires ACTIVATION_CONFORMANCE_BLOCK" >&2
+    exit 1
+  fi
   regtest_assert_ord_server_port_available
   if [[ ! -x "$ORD_BIN" ]]; then
     echo "Missing required ORD_BIN executable: $ORD_BIN" >&2
@@ -262,8 +609,13 @@ main() {
   regtest_ensure_workspace_dirs
   mkdir -p "$USDB_CHAIN_WORK_DIR"
   usdb_chain_stop_residual_nodes
+  usdb_chain_stop_residual_validator
   rm -rf "$DATADIR"
   mkdir -p "$DATADIR"
+  if usdb_chain_validator_required; then
+    rm -rf "$VALIDATOR_DATADIR"
+    mkdir -p "$VALIDATOR_DATADIR"
+  fi
 
   regtest_start_bitcoind
   regtest_ensure_wallet
@@ -358,6 +710,10 @@ EOF
   fi
   usdb_chain_log "Initializing USDB-chain datadir ${DATADIR}"
   run_geth init --datadir "$DATADIR" "$GENESIS_JSON" >/dev/null
+  if usdb_chain_validator_required; then
+    usdb_chain_log "Initializing fresh-validator datadir ${VALIDATOR_DATADIR}"
+    run_geth init --datadir "$VALIDATOR_DATADIR" "$GENESIS_JSON" >/dev/null
+  fi
 
   if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
     local pre_activation_height=$((ACTIVATION_CONFORMANCE_BLOCK - 1)) stalled_height
@@ -382,7 +738,17 @@ EOF
     usdb_chain_start_node false "${GETH_CMD[@]}"
     usdb_chain_wait_rpc_ready
   fi
-  final_block_height="$(usdb_chain_wait_block_height "$TARGET_BLOCKS")"
+  if [[ "$INDEXER_OUTAGE_CHECK" == "1" ]]; then
+    usdb_chain_wait_block_height 1 >/dev/null
+    run_indexer_outage_recovery_check
+    final_block_height="$OUTAGE_RECOVERY_HEIGHT"
+    if (( final_block_height < TARGET_BLOCKS )); then
+      usdb_chain_start_mining
+      final_block_height="$(usdb_chain_wait_block_height "$TARGET_BLOCKS")"
+    fi
+  else
+    final_block_height="$(usdb_chain_wait_block_height "$TARGET_BLOCKS")"
+  fi
   usdb_chain_log "USDB chain reached block height ${final_block_height}; stopping mining for deterministic verification"
   usdb_chain_stop_mining
   sleep 2
@@ -428,6 +794,13 @@ PY
 
   usdb_chain_log "Verifying payloads and reward totals across ${final_block_height} mined blocks"
   verify_profile_blocks "$blocks_file" "$USDB_CHAIN_MINER_ADDRESS" "$latest_balance_hex" "$pass_id"
+
+  if [[ "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]]; then
+    run_activation_fresh_validator_check "$final_block_height"
+  fi
+  if [[ "$SELECTOR_TAMPER_CHECK" == "1" ]]; then
+    run_selector_tamper_import_matrix
+  fi
 
   usdb_chain_log "USDB-chain profile/difficulty E2E succeeded."
   usdb_chain_log "pass_id=${pass_id}, coinbase=${USDB_CHAIN_MINER_ADDRESS}, blocks=${final_block_height}, balance=${latest_balance_hex}"

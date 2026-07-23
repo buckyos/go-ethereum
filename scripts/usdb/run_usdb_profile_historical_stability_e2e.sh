@@ -28,6 +28,8 @@ RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-90}
 BLOCK_WAIT_SECONDS=${BLOCK_WAIT_SECONDS:-180}
 ENERGY_TOPUP_AMOUNT_BTC=${ENERGY_TOPUP_AMOUNT_BTC:-1.0}
 ENERGY_GROWTH_BLOCKS=${ENERGY_GROWTH_BLOCKS:-2}
+BTC_STATE_TRANSITION=${BTC_STATE_TRANSITION:-advance}
+REJECTION_WAIT_SECONDS=${REJECTION_WAIT_SECONDS:-20}
 
 USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x1111111111111111111111111111111111111111}
 MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$USDB_CHAIN_MINER_ADDRESS}
@@ -173,6 +175,20 @@ wait_peers() {
   return 1
 }
 
+wait_log_pattern() {
+  local log_file="$1"
+  local pattern="$2"
+  local deadline=$((SECONDS + REJECTION_WAIT_SECONDS))
+  while (( SECONDS < deadline )); do
+    if [[ -f "$log_file" ]] && grep -Fq "$pattern" "$log_file"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for log pattern ${pattern} in ${log_file}" >&2
+  return 1
+}
+
 stop_mining() {
   local url="$1"
   rpc_call "$url" "miner_stop" "[]" >/dev/null || true
@@ -302,6 +318,10 @@ main() {
   regtest_require_cmd cargo
   regtest_require_cmd curl
   regtest_require_cmd python3
+  if [[ "$BTC_STATE_TRANSITION" != "advance" && "$BTC_STATE_TRANSITION" != "same-height-replacement" ]]; then
+    echo "BTC_STATE_TRANSITION must be advance or same-height-replacement" >&2
+    exit 1
+  fi
   regtest_assert_ord_server_port_available
   if [[ ! -x "$ORD_BIN" ]]; then
     echo "Missing required ORD_BIN executable: $ORD_BIN" >&2
@@ -322,6 +342,7 @@ main() {
   local initial_energy boosted_energy node1_tip_height node2_tip_height
   local node1_tip_hash node2_tip_hash node1_balance_hex blocks_file node1_enode
   local node1_rpc node2_rpc
+  local old_btc_hash replacement_btc_hash old_snapshot_id new_snapshot_id
 
   miner_btc_address="$(regtest_get_new_address)"
   regtest_log "Premining ${PREMINE_BLOCKS} BTC blocks to address=${miner_btc_address}"
@@ -401,20 +422,57 @@ EOF
   node1_tip_hash="$(fetch_head_hash "$node1_rpc")"
   node1_balance_hex="$(printf '%s' "$(rpc_call "$node1_rpc" "eth_getBalance" "[\"${USDB_CHAIN_MINER_ADDRESS}\",\"latest\"]")" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result") or "0x0")')"
 
-  regtest_log "Applying BTC owner top-up to advance the BTC head and increase current pass energy"
-  regtest_fund_address "$ord_receive_address" "$ENERGY_TOPUP_AMOUNT_BTC"
-  regtest_mine_blocks 1 "$miner_btc_address"
-  if (( ENERGY_GROWTH_BLOCKS > 0 )); then
-    regtest_mine_blocks "$ENERGY_GROWTH_BLOCKS" "$miner_btc_address"
+  if [[ "$BTC_STATE_TRANSITION" == "same-height-replacement" ]]; then
+    old_btc_hash="$(regtest_get_bitcoin_block_hash "$current_tip_height")"
+    old_snapshot_id="$(regtest_json_expr \
+      "$(regtest_rpc_call_usdb_indexer "get_snapshot_info" "[]")" \
+      "((data.get('result') or {}).get('snapshot_id', ''))")"
+    regtest_log "Replacing referenced BTC state at the same height=${current_tip_height}, old_hash=${old_btc_hash}"
+    "$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" invalidateblock "$old_btc_hash"
+    regtest_mine_empty_block "$(regtest_get_new_address)"
+    replacement_btc_hash="$(regtest_get_bitcoin_block_hash "$current_tip_height")"
+    if [[ "$replacement_btc_hash" == "$old_btc_hash" ]]; then
+      echo "Same-height replacement produced the original BTC block hash" >&2
+      exit 1
+    fi
+    regtest_wait_until_ord_server_synced_to_bitcoind
+    regtest_wait_until_balance_history_synced_eq "$current_tip_height"
+    regtest_wait_until_balance_history_block_commit_hash "$current_tip_height" "$replacement_btc_hash"
+    regtest_wait_until_usdb_synced_eq "$current_tip_height"
+    regtest_wait_until_rpc_expr_eq \
+      "usdb snapshot stable hash after same-height replacement" \
+      regtest_rpc_call_usdb_indexer \
+      "get_snapshot_info" \
+      "[]" \
+      "((data.get('result') or {}).get('stable_block_hash', ''))" \
+      "$replacement_btc_hash"
+    regtest_wait_balance_history_consensus_ready
+    regtest_wait_usdb_consensus_ready
+    new_snapshot_id="$(regtest_json_expr \
+      "$(regtest_rpc_call_usdb_indexer "get_snapshot_info" "[]")" \
+      "((data.get('result') or {}).get('snapshot_id', ''))")"
+    if [[ "$new_snapshot_id" == "$old_snapshot_id" ]]; then
+      echo "Snapshot id did not change after same-height BTC replacement" >&2
+      exit 1
+    fi
+    boosted_energy="$(pass_energy_now "$pass_id")"
+    usdb_chain_log "BTC state at height=${current_tip_height} changed snapshot ${old_snapshot_id} -> ${new_snapshot_id}"
+  else
+    regtest_log "Applying BTC owner top-up to advance the BTC head and increase current pass energy"
+    regtest_fund_address "$ord_receive_address" "$ENERGY_TOPUP_AMOUNT_BTC"
+    regtest_mine_blocks 1 "$miner_btc_address"
+    if (( ENERGY_GROWTH_BLOCKS > 0 )); then
+      regtest_mine_blocks "$ENERGY_GROWTH_BLOCKS" "$miner_btc_address"
+    fi
+    regtest_wait_until_ord_server_synced_to_bitcoind
+    current_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
+    regtest_wait_until_balance_history_synced_eq "$current_tip_height"
+    regtest_wait_until_usdb_synced_eq "$current_tip_height"
+    regtest_wait_balance_history_consensus_ready
+    regtest_wait_usdb_consensus_ready
+    boosted_energy="$(pass_energy_now "$pass_id")"
+    usdb_chain_log "Current pass energy after BTC head advance=${boosted_energy}"
   fi
-  regtest_wait_until_ord_server_synced_to_bitcoind
-  current_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
-  regtest_wait_until_balance_history_synced_eq "$current_tip_height"
-  regtest_wait_until_usdb_synced_eq "$current_tip_height"
-  regtest_wait_balance_history_consensus_ready
-  regtest_wait_usdb_consensus_ready
-  boosted_energy="$(pass_energy_now "$pass_id")"
-  usdb_chain_log "Current pass energy after BTC head advance=${boosted_energy}"
 
   usdb_chain_log "Starting fresh USDB-chain node 2 validator after BTC head advance"
   (
@@ -438,27 +496,39 @@ EOF
   wait_chain_id "$node2_rpc"
   node1_enode="$(fetch_enode "$node1_rpc")"
   rpc_call "$node2_rpc" "admin_addPeer" "[\"${node1_enode}\"]" >/dev/null
-  wait_peers "$node1_rpc" 1
-  wait_peers "$node2_rpc" 1
-  node2_tip_height="$(wait_block_height "$node2_rpc" "$node1_tip_height")"
-  node2_tip_hash="$(fetch_head_hash "$node2_rpc")"
+  if [[ "$BTC_STATE_TRANSITION" == "same-height-replacement" ]]; then
+    wait_log_pattern "$NODE2_LOG_FILE" "SNAPSHOT_ID_MISMATCH"
+    node2_tip_height="$(fetch_block_number "$node2_rpc")"
+    if (( node2_tip_height != 0 )); then
+      echo "Fresh validator imported the stale selector chain after same-height replacement: height=${node2_tip_height}" >&2
+      exit 1
+    fi
+    usdb_chain_log "Fresh validator rejected the old selector with SNAPSHOT_ID_MISMATCH and remained at genesis"
+    usdb_chain_log "USDB-chain same-height BTC replacement E2E succeeded."
+    usdb_chain_log "pass_id=${pass_id}, stale_usdb_head=${node1_tip_hash}, btc_height=${current_tip_height}, replacement_btc_hash=${replacement_btc_hash}"
+  else
+    wait_peers "$node1_rpc" 1
+    wait_peers "$node2_rpc" 1
+    node2_tip_height="$(wait_block_height "$node2_rpc" "$node1_tip_height")"
+    node2_tip_hash="$(fetch_head_hash "$node2_rpc")"
 
-  if [[ "$node2_tip_hash" != "$node1_tip_hash" ]]; then
-    echo "Node 2 synced to unexpected head hash: have ${node2_tip_hash} want ${node1_tip_hash}" >&2
-    exit 1
+    if [[ "$node2_tip_hash" != "$node1_tip_hash" ]]; then
+      echo "Node 2 synced to unexpected head hash: have ${node2_tip_hash} want ${node1_tip_hash}" >&2
+      exit 1
+    fi
+    if (( node2_tip_height != node1_tip_height )); then
+      echo "Node 2 synced to unexpected block height: have ${node2_tip_height} want ${node1_tip_height}" >&2
+      exit 1
+    fi
+
+    blocks_file="$USDB_CHAIN_WORK_DIR/stage1_blocks.json"
+    collect_usdb_blocks "$node1_rpc" "$node1_tip_height" "$blocks_file"
+    usdb_chain_log "Verifying node 1 historical profiles and static rewards remain stable after BTC head advance and node 2 sync"
+    verify_historical_stability "$blocks_file" "$USDB_CHAIN_MINER_ADDRESS" "$node1_balance_hex" "$pass_id" "$initial_energy" "$boosted_energy"
+
+    usdb_chain_log "USDB-chain historical profile stability E2E succeeded."
+    usdb_chain_log "pass_id=${pass_id}, node1_height=${node1_tip_height}, historical_head=${node1_tip_hash}, initial_energy=${initial_energy}, current_energy=${boosted_energy}"
   fi
-  if (( node2_tip_height != node1_tip_height )); then
-    echo "Node 2 synced to unexpected block height: have ${node2_tip_height} want ${node1_tip_height}" >&2
-    exit 1
-  fi
-
-  blocks_file="$USDB_CHAIN_WORK_DIR/stage1_blocks.json"
-  collect_usdb_blocks "$node1_rpc" "$node1_tip_height" "$blocks_file"
-  usdb_chain_log "Verifying node 1 historical profiles and static rewards remain stable after BTC head advance and node 2 sync"
-  verify_historical_stability "$blocks_file" "$USDB_CHAIN_MINER_ADDRESS" "$node1_balance_hex" "$pass_id" "$initial_energy" "$boosted_energy"
-
-  usdb_chain_log "USDB-chain historical profile stability E2E succeeded."
-  usdb_chain_log "pass_id=${pass_id}, node1_height=${node1_tip_height}, historical_head=${node1_tip_hash}, initial_energy=${initial_energy}, current_energy=${boosted_energy}"
 }
 
 main "$@"

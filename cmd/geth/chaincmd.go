@@ -79,6 +79,8 @@ The dumpgenesis command dumps the genesis block configuration in JSON format to 
 			utils.SyncModeFlag,
 			utils.GCModeFlag,
 			utils.SnapshotFlag,
+			utils.EthashUSDBIndexerRPCURLFlag,
+			utils.EthashUSDBIndexerTimeoutFlag,
 			utils.CacheDatabaseFlag,
 			utils.CacheGCFlag,
 			utils.MetricsEnabledFlag,
@@ -112,6 +114,8 @@ processing will proceed even if an individual RLP-file import failure occurs.`,
 		Flags: flags.Merge([]cli.Flag{
 			utils.CacheFlag,
 			utils.SyncModeFlag,
+			utils.EthashUSDBIndexerRPCURLFlag,
+			utils.EthashUSDBIndexerTimeoutFlag,
 		}, utils.DatabasePathFlags),
 		Description: `
 Requires a first argument of the file to write to.
@@ -294,7 +298,7 @@ func importChain(ctx *cli.Context) error {
 	fmt.Printf("GC pause:      %v\n\n", time.Duration(mem.PauseTotalNs))
 
 	if ctx.Bool(utils.NoCompactionFlag.Name) {
-		return nil
+		return importErr
 	}
 
 	// Compact the entire database to more accurately measure disk io and print the stats

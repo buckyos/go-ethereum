@@ -1684,11 +1684,15 @@ func setEthash(ctx *cli.Context, cfg *ethconfig.Config) {
 	if ctx.IsSet(EthashDatasetsLockMmapFlag.Name) {
 		cfg.Ethash.DatasetsLockMmap = ctx.Bool(EthashDatasetsLockMmapFlag.Name)
 	}
+	setEthashUSDBIndexer(ctx, &cfg.Ethash)
+}
+
+func setEthashUSDBIndexer(ctx *cli.Context, cfg *ethash.Config) {
 	if ctx.IsSet(EthashUSDBIndexerRPCURLFlag.Name) {
-		cfg.Ethash.USDBIndexer.RPCURL = ctx.String(EthashUSDBIndexerRPCURLFlag.Name)
+		cfg.USDBIndexer.RPCURL = ctx.String(EthashUSDBIndexerRPCURLFlag.Name)
 	}
 	if ctx.IsSet(EthashUSDBIndexerTimeoutFlag.Name) {
-		cfg.Ethash.USDBIndexer.QueryTimeout = ctx.Duration(EthashUSDBIndexerTimeoutFlag.Name)
+		cfg.USDBIndexer.QueryTimeout = ctx.Duration(EthashUSDBIndexerTimeoutFlag.Name)
 	}
 }
 
@@ -2255,6 +2259,7 @@ func MakeChain(ctx *cli.Context, stack *node.Node) (chain *core.BlockChain, chai
 
 	var engine consensus.Engine
 	ethashConf := ethconfig.Defaults.Ethash
+	setEthashUSDBIndexer(ctx, &ethashConf)
 	if ctx.Bool(FakePoWFlag.Name) {
 		ethashConf.PowMode = ethash.ModeFake
 	}
