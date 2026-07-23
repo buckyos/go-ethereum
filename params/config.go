@@ -512,30 +512,32 @@ type ChainConfig struct {
 	Ethash *EthashConfig `json:"ethash,omitempty"`
 	Clique *CliqueConfig `json:"clique,omitempty"`
 
-	// USDB contains the height-indexed UIP-0008 activation registry for USDB-chain
-	// USDB consensus rules. Operational companion-service settings do not belong
-	// in chain config.
+	// USDB contains the height-indexed UIP-0008 activation schedule for USDB-chain
+	// consensus rules. Operational companion-service settings do not belong in
+	// chain config.
 	USDB *USDBConsensusConfig `json:"usdb,omitempty"`
 }
 
-// USDBConsensusConfig is the chain-owned activation registry for USDB consensus.
+// USDBConsensusConfig is the chain-owned activation schedule for USDB consensus.
 type USDBConsensusConfig struct {
 	Activations []USDBConsensusActivation `json:"activations"`
 }
 
-// USDBConsensusActivation activates one complete USDB-chain version set and
-// one immutable BTC registry revision at a USDB block. Records must be strictly
-// ordered and may not share an activation block.
+// USDBConsensusActivation is one complete checkpoint in the USDB activation
+// schedule. It fixes all USDB-chain versions and one immutable BTC registry
+// revision from Block onward. Checkpoints must be strictly ordered and may not
+// share an activation block.
 type USDBConsensusActivation struct {
 	Block                   uint64                `json:"block"`
 	BTCActivationRegistryID string                `json:"btcActivationRegistryId"`
 	Versions                USDBConsensusVersions `json:"versions"`
 }
 
-// USDBConsensusVersions is the active USDB-chain version set defined by UIP-0008
-// and UIP-0009. Zero is a development staging value for a family that has not
-// activated; each defining UIP decides whether zero is valid on a final network.
-// Payload and difficulty versions are mandatory for every activation record.
+// USDBConsensusVersions contains the complete USDB-chain version fields defined
+// by UIP-0008 and UIP-0009. Zero is a development staging value for a family
+// that has not activated; each defining UIP decides whether zero is valid on a
+// final network. Payload and difficulty versions are mandatory for every
+// activation checkpoint.
 type USDBConsensusVersions struct {
 	PayloadVersion                       uint8  `json:"payloadVersion"`
 	DifficultyPolicyVersion              uint16 `json:"difficultyPolicyVersion"`
@@ -599,7 +601,7 @@ func (c *ChainConfig) String() string {
 	}
 	if c.USDB != nil {
 		if len(c.USDB.Activations) == 0 {
-			banner += "USDB consensus: invalid empty activation registry\n"
+			banner += "USDB consensus: invalid empty activation schedule\n"
 		} else {
 			activation := c.USDB.Activations[0]
 			banner += fmt.Sprintf(
@@ -835,9 +837,9 @@ func (c *ChainConfig) HasUSDBConsensus() bool {
 	return c != nil && c.USDB != nil
 }
 
-// USDBActivationAt returns the complete USDB consensus activation expected at
-// blockNumber. It returns nil before the first activation and a copy of the
-// latest active record thereafter. Invalid registries fail closed.
+// USDBActivationAt returns the complete USDB activation checkpoint expected at
+// blockNumber. It returns nil before the first checkpoint and a copy of the
+// latest active checkpoint thereafter. Invalid schedules fail closed.
 func (c *ChainConfig) USDBActivationAt(blockNumber uint64) (*USDBConsensusActivation, error) {
 	if !c.HasUSDBConsensus() {
 		return nil, nil
@@ -869,19 +871,19 @@ func (c *USDBConsensusConfig) validate() error {
 		return nil
 	}
 	if len(c.Activations) == 0 {
-		return fmt.Errorf("invalid USDB consensus activation registry: no activation records")
+		return fmt.Errorf("invalid USDB consensus activation schedule: no activation checkpoints")
 	}
 	for i, activation := range c.Activations {
 		if i > 0 && activation.Block <= c.Activations[i-1].Block {
 			return fmt.Errorf(
-				"invalid USDB consensus activation registry: block %d is not after block %d",
+				"invalid USDB consensus activation schedule: block %d is not after block %d",
 				activation.Block,
 				c.Activations[i-1].Block,
 			)
 		}
 		if !isCanonicalUSDBRegistryID(activation.BTCActivationRegistryID) {
 			return fmt.Errorf(
-				"invalid USDB BTC activation registry id %q at block %d",
+				"invalid BTC activation registry id %q in USDB checkpoint at block %d",
 				activation.BTCActivationRegistryID,
 				activation.Block,
 			)
@@ -1094,7 +1096,7 @@ func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *Con
 		updatedActivation, updatedBlock := lookupUSDBActivation(updated, block)
 		if !equalUSDBVersions(storedActivation, updatedActivation) {
 			err := newCompatError(
-				"USDB consensus activation",
+				"USDB activation checkpoint versions",
 				uint64BlockNumber(storedBlock),
 				uint64BlockNumber(updatedBlock),
 			)
@@ -1105,7 +1107,7 @@ func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *Con
 		}
 		if storedActivation != nil && storedActivation.BTCActivationRegistryID != updatedActivation.BTCActivationRegistryID {
 			err := newCompatError(
-				"USDB BTC activation registry",
+				"USDB activation checkpoint BTC registry binding",
 				uint64BlockNumber(storedBlock),
 				uint64BlockNumber(updatedBlock),
 			)

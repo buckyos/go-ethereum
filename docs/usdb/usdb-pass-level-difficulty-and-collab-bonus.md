@@ -5,7 +5,8 @@
 > 与现行实现为准，文中的 `RewardPayloadV1` 和旧 collab 字段不再是有效接口。
 
 当前实现状态：UIP-0005 level/factor 已由 USDB profile 返回，UIP-0007 selector
-携带其历史状态引用，UIP-0008/UIP-0009 activation registry 决定预期版本。实际
+携带其历史状态引用；UIP-0008/UIP-0009 USDB activation schedule 决定 chain policy，
+checkpoint 绑定的 BTC registry revision 决定 payload 高度的 BTC-side version set。实际
 difficulty 已消费该 profile；reward multiplier mock 已删除，奖励公式等待 UIP-0011，
 quote/candidate factor 等待 UIP-0014。
 

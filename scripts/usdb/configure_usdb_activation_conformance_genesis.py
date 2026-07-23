@@ -26,9 +26,9 @@ def main():
     try:
         activations = genesis["config"]["usdb"]["activations"]
     except (KeyError, TypeError) as error:
-        raise SystemExit(f"genesis has no USDB activation registry: {error}") from error
+        raise SystemExit(f"genesis has no USDB activation schedule: {error}") from error
     if len(activations) != 1 or activations[0].get("block") != 0:
-        raise SystemExit("conformance genesis requires one block-0 USDB activation")
+        raise SystemExit("conformance genesis requires one block-0 USDB activation checkpoint")
     if args.activation_block <= activations[0]["block"]:
         raise SystemExit("activation block must follow the existing activation")
 

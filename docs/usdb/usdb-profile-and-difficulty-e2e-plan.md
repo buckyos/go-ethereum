@@ -11,10 +11,11 @@ The built-in development chain activates these policies from USDB block `0`:
 
 - `payload_version = 1`
 - `difficulty_policy_version = 1`
-- activation record `btcActivationRegistryId = 22d820e6...aaf83d` (`btc-regtest` revision 1)
+- USDB activation checkpoint binding
+  `btcActivationRegistryId = 22d820e6...aaf83d` (`btc-regtest` revision 1)
 
 The remaining UIP-0009 version families are present in the chain-config
-activation record but remain `0` until their defining UIP is implemented. In
+activation checkpoint but remain `0` until their defining UIP is implemented. In
 particular, UIP-0011 reward and CoinBase emission are not active. Blocks still
 receive the existing Constantinople Ethash reward while both difficulty and the
 reward transition require a valid selector-bound historical profile.
@@ -27,7 +28,9 @@ Runtime CLI flags only provide companion-service access and the selected pass:
 - `--ethash.usdb-indexer.rpcurl`
 - `--ethash.usdb-indexer.timeout`
 
-Activation and expected versions come only from `params.ChainConfig.USDB`.
+USDB-chain activation checkpoints and expected versions come only from
+`params.ChainConfig.USDB`. The bound BTC registry revision supplies the
+payload-height BTC-side version set; it does not activate USDB-chain policies.
 
 ## Shared Flow
 

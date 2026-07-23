@@ -274,7 +274,7 @@ func TestUSDBConsensusCheckCompatible(t *testing.T) {
 	if err := stored.CheckCompatible(changedFuture, 99); err != nil {
 		t.Fatalf("future activation change must remain compatible: %v", err)
 	}
-	if err := stored.CheckCompatible(changedFuture, 100); err == nil || err.What != "USDB consensus activation" || err.RewindTo != 99 {
+	if err := stored.CheckCompatible(changedFuture, 100); err == nil || err.What != "USDB activation checkpoint versions" || err.RewindTo != 99 {
 		t.Fatalf("active version change returned unexpected compatibility result: %+v", err)
 	}
 
@@ -309,7 +309,7 @@ func TestUSDBConsensusCheckCompatible(t *testing.T) {
 		},
 	}}
 	changedRegistry.USDB.Activations[0].BTCActivationRegistryID = strings.Repeat("a", 64)
-	if err := stored.CheckCompatible(changedRegistry, 0); err == nil || err.What != "USDB BTC activation registry" || err.RewindTo != 0 {
+	if err := stored.CheckCompatible(changedRegistry, 0); err == nil || err.What != "USDB activation checkpoint BTC registry binding" || err.RewindTo != 0 {
 		t.Fatalf("genesis registry change returned unexpected compatibility result: %+v", err)
 	}
 
@@ -322,7 +322,7 @@ func TestUSDBConsensusCheckCompatible(t *testing.T) {
 	if err := futureRegistry.CheckCompatible(futureRegistryChanged, 99); err != nil {
 		t.Fatalf("future registry binding change must remain compatible: %v", err)
 	}
-	if err := futureRegistry.CheckCompatible(futureRegistryChanged, 100); err == nil || err.What != "USDB BTC activation registry" || err.RewindTo != 99 {
+	if err := futureRegistry.CheckCompatible(futureRegistryChanged, 100); err == nil || err.What != "USDB activation checkpoint BTC registry binding" || err.RewindTo != 99 {
 		t.Fatalf("active future registry change returned unexpected compatibility result: %+v", err)
 	}
 
@@ -339,7 +339,7 @@ func TestUSDBConsensusCheckCompatible(t *testing.T) {
 	if err := registryUpgrade.CheckCompatible(changedRegistryUpgrade, 99); err != nil {
 		t.Fatalf("future registry revision change must remain compatible: %v", err)
 	}
-	if err := registryUpgrade.CheckCompatible(changedRegistryUpgrade, 100); err == nil || err.What != "USDB BTC activation registry" || err.RewindTo != 99 {
+	if err := registryUpgrade.CheckCompatible(changedRegistryUpgrade, 100); err == nil || err.What != "USDB activation checkpoint BTC registry binding" || err.RewindTo != 99 {
 		t.Fatalf("activated registry revision change returned unexpected compatibility result: %+v", err)
 	}
 }

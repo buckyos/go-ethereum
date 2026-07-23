@@ -7,7 +7,7 @@
 当前实现状态：
 
 - header 使用 107-byte `ProfileSelectorPayloadV1`，而非本文的旧 reward payload；
-- chain config 使用按 USDB block 生效的完整 activation registry；
+- chain config 使用按 USDB block 生效的 USDB activation schedule，且每个 checkpoint 携带完整版本集合；
 - miner 和 validator 均通过同一份历史 `get_pass_economic_profile` 解析结果计算实际难度；
 - level/reward multiplier mock 已删除；在 UIP-0011 激活前仍沿用既有 Ethash 静态奖励。
 
