@@ -99,7 +99,10 @@
 - 不把 SourceDAO 合约字节码硬编码进内置 `DefaultUSDBGenesisBlock()`
 - 先使用外部 genesis JSON 或测试专用 genesis builder 注入 code
 
-这样合约仍在变动时，不会频繁改变内置 `USDBGenesisHash`。
+这样合约仍在变动时，不会频繁改变内置开发链的 `USDBGenesisHash`。开发期 bootstrap overlay
+生成自己的确定性 genesis hash；所有参与同一次测试的节点必须使用同一份生成结果，但该 hash
+不要求等于当前内置开发 genesis hash。public network 发布时则必须冻结 spec 和 artifacts，把最终
+generated genesis hash 同步绑定到该网络的 `USDBGenesisHash`、chain config 和 release manifest。
 
 ### 3.2.1 第一阶段的生成入口
 
@@ -196,6 +199,27 @@ PoW difficulty。
 - node1 P2P: `31303`
 - node2 RPC: `18546`
 - node2 P2P: `31304`
+
+### 3.2.2 Full-bootstrap restart/joiner lifecycle
+
+完整生命周期回归使用独立入口：
+
+```bash
+./scripts/usdb/run_local_full_bootstrap_restart_joiner.sh
+```
+
+该入口复用双节点脚本和 SourceDAO full bootstrap/strict validator，固定执行：
+
+1. 只启动 node1，并执行完整 SourceDAO bootstrap。
+2. 保存 full bootstrap state，并在 node1 上执行 strict validation。
+3. 固定 bootstrap 完成高度的 block hash 和 state root。
+4. 使用原 datadir 重启 node1，检查固定区块身份和完整合约状态不变。
+5. bootstrap 完成后才启动全新 node2，使其从同一 genesis 重放历史。
+6. 检查 node2 在固定高度得到相同 block hash/state root，且两端 strict validation 摘要一致。
+7. 再次执行 full bootstrap，要求 state 中不存在新的 `completed` 或 `error` operation。
+
+该测试默认使用 fake PoW 和 test-only UIP-0006 indexer fixture，只证明 bootstrap persistence、
+historical replay、validator 接线和幂等性，不作为真实 BTC-side state 或 PoW 难度标定证据。
 
 ### 3.3 状态转换
 
