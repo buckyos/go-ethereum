@@ -166,8 +166,8 @@ var (
 	DifficultyBoundDivisor = big.NewInt(2048)                // The bound divisor of the difficulty, used in the update calculations.
 	GenesisDifficulty      = big.NewInt(131072)              // Difficulty of the Genesis block.
 	MinimumDifficulty      = big.NewInt(131072)              // The minimum that the difficulty may ever be.
-	USDBGenesisDifficulty  = big.NewInt(8192)                // Bootstrap genesis difficulty for the standalone USDB chain.
-	USDBMinimumDifficulty  = big.NewInt(8192)                // Bootstrap minimum difficulty for the standalone USDB chain.
+	USDBGenesisDifficulty  = big.NewInt(8192)                // Bare built-in USDB development genesis; public releases must calibrate and freeze an explicit value.
+	USDBMinimumDifficulty  = big.NewInt(8192)                // Bare built-in USDB development floor; public releases must calibrate and freeze an explicit value.
 	DurationLimit          = big.NewInt(13)                  // The decision boundary on the blocktime duration used to determine whether difficulty should go up or not.
 	ETHWStartDifficulty    = big.NewInt(197_198_199_200_201) // The ETHW start difficulty(Reset difficulty).
 )

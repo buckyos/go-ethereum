@@ -105,16 +105,21 @@
 
 第一阶段推荐的本地 bring-up 流程是：
 
-1. 使用 `geth dumpgenesis --usdb --usdb.bootstrap.config <path>` 读取一份 SourceDAO 本地 manifest
-2. 基于 manifest 中的：
-   - `daoAddress`
-   - `dividendAddress`
-   - `bootstrapAdminPrivateKey`
+1. 使用 `geth dumpgenesis --usdb --usdb.bootstrap.config <path> --usdb.bootstrap.artifacts <dir>`
+   读取 versioned public genesis spec 和独立的 SourceDAO artifact root。
+2. public spec 显式固定：
+   - `schemaVersion`
+   - DAO / Dividend 地址、artifact 相对路径、artifact SHA-256 和 runtime code hash
+   - `bootstrapAdmin.address` 与初始余额
+   - genesis / minimum difficulty
    - `dividendFeeSplitBlock`
-   - `artifactsDir`
-   以及 SourceDAO artifact 中的 runtime bytecode
-   生成一份固定的 `genesis-bootstrap.json`
-3. 用 `geth init genesis-bootstrap.json` 初始化本地节点
+3. loader 严格校验 schema、地址、数值编码、artifact 边界和两个 code commitment 后，生成固定的
+   `genesis-bootstrap.json`。
+4. 用 `geth init genesis-bootstrap.json` 初始化本地节点。
+
+bootstrap signer 私钥不属于 genesis spec，也不参与 genesis hash。SourceDAO 初始化脚本必须通过
+`SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY` 等 runtime secret 注入 signer，并校验派生地址与
+`bootstrapAdmin.address` 一致。
 
 这样做的好处是：
 
@@ -128,6 +133,7 @@
 ./build/bin/geth dumpgenesis \
   --usdb \
   --usdb.bootstrap.config /home/bucky/work/go-ethereum/tools/config/usdb-local-chain.json \
+  --usdb.bootstrap.artifacts /home/bucky/work/SourceDAO/artifacts-usdb \
   > /tmp/usdb-bootstrap-genesis.json
 
 ./build/bin/geth --datadir /tmp/usdb-node-1 init /tmp/usdb-bootstrap-genesis.json
@@ -145,6 +151,14 @@
 - 初始化一个本地 datadir
 - 启动单节点 USDB geth
 - 调用 `SourceDAO` 的 `npm run test:usdb:smoke`
+
+该入口默认设置 `USDB_BOOTSTRAP_FAKE_POW=1` 和 `USDB_BOOTSTRAP_USE_MOCK_INDEXER=1`。test-only
+indexer fixture 返回一份固定、可由真实 Go builder/verifier 校验的 UIP-0006 profile，因此该 smoke
+覆盖 selector/registry/profile 接线，但不验证真实 BTC-side 派生状态或 Ethash seal。它不用于评估
+PoW difficulty。
+
+禁用 mock 后必须通过 `USDB_INDEXER_RPC_URL` 和 `USDB_BOOTSTRAP_PASS_ID` 指向完整服务；真实 PoW
+场景还需将 `USDB_BOOTSTRAP_FAKE_POW=0`。
 
 默认端口约定：
 
@@ -165,6 +179,16 @@
 - 初始化两个独立 datadir
 - 启动 node1（出块）与 node2（跟随）
 - 通过 `admin_addPeer` 手工连通两个节点
+
+与单节点 bootstrap smoke 一样，该入口默认使用 `--fakepow` 和 test-only indexer fixture，以验证：
+
+- miner 与 validator 使用同一个 UIP-0006 profile
+- node2 能校验并接受 node1 生成的 selector/profile 元数据
+- 两节点能在相同 genesis 上同步并执行 SourceDAO bootstrap
+
+这不是 PoW difficulty 性能证据。关闭 fixture 时必须提供
+`USDB_INDEXER_RPC_URL` 与 `USDB_BOOTSTRAP_PASS_ID`；验证真实 Ethash 时还应设置
+`USDB_BOOTSTRAP_FAKE_POW=0`。
 
 默认端口：
 

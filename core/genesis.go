@@ -528,11 +528,10 @@ func DefaultUSDBGenesisBlock() *Genesis {
 	}
 }
 
-// USDBBootstrapGenesisConfig customizes the built-in USDB genesis for
-// development and integration testing of system contracts such as Dao and
-// Dividend. The helper intentionally only injects code, balances and the fee
-// split activation knobs; contract initialization is still expected to happen
-// via bootstrap transactions after the chain starts.
+// USDBBootstrapGenesisConfig customizes the built-in USDB genesis with the
+// system-contract code, bootstrap account, and chain parameters needed for a
+// SourceDAO fresh bootstrap. Contract initialization still happens through
+// transactions after the chain starts.
 type USDBBootstrapGenesisConfig struct {
 	DaoAddress            common.Address
 	DaoCode               []byte
@@ -546,34 +545,33 @@ type USDBBootstrapGenesisConfig struct {
 }
 
 // DefaultUSDBGenesisBlockWithBootstrap clones the default USDB genesis and
-// overlays development-time system contracts and bootstrap balances. The
-// returned genesis is not the built-in network genesis and will therefore have
-// a different hash when any of the options are populated.
-func DefaultUSDBGenesisBlockWithBootstrap(opts USDBBootstrapGenesisConfig) *Genesis {
-	genesis := DefaultUSDBGenesisBlock()
-	config := *genesis.Config
-	genesis.Config = &config
-	genesis.Alloc = make(GenesisAlloc, len(genesis.Alloc)+3)
-	for addr, account := range genesis.Alloc {
-		genesis.Alloc[addr] = account
+// overlays validated system contracts and bootstrap balances. The returned
+// genesis is not the built-in network genesis and therefore has a different
+// hash. Difficulty overrides are optional as a pair; nil values retain the
+// built-in USDB development values.
+func DefaultUSDBGenesisBlockWithBootstrap(opts USDBBootstrapGenesisConfig) (*Genesis, error) {
+	return buildUSDBGenesisBlockWithBootstrap(DefaultUSDBGenesisBlock(), opts)
+}
+
+func buildUSDBGenesisBlockWithBootstrap(base *Genesis, opts USDBBootstrapGenesisConfig) (*Genesis, error) {
+	if err := validateUSDBBootstrapGenesisConfig(base, opts); err != nil {
+		return nil, err
+	}
+	genesis, err := cloneGenesisForBootstrap(base)
+	if err != nil {
+		return nil, err
 	}
 
-	if opts.DaoAddress != (common.Address{}) && len(opts.DaoCode) > 0 {
-		genesis.Alloc[opts.DaoAddress] = GenesisAccount{
-			Balance: big.NewInt(0),
-			Code:    common.CopyBytes(opts.DaoCode),
-		}
+	genesis.Alloc[opts.DaoAddress] = GenesisAccount{
+		Balance: big.NewInt(0),
+		Code:    common.CopyBytes(opts.DaoCode),
 	}
-	if opts.DividendAddress != (common.Address{}) && len(opts.DividendCode) > 0 {
-		genesis.Alloc[opts.DividendAddress] = GenesisAccount{
-			Balance: big.NewInt(0),
-			Code:    common.CopyBytes(opts.DividendCode),
-		}
+	genesis.Alloc[opts.DividendAddress] = GenesisAccount{
+		Balance: big.NewInt(0),
+		Code:    common.CopyBytes(opts.DividendCode),
 	}
-	if opts.BootstrapAdmin != (common.Address{}) && opts.BootstrapAdminBalance != nil {
-		genesis.Alloc[opts.BootstrapAdmin] = GenesisAccount{
-			Balance: new(big.Int).Set(opts.BootstrapAdminBalance),
-		}
+	genesis.Alloc[opts.BootstrapAdmin] = GenesisAccount{
+		Balance: new(big.Int).Set(opts.BootstrapAdminBalance),
 	}
 	if opts.GenesisDifficulty != nil {
 		genesis.Difficulty = new(big.Int).Set(opts.GenesisDifficulty)
@@ -581,13 +579,138 @@ func DefaultUSDBGenesisBlockWithBootstrap(opts USDBBootstrapGenesisConfig) *Gene
 	if opts.MinimumDifficulty != nil {
 		genesis.Config.EthPoWMinimumDifficultyOverride = new(big.Int).Set(opts.MinimumDifficulty)
 	}
-	if opts.DividendAddress != (common.Address{}) {
-		genesis.Config.DividendAddress = opts.DividendAddress
+	genesis.Config.DividendAddress = opts.DividendAddress
+	genesis.Config.DividendFeeSplitBlock = new(big.Int).Set(opts.DividendFeeSplitBlock)
+	if err := genesis.Config.CheckConfigForkOrder(); err != nil {
+		return nil, fmt.Errorf("invalid USDB bootstrap chain config: %w", err)
 	}
-	if opts.DividendFeeSplitBlock != nil {
-		genesis.Config.DividendFeeSplitBlock = new(big.Int).Set(opts.DividendFeeSplitBlock)
+	return genesis, nil
+}
+
+func validateUSDBBootstrapGenesisConfig(base *Genesis, opts USDBBootstrapGenesisConfig) error {
+	if base == nil {
+		return errors.New("USDB bootstrap genesis base is nil")
 	}
-	return genesis
+	if base.Config == nil {
+		return errors.New("USDB bootstrap genesis base has no chain config")
+	}
+	if base.Difficulty == nil || base.Difficulty.Sign() <= 0 {
+		return errors.New("USDB bootstrap genesis base has invalid difficulty")
+	}
+	if opts.DaoAddress == (common.Address{}) {
+		return errors.New("USDB bootstrap Dao address is zero")
+	}
+	if len(opts.DaoCode) == 0 {
+		return errors.New("USDB bootstrap Dao runtime code is empty")
+	}
+	if len(opts.DaoCode) > params.MaxCodeSize {
+		return fmt.Errorf(
+			"USDB bootstrap Dao runtime code is %d bytes, exceeding MaxCodeSize %d",
+			len(opts.DaoCode),
+			params.MaxCodeSize,
+		)
+	}
+	if opts.DividendAddress == (common.Address{}) {
+		return errors.New("USDB bootstrap Dividend address is zero")
+	}
+	if len(opts.DividendCode) == 0 {
+		return errors.New("USDB bootstrap Dividend runtime code is empty")
+	}
+	if len(opts.DividendCode) > params.MaxCodeSize {
+		return fmt.Errorf(
+			"USDB bootstrap Dividend runtime code is %d bytes, exceeding MaxCodeSize %d",
+			len(opts.DividendCode),
+			params.MaxCodeSize,
+		)
+	}
+	if opts.BootstrapAdmin == (common.Address{}) {
+		return errors.New("USDB bootstrap admin address is zero")
+	}
+	if opts.BootstrapAdminBalance == nil || opts.BootstrapAdminBalance.Sign() <= 0 {
+		return errors.New("USDB bootstrap admin balance must be positive")
+	}
+	if opts.DaoAddress == opts.DividendAddress ||
+		opts.DaoAddress == opts.BootstrapAdmin ||
+		opts.DividendAddress == opts.BootstrapAdmin {
+		return errors.New("USDB bootstrap Dao, Dividend, and admin addresses must be distinct")
+	}
+	for _, address := range []common.Address{opts.DaoAddress, opts.DividendAddress, opts.BootstrapAdmin} {
+		if _, exists := base.Alloc[address]; exists {
+			return fmt.Errorf("USDB bootstrap address %s conflicts with base genesis alloc", address)
+		}
+	}
+	if opts.DividendFeeSplitBlock == nil || opts.DividendFeeSplitBlock.Sign() <= 0 {
+		return errors.New("USDB bootstrap dividend fee-split block must be positive")
+	}
+	if (opts.GenesisDifficulty == nil) != (opts.MinimumDifficulty == nil) {
+		return errors.New("USDB bootstrap genesis and minimum difficulty overrides must be provided together")
+	}
+	if opts.GenesisDifficulty != nil {
+		if opts.GenesisDifficulty.Sign() <= 0 {
+			return errors.New("USDB bootstrap genesis difficulty must be positive")
+		}
+		if opts.MinimumDifficulty.Sign() <= 0 {
+			return errors.New("USDB bootstrap minimum difficulty must be positive")
+		}
+		if opts.GenesisDifficulty.Cmp(opts.MinimumDifficulty) < 0 {
+			return errors.New("USDB bootstrap genesis difficulty must not be below minimum difficulty")
+		}
+	}
+	return nil
+}
+
+func cloneGenesisForBootstrap(base *Genesis) (*Genesis, error) {
+	configJSON, err := json.Marshal(base.Config)
+	if err != nil {
+		return nil, fmt.Errorf("encode USDB bootstrap base chain config: %w", err)
+	}
+	var config params.ChainConfig
+	if err := json.Unmarshal(configJSON, &config); err != nil {
+		return nil, fmt.Errorf("decode USDB bootstrap base chain config: %w", err)
+	}
+
+	alloc := make(GenesisAlloc, len(base.Alloc)+3)
+	for address, account := range base.Alloc {
+		alloc[address] = cloneGenesisAccount(account)
+	}
+	return &Genesis{
+		Config:     &config,
+		Nonce:      base.Nonce,
+		Timestamp:  base.Timestamp,
+		ExtraData:  common.CopyBytes(base.ExtraData),
+		GasLimit:   base.GasLimit,
+		Difficulty: new(big.Int).Set(base.Difficulty),
+		Mixhash:    base.Mixhash,
+		Coinbase:   base.Coinbase,
+		Alloc:      alloc,
+		Number:     base.Number,
+		GasUsed:    base.GasUsed,
+		ParentHash: base.ParentHash,
+		BaseFee:    copyBigInt(base.BaseFee),
+	}, nil
+}
+
+func cloneGenesisAccount(account GenesisAccount) GenesisAccount {
+	cloned := GenesisAccount{
+		Code:       common.CopyBytes(account.Code),
+		Balance:    copyBigInt(account.Balance),
+		Nonce:      account.Nonce,
+		PrivateKey: common.CopyBytes(account.PrivateKey),
+	}
+	if account.Storage != nil {
+		cloned.Storage = make(map[common.Hash]common.Hash, len(account.Storage))
+		for key, value := range account.Storage {
+			cloned.Storage[key] = value
+		}
+	}
+	return cloned
+}
+
+func copyBigInt(value *big.Int) *big.Int {
+	if value == nil {
+		return nil
+	}
+	return new(big.Int).Set(value)
 }
 
 // DeveloperGenesisBlock returns the 'geth --dev' genesis block.

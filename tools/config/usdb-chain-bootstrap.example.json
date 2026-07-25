@@ -1,10 +1,24 @@
 {
+  "schemaVersion": 1,
   "chainId": 20260323,
-  "artifactsDir": "../../SourceDAO/artifacts-usdb",
-  "daoAddress": "0x0000000000000000000000000000000000001001",
-  "dividendAddress": "0x0000000000000000000000000000000000001002",
-  "bootstrapAdminPrivateKey": "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4f5bcaeaf3f4e6f54",
-  "bootstrapAdminBalanceWei": "10000000000000000000",
+  "predeploys": {
+    "dao": {
+      "address": "0x0000000000000000000000000000000000001001",
+      "artifact": "contracts/Dao.sol/SourceDao.json",
+      "runtimeCodeHash": "0x1e658f8d1e59e836bb9561337f3fedf58715076bc6dfb5d9c5b6dcc7a248e1c7",
+      "artifactSha256": "af6dd01a48dcf52acd8fb853dd622d165d4a6e341ef880acf2f4f65615860da5"
+    },
+    "dividend": {
+      "address": "0x0000000000000000000000000000000000001002",
+      "artifact": "contracts/Dividend.sol/DividendContract.json",
+      "runtimeCodeHash": "0x64f7c8b65a98a8a68ab284976051a4572e5d661eb8139662f55ea532adae82d4",
+      "artifactSha256": "edc0d344db7b3782aa14696ff393b47480a617c0eeb566f70b1b3c28e4ea5184"
+    }
+  },
+  "bootstrapAdmin": {
+    "address": "0xabCd35AfbB4561213fEAfF01B5F91e18F8Df7c37",
+    "balanceWei": "10000000000000000000"
+  },
   "genesisDifficulty": "0x180000",
   "minimumDifficulty": "0x100000",
   "dividendFeeSplitBlock": 16

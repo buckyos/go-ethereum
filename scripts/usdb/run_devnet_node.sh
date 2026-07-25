@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SOURCE_DAO_DIR=${SOURCE_DAO_DIR:-"$ROOT_DIR/../SourceDAO"}
 USDB_CONFIG=${USDB_CONFIG:-"$ROOT_DIR/tools/config/usdb-local-chain.json"}
+USDB_ARTIFACTS=${USDB_ARTIFACTS:-"$SOURCE_DAO_DIR/artifacts-usdb"}
 WORK_DIR=${WORK_DIR:-/tmp/usdb-devnet-node}
 DATADIR=${DATADIR:-"$WORK_DIR/datadir"}
 GENESIS_JSON=${GENESIS_JSON:-"$WORK_DIR/usdb-bootstrap-genesis.json"}
@@ -16,6 +17,9 @@ HTTP_PORT=${HTTP_PORT:-28545}
 P2P_PORT=${P2P_PORT:-32303}
 AUTHRPC_PORT=${AUTHRPC_PORT:-28551}
 USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x0000000000000000000000000000000000001003}
+USDB_INDEXER_RPC_URL=${USDB_INDEXER_RPC_URL:-}
+USDB_PASS_ID=${USDB_PASS_ID:-}
+USDB_QUERY_TIMEOUT=${USDB_QUERY_TIMEOUT:-5s}
 RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-45}
 KEEP_RUNNING=${KEEP_RUNNING:-1}
 REINIT=${REINIT:-0}
@@ -93,6 +97,15 @@ case "$NODE_ROLE" in
     ;;
 esac
 
+if [[ -z "$USDB_INDEXER_RPC_URL" ]]; then
+  echo "USDB_INDEXER_RPC_URL is required for USDB consensus verification" >&2
+  exit 1
+fi
+if [[ "$NODE_ROLE" == "miner" && -z "$USDB_PASS_ID" ]]; then
+  echo "USDB_PASS_ID is required when NODE_ROLE=miner" >&2
+  exit 1
+fi
+
 mkdir -p "$WORK_DIR"
 mkdir -p "$DATADIR"
 
@@ -101,6 +114,7 @@ if [[ ! -f "$GENESIS_JSON" || "$REINIT" == "1" ]]; then
   run_geth dumpgenesis \
     --usdb \
     --usdb.bootstrap.config "$USDB_CONFIG" \
+    --usdb.bootstrap.artifacts "$USDB_ARTIFACTS" \
     > "$GENESIS_JSON"
 fi
 
@@ -127,7 +141,15 @@ case "$NODE_ROLE" in
     role_args=(--maxpeers 25)
     ;;
   miner)
-    role_args=(--mine --miner.threads 1 --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" --maxpeers 25)
+    role_args=(
+      --mine
+      --miner.threads 1
+      --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS"
+      --miner.usdb.passid "$USDB_PASS_ID"
+      --miner.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL"
+      --miner.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT"
+      --maxpeers 25
+    )
     ;;
   full)
     role_args=(--maxpeers 25)
@@ -155,6 +177,8 @@ echo "Starting USDB devnet node role=$NODE_ROLE"
     --authrpc.port "$AUTHRPC_PORT" \
     --port "$P2P_PORT" \
     --ipcpath "$DATADIR/geth.ipc" \
+    --ethash.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL" \
+    --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
     "${bootnode_args[@]}" \
     "${role_args[@]}"
 ) >"$LOG_FILE" 2>&1 &

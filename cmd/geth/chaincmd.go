@@ -45,7 +45,11 @@ import (
 var (
 	usdbBootstrapConfigFlag = &cli.PathFlag{
 		Name:  "usdb.bootstrap.config",
-		Usage: "Path to a SourceDAO local config used to materialize a bootstrap USDB genesis when dumping genesis JSON",
+		Usage: "Path to a versioned public USDB genesis bootstrap config",
+	}
+	usdbBootstrapArtifactsFlag = &cli.PathFlag{
+		Name:  "usdb.bootstrap.artifacts",
+		Usage: "Path to the SourceDAO artifact root referenced by the USDB genesis bootstrap config",
 	}
 	initCommand = &cli.Command{
 		Action:    initGenesis,
@@ -65,7 +69,11 @@ It expects the genesis file as argument.`,
 		Name:      "dumpgenesis",
 		Usage:     "Dumps genesis block JSON configuration to stdout",
 		ArgsUsage: "",
-		Flags:     append([]cli.Flag{}, append(utils.NetworkFlags, usdbBootstrapConfigFlag)...),
+		Flags: append(
+			append([]cli.Flag{}, utils.NetworkFlags...),
+			usdbBootstrapConfigFlag,
+			usdbBootstrapArtifactsFlag,
+		),
 		Description: `
 The dumpgenesis command dumps the genesis block configuration in JSON format to stdout.`,
 	}
@@ -213,12 +221,26 @@ func initGenesis(ctx *cli.Context) error {
 func dumpGenesis(ctx *cli.Context) error {
 	// TODO(rjl493456442) support loading from the custom datadir
 	var genesis *core.Genesis
-	if configPath := ctx.Path(usdbBootstrapConfigFlag.Name); configPath != "" {
+	configPath := ctx.Path(usdbBootstrapConfigFlag.Name)
+	artifactsPath := ctx.Path(usdbBootstrapArtifactsFlag.Name)
+	if configPath != "" || artifactsPath != "" {
 		if !ctx.Bool(utils.USDBFlag.Name) {
-			utils.Fatalf("--%s requires --%s", usdbBootstrapConfigFlag.Name, utils.USDBFlag.Name)
+			utils.Fatalf(
+				"--%s and --%s require --%s",
+				usdbBootstrapConfigFlag.Name,
+				usdbBootstrapArtifactsFlag.Name,
+				utils.USDBFlag.Name,
+			)
+		}
+		if configPath == "" || artifactsPath == "" {
+			utils.Fatalf(
+				"--%s and --%s must be provided together",
+				usdbBootstrapConfigFlag.Name,
+				usdbBootstrapArtifactsFlag.Name,
+			)
 		}
 		var err error
-		genesis, err = loadUSDBBootstrapGenesisFromSourceDAOConfig(configPath)
+		genesis, err = loadUSDBBootstrapGenesis(configPath, artifactsPath)
 		if err != nil {
 			utils.Fatalf("could not build bootstrap genesis: %v", err)
 		}

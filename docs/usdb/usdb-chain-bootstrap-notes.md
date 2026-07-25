@@ -145,34 +145,44 @@
 
 文档层先不把数值固死。
 
-### 3.2.2 第一阶段临时起步值建议
+### 3.2.2 当前开发期参数
 
-为了让开发阶段可以直接启动私链和小规模测试网，建议先给出一组“仅用于 v1 内网起步”的临时参数：
+内置、无 SourceDAO predeploy 的原型 genesis 仍使用：
 
 - `GenesisDifficulty = 8192`
 - `MinimumDifficulty = 8192`
 
-这组数值的定位是：
+当前 SourceDAO bootstrap 开发配置在现有测试机器上能够 bring-up，暂时显式覆盖为：
 
-- 明显低于当前 ETHW 默认值 `131072`
-- 便于在早期节点数少、总算力低的情况下快速连续出块
-- 仅作为第一阶段 bring-up 和回归测试参数
+- `GenesisDifficulty = 0x180000`（`1572864`）
+- `MinimumDifficulty = 0x100000`（`1048576`）
 
-它不是最终生产值。后续仍应通过实际测试数据决定是否需要上调或下调。
+两组数值都不是 public testnet / mainnet final 参数。`8192` 是未经专项标定的最早期 bring-up
+基线；`0x180000 / 0x100000` 当前也没有绑定正式 calibration report，只能说明该测试 profile
+可以在现有开发硬件上运行，不能表述为已经完成测算。发布流程不得从文档示例直接选择数值，必须
+执行专门的 PoW calibration。
 
-建议的测试回收标准：
+### 3.2.3 发布前动态测算
 
-- 平均出块时间是否落在预期区间
-- 单节点/双节点/少量节点下是否会长时间卡块
-- 难度是否在低算力阶段剧烈振荡
-- 节点数增加后是否能平滑抬升到更稳的难度水平
+这里的“动态测算”是发布前对候选矿工和测试网做离线采样，不是节点启动后根据本机硬件动态改变
+共识参数。所有节点最终必须消费同一份已冻结 genesis。
 
-如果这组临时值过低或过高，再围绕它做小步调整，例如：
+测算流程：
 
-- `4096`
-- `16384`
+1. 先冻结目标出块间隔、候选 miner 二进制、硬件集合、并发矿工数和最低存活算力假设。
+2. 分别运行低算力、标称算力、高算力和矿工掉线场景，持续时间必须覆盖 DAG warm-up 和足够多的
+   difficulty retarget 周期。
+3. 每轮记录 block number/hash、timestamp、difficulty、总 work、估算 hashrate、出块间隔
+   p50/p95/p99、stale/reorg 数和 restart 恢复时间。
+4. 用观测总 work / elapsed time 估算有效 hashrate，再按目标出块间隔计算候选
+   `GenesisDifficulty`；`MinimumDifficulty` 根据最低存活算力场景单独确定，不能只按固定比例拍板。
+5. 把候选值写入 versioned genesis spec，重复 multi-node、restart 和 reorg 测试。只有指标达到发布
+   门槛后才允许冻结。
+6. 原子更新 UIP、Go chain params、public genesis spec、canonical genesis JSON/hash 和 release
+   manifest；任一 commitment 不一致都必须阻止发布。
 
-而不是一开始就改 `DifficultyBoundDivisor` 或 `DurationLimit`。
+仓库中的 `scripts/usdb/calibrate_pow_difficulty.py` 用于从稳定测试网区间生成可审计的采样报告和
+候选值。最终选择仍需要多硬件、多场景报告共同评审，不能由单次脚本输出自动决定。
 
 ## 3.3 网络身份：整套独立于现有 ETHW
 
@@ -233,6 +243,8 @@
     - `bootnodes.txt`
 - [run_devnet_node.sh](/home/bucky/work/go-ethereum/scripts/usdb/run_devnet_node.sh)
   - 在任意机器上按角色启动一个 USDB devnet 节点
+  - 所有角色必须通过 `USDB_INDEXER_RPC_URL` 配置可用的 `usdb-indexer`
+  - `NODE_ROLE=miner` 还必须通过 `USDB_PASS_ID` 选择用于组块的 active standard pass
   - 支持：
     - `NODE_ROLE=bootnode`
     - `NODE_ROLE=miner`
@@ -248,7 +260,10 @@
 1. 在第一台机器上启动发现种子节点：
 
 ```bash
-NODE_ROLE=bootnode KEEP_RUNNING=1 ./scripts/usdb/run_devnet_node.sh
+NODE_ROLE=bootnode \
+USDB_INDEXER_RPC_URL=http://127.0.0.1:8080 \
+KEEP_RUNNING=1 \
+./scripts/usdb/run_devnet_node.sh
 ```
 
 2. 生成 bootnodes / static-nodes 清单：
@@ -262,6 +277,8 @@ NODE_ROLE=bootnode KEEP_RUNNING=1 ./scripts/usdb/run_devnet_node.sh
 ```bash
 NODE_ROLE=miner \
 BOOTNODES_FILE=/tmp/usdb-bootnodes/bootnodes.txt \
+USDB_INDEXER_RPC_URL=http://127.0.0.1:8080 \
+USDB_PASS_ID=<active-standard-pass-id> \
 KEEP_RUNNING=1 \
 ./scripts/usdb/run_devnet_node.sh
 ```
@@ -271,6 +288,7 @@ KEEP_RUNNING=1 \
 ```bash
 NODE_ROLE=full \
 STATIC_NODES_FILE=/tmp/usdb-bootnodes/static-nodes.json \
+USDB_INDEXER_RPC_URL=http://127.0.0.1:8080 \
 KEEP_RUNNING=1 \
 ./scripts/usdb/run_devnet_node.sh
 ```

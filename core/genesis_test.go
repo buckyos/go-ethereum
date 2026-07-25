@@ -254,7 +254,7 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 	genesisDifficulty := big.NewInt(0x40000)
 	minimumDifficulty := big.NewInt(0x20000)
 
-	genesis := DefaultUSDBGenesisBlockWithBootstrap(USDBBootstrapGenesisConfig{
+	genesis, err := DefaultUSDBGenesisBlockWithBootstrap(USDBBootstrapGenesisConfig{
 		DaoAddress:            daoAddr,
 		DaoCode:               daoCode,
 		DividendAddress:       dividendAddr,
@@ -265,6 +265,9 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 		GenesisDifficulty:     genesisDifficulty,
 		MinimumDifficulty:     minimumDifficulty,
 	})
+	if err != nil {
+		t.Fatalf("failed to build USDB bootstrap genesis: %v", err)
+	}
 
 	if got := genesis.Config.DividendAddress; got != dividendAddr {
 		t.Fatalf("unexpected dividend address: %s", got)
@@ -289,6 +292,157 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 	}
 	if DefaultUSDBGenesisBlock().ToBlock().Hash() == genesis.ToBlock().Hash() {
 		t.Fatalf("bootstrap overlay must produce a distinct development genesis hash")
+	}
+}
+
+func TestUSDBBootstrapGenesisPreservesAndClonesBaseState(t *testing.T) {
+	base := DefaultUSDBGenesisBlock()
+	configJSON, err := json.Marshal(base.Config)
+	if err != nil {
+		t.Fatalf("failed to encode base chain config: %v", err)
+	}
+	var baseConfig params.ChainConfig
+	if err := json.Unmarshal(configJSON, &baseConfig); err != nil {
+		t.Fatalf("failed to clone base chain config: %v", err)
+	}
+	base.Config = &baseConfig
+	existingAddress := common.HexToAddress("0x0000000000000000000000000000000000002001")
+	existingCode := []byte{0x60, 0x02}
+	existingBalance := big.NewInt(99)
+	existingStorageKey := common.HexToHash("0x01")
+	existingStorageValue := common.HexToHash("0x02")
+	base.Alloc[existingAddress] = GenesisAccount{
+		Code:    existingCode,
+		Balance: existingBalance,
+		Storage: map[common.Hash]common.Hash{existingStorageKey: existingStorageValue},
+	}
+	opts := validUSDBBootstrapGenesisConfig()
+
+	genesis, err := buildUSDBGenesisBlockWithBootstrap(base, opts)
+	if err != nil {
+		t.Fatalf("failed to build USDB bootstrap genesis: %v", err)
+	}
+	existing := genesis.Alloc[existingAddress]
+	if !reflect.DeepEqual(existing.Code, existingCode) {
+		t.Fatalf("base alloc code was not preserved: %x", existing.Code)
+	}
+	if existing.Balance == nil || existing.Balance.Cmp(existingBalance) != 0 {
+		t.Fatalf("base alloc balance was not preserved: %v", existing.Balance)
+	}
+	if existing.Storage[existingStorageKey] != existingStorageValue {
+		t.Fatalf("base alloc storage was not preserved: %v", existing.Storage)
+	}
+
+	existingCode[0] = 0xff
+	existingBalance.SetInt64(1)
+	opts.DaoCode[0] = 0xfe
+	opts.BootstrapAdminBalance.SetInt64(1)
+	base.Config.USDB.Activations[0].Versions.PayloadVersion = 2
+
+	if got := genesis.Alloc[existingAddress].Code[0]; got != 0x60 {
+		t.Fatalf("cloned base alloc code changed through input alias: %x", got)
+	}
+	if got := genesis.Alloc[existingAddress].Balance; got.Cmp(big.NewInt(99)) != 0 {
+		t.Fatalf("cloned base alloc balance changed through input alias: %v", got)
+	}
+	if got := genesis.Alloc[common.HexToAddress("0x0000000000000000000000000000000000001001")].Code[0]; got != 0x60 {
+		t.Fatalf("cloned Dao code changed through options alias: %x", got)
+	}
+	if got := genesis.Alloc[common.HexToAddress("0x0000000000000000000000000000000000001003")].Balance; got.Cmp(big.NewInt(123456789)) != 0 {
+		t.Fatalf("cloned bootstrap balance changed through options alias: %v", got)
+	}
+	if got := genesis.Config.USDB.Activations[0].Versions.PayloadVersion; got != 1 {
+		t.Fatalf("cloned chain config changed through base alias: %d", got)
+	}
+}
+
+func TestUSDBBootstrapGenesisRejectsInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*USDBBootstrapGenesisConfig)
+	}{
+		{
+			name: "zero Dao address",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.DaoAddress = common.Address{}
+			},
+		},
+		{
+			name: "empty Dividend code",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.DividendCode = nil
+			},
+		},
+		{
+			name: "oversized Dao code",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.DaoCode = make([]byte, params.MaxCodeSize+1)
+			},
+		},
+		{
+			name: "duplicate system addresses",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.DividendAddress = config.DaoAddress
+			},
+		},
+		{
+			name: "non-positive admin balance",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.BootstrapAdminBalance = big.NewInt(0)
+			},
+		},
+		{
+			name: "zero fee-split block",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.DividendFeeSplitBlock = big.NewInt(0)
+			},
+		},
+		{
+			name: "partial difficulty override",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.MinimumDifficulty = nil
+			},
+		},
+		{
+			name: "genesis difficulty below minimum",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.GenesisDifficulty = big.NewInt(99)
+				config.MinimumDifficulty = big.NewInt(100)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := validUSDBBootstrapGenesisConfig()
+			test.mutate(&config)
+			if _, err := DefaultUSDBGenesisBlockWithBootstrap(config); err == nil {
+				t.Fatal("invalid USDB bootstrap config was accepted")
+			}
+		})
+	}
+}
+
+func TestUSDBBootstrapGenesisRejectsBaseAllocConflict(t *testing.T) {
+	base := DefaultUSDBGenesisBlock()
+	config := validUSDBBootstrapGenesisConfig()
+	base.Alloc[config.DaoAddress] = GenesisAccount{Balance: big.NewInt(1)}
+
+	if _, err := buildUSDBGenesisBlockWithBootstrap(base, config); err == nil {
+		t.Fatal("USDB bootstrap address conflicting with base alloc was accepted")
+	}
+}
+
+func validUSDBBootstrapGenesisConfig() USDBBootstrapGenesisConfig {
+	return USDBBootstrapGenesisConfig{
+		DaoAddress:            common.HexToAddress("0x0000000000000000000000000000000000001001"),
+		DaoCode:               []byte{0x60, 0x00, 0x60, 0x00},
+		DividendAddress:       common.HexToAddress("0x0000000000000000000000000000000000001002"),
+		DividendCode:          []byte{0x60, 0x01, 0x60, 0x00},
+		BootstrapAdmin:        common.HexToAddress("0x0000000000000000000000000000000000001003"),
+		BootstrapAdminBalance: big.NewInt(123456789),
+		DividendFeeSplitBlock: big.NewInt(16),
+		GenesisDifficulty:     big.NewInt(0x40000),
+		MinimumDifficulty:     big.NewInt(0x20000),
 	}
 }
 

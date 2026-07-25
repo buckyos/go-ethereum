@@ -28,6 +28,8 @@ type hardhatArtifact struct {
 	DeployedBytecode string          `json:"deployedBytecode"`
 }
 
+var erc1967ImplementationSlot = common.HexToHash("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc")
+
 func loadSourceDAOArtifact(t *testing.T, relative string) (abi.ABI, []byte) {
 	t.Helper()
 
@@ -116,6 +118,41 @@ func mustPreflightCall(t *testing.T, backend *backends.SimulatedBackend, from co
 	t.Fatalf("preflight call failed: %v", err)
 }
 
+func mustPreflightRevert(t *testing.T, backend *backends.SimulatedBackend, from common.Address, to common.Address, input []byte) {
+	t.Helper()
+
+	if _, err := backend.CallContract(context.Background(), ethereum.CallMsg{
+		From:     from,
+		To:       &to,
+		Gas:      8_000_000,
+		GasPrice: big.NewInt(params.InitialBaseFee),
+		Data:     input,
+	}, nil); err == nil {
+		t.Fatal("preflight call unexpectedly succeeded")
+	}
+}
+
+func assertStorageSlotEmpty(t *testing.T, backend *backends.SimulatedBackend, address common.Address, slot common.Hash) {
+	t.Helper()
+
+	value, err := backend.StorageAt(context.Background(), address, slot, nil)
+	if err != nil {
+		t.Fatalf("failed to read storage slot %s at %s: %v", slot, address, err)
+	}
+	if !allZero(value) {
+		t.Fatalf("storage slot %s at %s is not empty: %x", slot, address, value)
+	}
+}
+
+func allZero(value []byte) bool {
+	for _, item := range value {
+		if item != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func readAddressCall(t *testing.T, contract *bind.BoundContract, method string) common.Address {
 	t.Helper()
 
@@ -144,7 +181,7 @@ func TestUSDBDividendBootstrapIntegration(t *testing.T) {
 	depositValue := big.NewInt(1_000_000_000_000_000)
 	cycleMinLength := big.NewInt(60)
 
-	genesis := core.DefaultUSDBGenesisBlockWithBootstrap(core.USDBBootstrapGenesisConfig{
+	genesis, err := core.DefaultUSDBGenesisBlockWithBootstrap(core.USDBBootstrapGenesisConfig{
 		DaoAddress:            daoAddr,
 		DaoCode:               daoCode,
 		DividendAddress:       dividendAddr,
@@ -153,6 +190,9 @@ func TestUSDBDividendBootstrapIntegration(t *testing.T) {
 		BootstrapAdminBalance: new(big.Int).Mul(big.NewInt(10), big.NewInt(params.Ether)),
 		DividendFeeSplitBlock: big.NewInt(16),
 	})
+	if err != nil {
+		t.Fatalf("failed to build USDB bootstrap genesis: %v", err)
+	}
 	// This fixture exercises only the SourceDAO bootstrap contracts. Consensus
 	// profile resolution is covered by ethash tests with an explicit resolver.
 	genesis.Config.USDB = nil
@@ -198,6 +238,20 @@ func TestUSDBDividendBootstrapIntegration(t *testing.T) {
 	if got := readAddressCall(t, dao, "dividend"); got != dividendAddr {
 		t.Fatalf("unexpected dao dividend address: %s", got)
 	}
+
+	for _, address := range []common.Address{daoAddr, dividendAddr} {
+		assertStorageSlotEmpty(t, backend, address, erc1967ImplementationSlot)
+	}
+	daoUpgradeInput, err := daoABI.Pack("upgradeToAndCall", daoAddr, []byte{})
+	if err != nil {
+		t.Fatalf("failed to pack Dao upgrade call: %v", err)
+	}
+	mustPreflightRevert(t, backend, auth.From, daoAddr, daoUpgradeInput)
+	dividendUpgradeInput, err := dividendABI.Pack("upgradeToAndCall", dividendAddr, []byte{})
+	if err != nil {
+		t.Fatalf("failed to pack Dividend upgrade call: %v", err)
+	}
+	mustPreflightRevert(t, backend, auth.From, dividendAddr, dividendUpgradeInput)
 
 	nonce, err := backend.PendingNonceAt(context.Background(), auth.From)
 	if err != nil {
