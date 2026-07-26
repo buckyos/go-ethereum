@@ -191,6 +191,10 @@ func TestVerifierResolveProfileRejectsInvalidRewardInputs(t *testing.T) {
 			value := "1111111111111111111111111111111111111111"
 			view.Pass.USDBMain = &value
 		}},
+		{name: "zero usdb_main", mutate: func(view *PassEconomicProfileView) {
+			value := "0x0000000000000000000000000000000000000000"
+			view.Pass.USDBMain = &value
+		}},
 		{name: "empty total", mutate: func(view *PassEconomicProfileView) { view.MinerAggregate.TotalMinerBTCSats = "" }},
 		{name: "leading-zero total", mutate: func(view *PassEconomicProfileView) { view.MinerAggregate.TotalMinerBTCSats = "01" }},
 		{name: "negative total", mutate: func(view *PassEconomicProfileView) { view.MinerAggregate.TotalMinerBTCSats = "-1" }},

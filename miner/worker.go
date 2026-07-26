@@ -262,8 +262,8 @@ type worker struct {
 
 type profileSelectorBuilder interface {
 	// BuildCurrentPayload fetches the current USDB state and returns the encoded
-	// payload that should be committed into header.Extra for the candidate block.
-	BuildCurrentPayload(ctx context.Context, blockNumber uint64) ([]byte, error)
+	// payload and reward recipient for the candidate block.
+	BuildCurrentPayload(ctx context.Context, blockNumber uint64) (*usdb.BuiltProfileSelector, error)
 	// Close releases any builder-owned resources such as RPC connections.
 	Close()
 }
@@ -1045,13 +1045,28 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		Time:       timestamp,
 		Coinbase:   genParams.coinbase,
 	}
+	var usdbPolicy *params.USDBConsensusVersions
 	if !genParams.noExtra || w.chainConfig.HasUSDBConsensus() {
-		extra, err := w.resolveHeaderExtra(context.Background(), builder, builderErr, staticExtra, header.Number)
+		built, policy, err := w.resolveHeaderProfile(
+			context.Background(),
+			builder,
+			builderErr,
+			staticExtra,
+			header.Number,
+		)
 		if err != nil {
 			return nil, err
 		}
-		if len(extra) != 0 {
-			header.Extra = extra
+		usdbPolicy = policy
+		if built != nil && len(built.Payload) != 0 {
+			header.Extra = built.Payload
+		}
+		if policy != nil && policy.RewardRuleVersion == usdb.RewardRuleVersionV1 {
+			if built == nil || built.RewardRecipient == (common.Address{}) {
+				return nil, errors.New("usdb reward recipient is unavailable")
+			}
+			header.Coinbase = built.RewardRecipient
+			header.UncleHash = types.EmptyUncleHash
 		}
 	}
 	// Set the randomness field from the beacon chain if it's available.
@@ -1074,13 +1089,18 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	// Could potentially happen if starting to mine in an odd state.
 	// Note genParams.coinbase can be different with header.Coinbase
 	// since clique algorithm can modify the coinbase field in header.
-	env, err := w.makeEnv(parent, header, genParams.coinbase)
+	feeRecipient := genParams.coinbase
+	if usdbPolicy != nil && usdbPolicy.RewardRuleVersion == usdb.RewardRuleVersionV1 {
+		feeRecipient = header.Coinbase
+	}
+	env, err := w.makeEnv(parent, header, feeRecipient)
 	if err != nil {
 		log.Error("Failed to create sealing context", "err", err)
 		return nil, err
 	}
 	// Accumulate the uncles for the sealing work only if it's allowed.
-	if !genParams.noUncle {
+	if !genParams.noUncle &&
+		(usdbPolicy == nil || usdbPolicy.RewardRuleVersion != usdb.RewardRuleVersionV1) {
 		commitUncles := func(blocks map[common.Hash]*types.Block) {
 			for hash, uncle := range blocks {
 				if len(env.uncles) == 2 {
@@ -1100,30 +1120,37 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	return env, nil
 }
 
-func (w *worker) resolveHeaderExtra(
+func (w *worker) resolveHeaderProfile(
 	ctx context.Context,
 	builder profileSelectorBuilder,
 	builderErr error,
 	staticExtra []byte,
 	blockNumber *big.Int,
-) ([]byte, error) {
+) (*usdb.BuiltProfileSelector, *params.USDBConsensusVersions, error) {
 	if blockNumber == nil || !blockNumber.IsUint64() {
-		return nil, fmt.Errorf("invalid candidate block number %v", blockNumber)
+		return nil, nil, fmt.Errorf("invalid candidate block number %v", blockNumber)
 	}
 	policy, err := w.chainConfig.USDBConsensusAt(blockNumber.Uint64())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if policy == nil {
-		return staticExtra, nil
+		return &usdb.BuiltProfileSelector{Payload: staticExtra}, nil, nil
 	}
 	if builder != nil {
-		return builder.BuildCurrentPayload(ctx, blockNumber.Uint64())
+		built, err := builder.BuildCurrentPayload(ctx, blockNumber.Uint64())
+		if err != nil {
+			return nil, nil, err
+		}
+		if built == nil {
+			return nil, nil, errors.New("usdb payload builder returned nil result")
+		}
+		return built, policy, nil
 	}
 	if builderErr != nil {
-		return nil, builderErr
+		return nil, nil, builderErr
 	}
-	return nil, fmt.Errorf("usdb payload builder is not configured at block %d", blockNumber.Uint64())
+	return nil, nil, fmt.Errorf("usdb payload builder is not configured at block %d", blockNumber.Uint64())
 }
 
 // fillTransactions retrieves the pending transactions from the txpool and fills them

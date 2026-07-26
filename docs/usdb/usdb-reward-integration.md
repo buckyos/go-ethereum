@@ -2,14 +2,18 @@
 
 > 历史设计稿：本文记录 UIP 拆分前的 reward-only 方案，不再作为现行协议或实现依据。
 > 当前 header selector、economic profile 和 chain-config 边界分别以 UIP-0006、
-> UIP-0007、UIP-0008/UIP-0009 及 `internal/usdb` 实现为准。
+> UIP-0007、UIP-0008/UIP-0009 为准；奖励状态转换以 UIP-0011 至 UIP-0013、
+> `docs/usdb/usdb-reward-state-implementation.md` 及当前代码为准。下文方案比较和
+> “第一阶段”参数仅保留为历史讨论记录。
 
 当前实现状态：
 
 - header 使用 107-byte `ProfileSelectorPayloadV1`，而非本文的旧 reward payload；
 - chain config 使用按 USDB block 生效的 USDB activation schedule，且每个 checkpoint 携带完整版本集合；
 - miner 和 validator 均通过同一份历史 `get_pass_economic_profile` 解析结果计算实际难度；
-- level/reward multiplier mock 已删除；在 UIP-0011 激活前仍沿用既有 Ethash 静态奖励。
+- level/reward multiplier mock 已删除；
+- UIP-0011 激活后使用 profile 的 BTC sats aggregate 计算 emission，更新 reserved system state，
+  并禁用 uncle；激活前才沿用既有 Ethash 静态奖励。
 
 ## 1. 需求
 

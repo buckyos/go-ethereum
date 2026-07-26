@@ -211,16 +211,20 @@ func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consens
 
 type stubPayloadBuilder struct {
 	payload     []byte
+	recipient   common.Address
 	err         error
 	blockNumber uint64
 }
 
-func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber uint64) ([]byte, error) {
+func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber uint64) (*usdb.BuiltProfileSelector, error) {
 	s.blockNumber = blockNumber
 	if s.err != nil {
 		return nil, s.err
 	}
-	return append([]byte(nil), s.payload...), nil
+	return &usdb.BuiltProfileSelector{
+		Payload:         append([]byte(nil), s.payload...),
+		RewardRecipient: s.recipient,
+	}, nil
 }
 
 func (s *stubPayloadBuilder) Close() {}
@@ -265,6 +269,40 @@ func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
 	}
 	if builder.blockNumber != 1 {
 		t.Fatalf("builder received block number %d, want 1", builder.blockNumber)
+	}
+}
+
+func TestPrepareWorkUsesUSDBProfileRewardRecipient(t *testing.T) {
+	config := testWorkerUSDBChainConfig()
+	versions := &config.USDB.Activations[0].Versions
+	versions.RewardRuleVersion = usdb.RewardRuleVersionV1
+	versions.CoinbaseEmissionPolicyVersion = usdb.CoinbaseEmissionPolicyVersionV1
+	versions.CollaborationEfficiencyPolicyVersion = usdb.CollaborationEfficiencyPolicyVersionV1
+	versions.PricePolicyVersion = usdb.PricePolicyVersionV1
+	w, _ := newTestWorker(t, config, ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
+	defer w.close()
+
+	rewardRecipient := common.HexToAddress("0x0000000000000000000000000000000000007777")
+	w.usdbPayloadBuilder = &stubPayloadBuilder{
+		payload:   bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size),
+		recipient: rewardRecipient,
+	}
+	env, err := w.prepareWork(&generateParams{
+		timestamp: uint64(time.Now().Unix()) + 1,
+		coinbase:  testBankAddress,
+	})
+	if err != nil {
+		t.Fatalf("prepareWork failed: %v", err)
+	}
+	if env.header.Coinbase != rewardRecipient || env.coinbase != rewardRecipient {
+		t.Fatalf(
+			"USDB reward recipient was not applied to header and fee context: header=%s env=%s",
+			env.header.Coinbase,
+			env.coinbase,
+		)
+	}
+	if env.header.UncleHash != types.EmptyUncleHash {
+		t.Fatalf("reward v1 header did not use empty uncle hash: %s", env.header.UncleHash)
 	}
 }
 

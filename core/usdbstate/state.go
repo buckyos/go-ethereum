@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 const (
@@ -39,6 +40,8 @@ const (
 	quotePolicyVersionDomain     = "usdb.system.state.v1/quote/policy-version"
 	quoteWindowBlocksDomain      = "usdb.system.state.v1/quote/window-blocks"
 	leaderLastQuoteMapBaseDomain = "usdb.system.state.v1/quote/leader-last-valid-block"
+
+	dividendBootstrapFinalizedDomain = "sourcedao.dividend.bootstrap-finalized:v1"
 )
 
 var (
@@ -82,9 +85,28 @@ var (
 	LeaderQuoteWindowBlocksSlot = slotForDomain(quoteWindowBlocksDomain)
 	// LeaderLastValidQuoteBlockMapBase is the mapping base for per-pass quote state.
 	LeaderLastValidQuoteBlockMapBase = slotForDomain(leaderLastQuoteMapBaseDomain)
+
+	// DividendBootstrapFinalizedSlot is the SourceDAO Dividend unstructured
+	// storage marker that gates UIP-0011 fee splitting.
+	DividendBootstrapFinalizedSlot = slotForDomain(dividendBootstrapFinalizedDomain)
 )
 
 var maxUint256 = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+
+// StateReader is the subset of EVM state access needed to validate and read
+// the reserved USDB system account.
+type StateReader interface {
+	GetNonce(common.Address) uint64
+	GetCodeHash(common.Address) common.Hash
+	GetCodeSize(common.Address) int
+	GetState(common.Address, common.Hash) common.Hash
+}
+
+// StateWriter extends StateReader with deterministic system-slot writes.
+type StateWriter interface {
+	StateReader
+	SetState(common.Address, common.Hash, common.Hash)
+}
 
 func slotForDomain(domain string) common.Hash {
 	return crypto.Keccak256Hash([]byte(domain))
@@ -115,6 +137,104 @@ func GenesisStorage(issuedUSDBAtoms *big.Int) (map[common.Hash]common.Hash, erro
 		SystemStateSchemaVersionSlot: common.BigToHash(new(big.Int).SetUint64(SystemStateSchemaVersion)),
 		IssuedUSDBAtomsSlot:          issued,
 	}, nil
+}
+
+// ValidateSystemAccount checks the immutable runtime account and schema invariants.
+func ValidateSystemAccount(state StateReader) error {
+	if state == nil {
+		return errors.New("USDB system-state reader is nil")
+	}
+	if nonce := state.GetNonce(SystemStateAddress); nonce != SystemStateNonce {
+		return errors.New("USDB system-state account has invalid nonce")
+	}
+	if codeSize := state.GetCodeSize(SystemStateAddress); codeSize != 0 {
+		return errors.New("USDB system-state account must not contain code")
+	}
+	schema := state.GetState(SystemStateAddress, SystemStateSchemaVersionSlot)
+	if schema != common.BigToHash(new(big.Int).SetUint64(SystemStateSchemaVersion)) {
+		return errors.New("USDB system-state account has incompatible schema")
+	}
+	return nil
+}
+
+// ValidateDividendReadiness checks the consensus-readable UIP-0010 fee gate.
+func ValidateDividendReadiness(state StateReader, address common.Address, expectedCodeHash common.Hash) error {
+	if state == nil {
+		return errors.New("USDB Dividend state reader is nil")
+	}
+	if address == (common.Address{}) || expectedCodeHash == (common.Hash{}) {
+		return errors.New("USDB Dividend identity is incomplete")
+	}
+	if state.GetCodeSize(address) == 0 || state.GetCodeHash(address) != expectedCodeHash {
+		return errors.New("USDB Dividend runtime code does not match chain config")
+	}
+	if state.GetState(address, DividendBootstrapFinalizedSlot) != common.BigToHash(big.NewInt(1)) {
+		return errors.New("USDB Dividend bootstrap is not finalized")
+	}
+	return nil
+}
+
+// ResolveDividendFeeGate validates chain-config identity and, once its height is
+// reached, requires the on-chain bootstrap readiness marker.
+func ResolveDividendFeeGate(state StateReader, config *params.ChainConfig, blockNumber *big.Int) (bool, error) {
+	if config == nil || blockNumber == nil || blockNumber.Sign() < 0 {
+		return false, errors.New("invalid USDB Dividend fee-gate context")
+	}
+	if config.DividendFeeSplitBlock == nil ||
+		config.DividendFeeSplitBlock.Sign() <= 0 ||
+		config.DividendAddress == (common.Address{}) ||
+		config.DividendCodeHash == (common.Hash{}) {
+		return false, errors.New("incomplete USDB Dividend fee-split config")
+	}
+	if blockNumber.Cmp(config.DividendFeeSplitBlock) < 0 {
+		return false, nil
+	}
+	if err := ValidateDividendReadiness(state, config.DividendAddress, config.DividendCodeHash); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ReadUint256 reads one reserved system slot as an unsigned integer.
+func ReadUint256(state StateReader, slot common.Hash) (*big.Int, error) {
+	if state == nil {
+		return nil, errors.New("USDB system-state reader is nil")
+	}
+	word := state.GetState(SystemStateAddress, slot)
+	return new(big.Int).SetBytes(word[:]), nil
+}
+
+// WriteUint256 validates and writes one reserved system slot.
+func WriteUint256(state StateWriter, slot common.Hash, value *big.Int) error {
+	if state == nil {
+		return errors.New("USDB system-state writer is nil")
+	}
+	word, err := EncodeUint256(value)
+	if err != nil {
+		return err
+	}
+	state.SetState(SystemStateAddress, slot, word)
+	return nil
+}
+
+// ApplyFixedPriceState writes one fully resolved UIP-0013 fixed-price state.
+func ApplyFixedPriceState(storage map[common.Hash]common.Hash, price *big.Int, policyVersion, sourceKind uint32, rangeID common.Hash) error {
+	if storage == nil {
+		return errors.New("USDB fixed-price storage is nil")
+	}
+	if policyVersion == 0 || sourceKind == 0 || rangeID == (common.Hash{}) {
+		return errors.New("USDB fixed-price identity is incomplete")
+	}
+	priceWord, err := EncodeUint256(price)
+	if err != nil {
+		return err
+	}
+	storage[PriceAtomsPerBTCSlot] = priceWord
+	storage[RealPriceAtomsPerBTCSlot] = priceWord
+	storage[PricePolicyVersionSlot] = common.BigToHash(new(big.Int).SetUint64(uint64(policyVersion)))
+	storage[PriceSourceKindSlot] = common.BigToHash(new(big.Int).SetUint64(uint64(sourceKind)))
+	storage[PricePolicyRangeIDSlot] = rangeID
+	return nil
 }
 
 // MappingStorageSlot derives the Solidity-compatible storage position

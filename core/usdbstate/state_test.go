@@ -30,6 +30,7 @@ func TestReservedSlotGoldenVectors(t *testing.T) {
 		{"quote policy", QuotePolicyVersionSlot, "0x06ed1ff69c0a83234a648936403718a01fd0c0e6caabe4eea61d7735f63db832"},
 		{"quote window", LeaderQuoteWindowBlocksSlot, "0x34d422b9f7b2447c9ad568159320894837919eacfd196ee5c5ede41376c56358"},
 		{"quote map", LeaderLastValidQuoteBlockMapBase, "0x9f4c948c72431d7f43911f1f1231509866c87a43729568fdf10a86f9291b9cba"},
+		{"Dividend bootstrap finalized", DividendBootstrapFinalizedSlot, "0x7d8bb76c5e489191d3f481f0b7ade016df922a8ec91d3eb9c93c07ee5a337054"},
 	}
 	for _, vector := range vectors {
 		if got := vector.got.Hex(); got != vector.want {
@@ -72,5 +73,21 @@ func TestGenesisStorageAndUint256Bounds(t *testing.T) {
 		if _, err := EncodeUint256(invalid); err == nil {
 			t.Fatalf("EncodeUint256 accepted invalid value %v", invalid)
 		}
+	}
+}
+
+func TestApplyFixedPriceState(t *testing.T) {
+	storage := make(map[common.Hash]common.Hash)
+	price := new(big.Int).Exp(big.NewInt(10), big.NewInt(23), nil)
+	rangeID := common.HexToHash("0x1234")
+	if err := ApplyFixedPriceState(storage, price, 1, 1, rangeID); err != nil {
+		t.Fatalf("ApplyFixedPriceState failed: %v", err)
+	}
+	if storage[PriceAtomsPerBTCSlot] != common.BigToHash(price) ||
+		storage[RealPriceAtomsPerBTCSlot] != common.BigToHash(price) ||
+		storage[PricePolicyVersionSlot] != common.BigToHash(big.NewInt(1)) ||
+		storage[PriceSourceKindSlot] != common.BigToHash(big.NewInt(1)) ||
+		storage[PricePolicyRangeIDSlot] != rangeID {
+		t.Fatalf("unexpected fixed-price storage: %+v", storage)
 	}
 }

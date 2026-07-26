@@ -56,6 +56,9 @@ func TestLoadUSDBBootstrapGenesis(t *testing.T) {
 	if got := genesis.Config.DividendFeeSplitBlock; got == nil || got.Uint64() != 16 {
 		t.Fatalf("unexpected dividend fee-split block: %v", got)
 	}
+	if got, want := genesis.Config.DividendCodeHash, crypto.Keccak256Hash(fixture.dividendCode); got != want {
+		t.Fatalf("unexpected Dividend code hash: have %s want %s", got, want)
+	}
 	if got := genesis.Difficulty; got == nil || got.Cmp(big.NewInt(0x180000)) != 0 {
 		t.Fatalf("unexpected genesis difficulty: %v", got)
 	}

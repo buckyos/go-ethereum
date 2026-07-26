@@ -28,7 +28,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/usdbstate"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -208,8 +210,9 @@ func TestDefaultUSDBGenesisJSONRoundTrip(t *testing.T) {
 		t.Fatalf("failed to resolve round-tripped genesis activation: %v", err)
 	}
 	if versions == nil || versions.PayloadVersion != 1 || versions.DifficultyPolicyVersion != 1 ||
-		versions.RewardRuleVersion != 0 || versions.CoinbaseEmissionPolicyVersion != 0 ||
-		versions.CollaborationEfficiencyPolicyVersion != 0 || versions.PricePolicyVersion != 0 ||
+		versions.RewardRuleVersion != 1 || versions.CoinbaseEmissionPolicyVersion != 1 ||
+		versions.FeeSplitPolicyVersion != 0 ||
+		versions.CollaborationEfficiencyPolicyVersion != 1 || versions.PricePolicyVersion != 1 ||
 		versions.QuotePolicyVersion != 0 || versions.AuxPoolPolicyVersion != 0 {
 		t.Fatalf("round-tripped genesis returned unexpected USDB versions: %+v", versions)
 	}
@@ -238,6 +241,26 @@ func TestDefaultUSDBGenesisSystemState(t *testing.T) {
 	}
 	if got := account.Storage[usdbstate.IssuedUSDBAtomsSlot]; got != (common.Hash{}) {
 		t.Fatalf("empty built-in alloc must have zero issued supply: %s", got)
+	}
+	price := common.BigToHash(usdb.FixedPriceAtomsPerBTCV1())
+	if got := account.Storage[usdbstate.PriceAtomsPerBTCSlot]; got != price {
+		t.Fatalf("unexpected genesis price: have %s want %s", got, price)
+	}
+	if got := account.Storage[usdbstate.RealPriceAtomsPerBTCSlot]; got != price {
+		t.Fatalf("unexpected genesis real price: have %s want %s", got, price)
+	}
+	if got := account.Storage[usdbstate.PricePolicyVersionSlot]; got != common.BigToHash(big.NewInt(1)) {
+		t.Fatalf("unexpected genesis price policy: %s", got)
+	}
+	if got := account.Storage[usdbstate.PriceSourceKindSlot]; got != common.BigToHash(big.NewInt(1)) {
+		t.Fatalf("unexpected genesis price source: %s", got)
+	}
+	rangeID, err := usdb.FixedPriceRangeIDV1(params.USDBChainConfig.ChainID, 0)
+	if err != nil {
+		t.Fatalf("failed to derive genesis price range: %v", err)
+	}
+	if got := account.Storage[usdbstate.PricePolicyRangeIDSlot]; got != rangeID {
+		t.Fatalf("unexpected genesis price range: have %s want %s", got, rangeID)
 	}
 }
 
@@ -289,7 +312,7 @@ func TestInitializeUSDBGenesisSystemStateRejectsInvalidInputs(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := initializeUSDBGenesisSystemState(test.alloc); err == nil {
+			if err := initializeUSDBGenesisSystemState(test.alloc, params.USDBChainConfig); err == nil {
 				t.Fatal("invalid USDB genesis system state was accepted")
 			}
 		})
@@ -353,6 +376,12 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 	}
 	if got := genesis.Config.DividendFeeSplitBlock; got == nil || got.Cmp(activationBlock) != 0 {
 		t.Fatalf("unexpected dividend activation block: %v", got)
+	}
+	if got, want := genesis.Config.DividendCodeHash, crypto.Keccak256Hash(dividendCode); got != want {
+		t.Fatalf("unexpected dividend runtime code hash: have %s want %s", got, want)
+	}
+	if got := genesis.Config.USDB.Activations[0].Versions.FeeSplitPolicyVersion; got != 1 {
+		t.Fatalf("bootstrap genesis did not activate fee policy v1: %d", got)
 	}
 	if got := genesis.Alloc[daoAddr].Code; !reflect.DeepEqual(got, daoCode) {
 		t.Fatalf("unexpected dao code: %x", got)

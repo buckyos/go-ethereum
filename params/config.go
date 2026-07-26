@@ -18,6 +18,7 @@ package params
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -36,7 +37,7 @@ var (
 	KilnGenesisHash    = common.HexToHash("0x51c7fe41be669f69c45c33a56982cbde405313342d9e2b00d7c91a7b284dd4f8")
 	// USDBGenesisHash identifies DefaultUSDBGenesisBlock. Development bootstrap
 	// overlays use their computed hash until a public network genesis is frozen.
-	USDBGenesisHash = common.HexToHash("0x10f5f725ad744f6609d9eeec65fc9106afc558973517249fd474192e8a428b3b")
+	USDBGenesisHash = common.HexToHash("0x2ddb7bab1cf85a02d71048927f42a99a8412d937d87b792c73949d967754d9ae")
 )
 
 // USDBNetworkID is the provisional network and replay-protection identifier for
@@ -121,9 +122,15 @@ var (
 					Block:                   0,
 					BTCActivationRegistryID: "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d",
 					Versions: USDBConsensusVersions{
-						PayloadVersion:          1,
-						DifficultyPolicyVersion: 1,
-						AuxPoolPolicyVersion:    0,
+						PayloadVersion:                       1,
+						DifficultyPolicyVersion:              1,
+						RewardRuleVersion:                    1,
+						CoinbaseEmissionPolicyVersion:        1,
+						FeeSplitPolicyVersion:                0,
+						CollaborationEfficiencyPolicyVersion: 1,
+						PricePolicyVersion:                   1,
+						QuotePolicyVersion:                   0,
+						AuxPoolPolicyVersion:                 0,
 					},
 				},
 			},
@@ -501,6 +508,9 @@ type ChainConfig struct {
 	// DividendAddress is the system contract or reserved address that receives the
 	// dividend share once DividendFeeSplitBlock becomes active.
 	DividendAddress common.Address `json:"dividendAddress,omitempty"`
+	// DividendCodeHash commits the exact runtime code accepted by the fee-split
+	// readiness predicate.
+	DividendCodeHash common.Hash `json:"dividendCodeHash,omitempty"`
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
 	TerminalTotalDifficulty *big.Int `json:"terminalTotalDifficulty,omitempty"`
@@ -755,6 +765,7 @@ func (c *ChainConfig) IsDividendFeeSplit(num *big.Int) bool {
 	return c != nil &&
 		c.DividendFeeSplitBlock != nil &&
 		c.DividendAddress != (common.Address{}) &&
+		c.DividendCodeHash != (common.Hash{}) &&
 		isForked(c.DividendFeeSplitBlock, num)
 }
 
@@ -904,8 +915,17 @@ func (v USDBConsensusVersions) validate(block uint64) error {
 	if v.DifficultyPolicyVersion == 0 {
 		return fmt.Errorf("invalid USDB difficulty policy version 0 at block %d", block)
 	}
-	if v.RewardRuleVersion == 0 && (v.CoinbaseEmissionPolicyVersion != 0 || v.FeeSplitPolicyVersion != 0) {
+	if v.RewardRuleVersion == 0 &&
+		(v.CoinbaseEmissionPolicyVersion != 0 ||
+			v.FeeSplitPolicyVersion != 0 ||
+			v.CollaborationEfficiencyPolicyVersion != 0 ||
+			v.PricePolicyVersion != 0 ||
+			v.AuxPoolPolicyVersion != 0) {
 		return fmt.Errorf("invalid USDB reward policy dependencies at block %d", block)
+	}
+	if v.RewardRuleVersion != 0 &&
+		(v.CoinbaseEmissionPolicyVersion == 0 || v.PricePolicyVersion == 0) {
+		return fmt.Errorf("incomplete USDB reward policy dependencies at block %d", block)
 	}
 	return nil
 }
@@ -999,6 +1019,27 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 			return err
 		}
 	}
+	hasDividendConfig := c.DividendFeeSplitBlock != nil ||
+		c.DividendAddress != (common.Address{}) ||
+		c.DividendCodeHash != (common.Hash{})
+	if hasDividendConfig &&
+		(c.DividendFeeSplitBlock == nil ||
+			c.DividendFeeSplitBlock.Sign() <= 0 ||
+			c.DividendAddress == (common.Address{}) ||
+			c.DividendCodeHash == (common.Hash{})) {
+		return errors.New("incomplete USDB Dividend fee-split config")
+	}
+	if c.USDB != nil {
+		for _, activation := range c.USDB.Activations {
+			if activation.Versions.FeeSplitPolicyVersion != 0 && !hasDividendConfig {
+				return fmt.Errorf(
+					"USDB fee split policy v%d at block %d has no Dividend config",
+					activation.Versions.FeeSplitPolicyVersion,
+					activation.Block,
+				)
+			}
+		}
+	}
 	return nil
 }
 
@@ -1075,6 +1116,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, head *big.Int) *Confi
 	}
 	if c.IsDividendFeeSplit(head) && c.DividendAddress != newcfg.DividendAddress {
 		return newCompatError("Dividend fee split address", c.DividendFeeSplitBlock, newcfg.DividendFeeSplitBlock)
+	}
+	if c.IsDividendFeeSplit(head) && c.DividendCodeHash != newcfg.DividendCodeHash {
+		return newCompatError("Dividend runtime code hash", c.DividendFeeSplitBlock, newcfg.DividendFeeSplitBlock)
 	}
 	if err := checkUSDBCompatible(c.USDB, newcfg.USDB, head.Uint64()); err != nil {
 		return err

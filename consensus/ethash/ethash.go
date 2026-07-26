@@ -429,6 +429,7 @@ type Config struct {
 	DatasetsOnDisk   int
 	DatasetsLockMmap bool
 	PowMode          Mode
+	FakeSealDelay    time.Duration
 
 	// When set, notifications sent by the remote sealer will
 	// be block header JSON objects instead of work package arrays.

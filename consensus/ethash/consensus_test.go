@@ -34,9 +34,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/usdbstate"
 	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 type diffTest struct {
@@ -293,6 +295,7 @@ func (s *stubChainHeaderReader) GetHeader(hash common.Hash, number uint64) *type
 func (s *stubChainHeaderReader) GetHeaderByNumber(uint64) *types.Header    { return nil }
 func (s *stubChainHeaderReader) GetHeaderByHash(common.Hash) *types.Header { return nil }
 func (s *stubChainHeaderReader) GetTd(common.Hash, uint64) *big.Int        { return nil }
+func (s *stubChainHeaderReader) GetBlock(common.Hash, uint64) *types.Block { return nil }
 
 type stubProfileResolver struct {
 	resolved     *usdb.ResolvedConsensusProfile
@@ -362,6 +365,41 @@ func newTestUSDBChainConfig() *params.ChainConfig {
 			}},
 		},
 	}
+}
+
+func newTestUSDBRewardChainConfig() *params.ChainConfig {
+	config := newTestUSDBChainConfig()
+	config.ChainID = big.NewInt(20_260_323)
+	config.USDB.Activations[0].Versions.RewardRuleVersion = usdb.RewardRuleVersionV1
+	config.USDB.Activations[0].Versions.CoinbaseEmissionPolicyVersion = usdb.CoinbaseEmissionPolicyVersionV1
+	config.USDB.Activations[0].Versions.CollaborationEfficiencyPolicyVersion = usdb.CollaborationEfficiencyPolicyVersionV1
+	config.USDB.Activations[0].Versions.PricePolicyVersion = usdb.PricePolicyVersionV1
+	return config
+}
+
+func initializeTestUSDBRewardState(t *testing.T, statedb *state.StateDB, config *params.ChainConfig, issued *big.Int) {
+	t.Helper()
+	statedb.SetNonce(usdbstate.SystemStateAddress, usdbstate.SystemStateNonce)
+	statedb.SetState(
+		usdbstate.SystemStateAddress,
+		usdbstate.SystemStateSchemaVersionSlot,
+		common.BigToHash(new(big.Int).SetUint64(usdbstate.SystemStateSchemaVersion)),
+	)
+	statedb.SetState(
+		usdbstate.SystemStateAddress,
+		usdbstate.IssuedUSDBAtomsSlot,
+		common.BigToHash(issued),
+	)
+	rangeID, err := usdb.FixedPriceRangeIDV1(config.ChainID, 0)
+	if err != nil {
+		t.Fatalf("failed to derive test price range: %v", err)
+	}
+	price := common.BigToHash(usdb.FixedPriceAtomsPerBTCV1())
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.PriceAtomsPerBTCSlot, price)
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.RealPriceAtomsPerBTCSlot, price)
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.PricePolicyVersionSlot, common.BigToHash(big.NewInt(1)))
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.PriceSourceKindSlot, common.BigToHash(big.NewInt(1)))
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.PricePolicyRangeIDSlot, rangeID)
 }
 
 func TestVerifyHeaderValidatesUsdbProfileSelectorBeforeResolution(t *testing.T) {
@@ -605,25 +643,388 @@ func TestFinalizeAndAssembleReturnsErrorWhenUsdbVerifierFails(t *testing.T) {
 	}
 }
 
-func TestFinalizeAndAssembleRejectsUnimplementedRewardActivation(t *testing.T) {
+func TestFinalizeAndAssembleAppliesUSDBRewardV1(t *testing.T) {
 	coinbase := common.HexToAddress("0x1005")
-	config := newTestUSDBChainConfig()
-	config.USDB.Activations[0].Versions.RewardRuleVersion = 1
-	config.USDB.Activations[0].Versions.CoinbaseEmissionPolicyVersion = 1
+	config := newTestUSDBRewardChainConfig()
+	profile := &usdb.ResolvedConsensusProfile{
+		RewardRecipient:    coinbase,
+		TotalMinerBTCSats:  big.NewInt(100_000_000),
+		CollabContribution: big.NewInt(100),
+	}
+	engine := &Ethash{
+		config:              Config{Log: log.Root()},
+		usdbProfileResolver: &stubProfileResolver{resolved: profile},
+	}
+	header := &types.Header{
+		Number:    big.NewInt(1),
+		Coinbase:  coinbase,
+		Extra:     newTestPayloadBytes(t),
+		UncleHash: types.EmptyUncleHash,
+	}
+	statedb := newTestStateDB(t)
+	initializeTestUSDBRewardState(t, statedb, config, big.NewInt(0))
+	chain := &stubChainHeaderReader{config: config}
+
+	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil)
+	if err != nil || block == nil {
+		t.Fatalf("USDB reward v1 finalization failed: block=%v err=%v", block, err)
+	}
+	const wantEmission = "634195839675291730"
+	if got := statedb.GetBalance(coinbase); got.String() != wantEmission {
+		t.Fatalf("unexpected USDB reward balance: have %s want %s", got, wantEmission)
+	}
+	if got, _ := usdbstate.ReadUint256(statedb, usdbstate.IssuedUSDBAtomsSlot); got.String() != wantEmission {
+		t.Fatalf("unexpected issued supply: have %s want %s", got, wantEmission)
+	}
+	for slot, want := range map[common.Hash]string{
+		usdbstate.KWindowSumSlot:    "100",
+		usdbstate.KWindowCountSlot:  "1",
+		usdbstate.KWindowCursorSlot: "1",
+		usdbstate.KLastCESlot:       "100",
+		usdbstate.KLastAESlot:       "0",
+		usdbstate.KLastKBpsSlot:     "10000",
+		usdbstate.KCERingSlot(0):    "100",
+	} {
+		got, readErr := usdbstate.ReadUint256(statedb, slot)
+		if readErr != nil || got.String() != want {
+			t.Fatalf("unexpected K slot %s: have %v want %s err=%v", slot, got, want, readErr)
+		}
+	}
+}
+
+func TestUSDBRewardStateRevertsWithParentRoot(t *testing.T) {
+	coinbase := common.HexToAddress("0x1007")
+	config := newTestUSDBRewardChainConfig()
+	next := config.USDB.Activations[0]
+	next.Block = 1
+	config.USDB.Activations = append(config.USDB.Activations, next)
+
+	stateDatabase := state.NewDatabase(rawdb.NewMemoryDatabase())
+	parentState, err := state.New(common.Hash{}, stateDatabase, nil)
+	if err != nil {
+		t.Fatalf("failed to create parent state: %v", err)
+	}
+	initializeTestUSDBRewardState(t, parentState, config, big.NewInt(0))
+	initialRangeID := parentState.GetState(usdbstate.SystemStateAddress, usdbstate.PricePolicyRangeIDSlot)
+	parentRoot, err := parentState.Commit(false)
+	if err != nil {
+		t.Fatalf("failed to commit parent state: %v", err)
+	}
+	if err := stateDatabase.TrieDB().Commit(parentRoot, false, nil); err != nil {
+		t.Fatalf("failed to persist parent state: %v", err)
+	}
+	statedb, err := state.New(parentRoot, stateDatabase, nil)
+	if err != nil {
+		t.Fatalf("failed to reopen parent state: %v", err)
+	}
+
+	engine := &Ethash{
+		config: Config{Log: log.Root()},
+		usdbProfileResolver: &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{
+			RewardRecipient:    coinbase,
+			TotalMinerBTCSats:  big.NewInt(100_000_000),
+			CollabContribution: big.NewInt(250),
+		}},
+	}
+	header := &types.Header{
+		Number:    big.NewInt(1),
+		Coinbase:  coinbase,
+		Extra:     newTestPayloadBytes(t),
+		UncleHash: types.EmptyUncleHash,
+	}
+	if block, err := engine.FinalizeAndAssemble(
+		&stubChainHeaderReader{config: config},
+		header,
+		statedb,
+		nil,
+		nil,
+		nil,
+	); err != nil || block == nil {
+		t.Fatalf("failed to apply reward state before rollback: block=%v err=%v", block, err)
+	}
+	if got := statedb.GetBalance(coinbase); got.Sign() == 0 {
+		t.Fatalf("reward balance was not written before rollback")
+	}
+	if got := statedb.GetState(usdbstate.SystemStateAddress, usdbstate.KWindowCountSlot); got == (common.Hash{}) {
+		t.Fatalf("K state was not written before rollback")
+	}
+	if got := statedb.GetState(usdbstate.SystemStateAddress, usdbstate.PricePolicyRangeIDSlot); got == initialRangeID {
+		t.Fatalf("price range was not advanced before rollback")
+	}
+
+	childRoot, err := statedb.Commit(false)
+	if err != nil {
+		t.Fatalf("failed to commit child state: %v", err)
+	}
+	if childRoot == parentRoot {
+		t.Fatalf("reward transition did not change state root")
+	}
+	statedb, err = state.New(parentRoot, stateDatabase, nil)
+	if err != nil {
+		t.Fatalf("failed to restore parent state after reorg: %v", err)
+	}
+
+	if got := statedb.GetBalance(coinbase); got.Sign() != 0 {
+		t.Fatalf("reward balance survived rollback: %s", got)
+	}
+	if got, err := usdbstate.ReadUint256(statedb, usdbstate.IssuedUSDBAtomsSlot); err != nil || got.Sign() != 0 {
+		t.Fatalf("issued supply survived rollback: value=%v err=%v", got, err)
+	}
+	for _, slot := range []common.Hash{
+		usdbstate.KWindowSumSlot,
+		usdbstate.KWindowCountSlot,
+		usdbstate.KWindowCursorSlot,
+		usdbstate.KLastCESlot,
+		usdbstate.KLastAESlot,
+		usdbstate.KLastKBpsSlot,
+		usdbstate.KCERingSlot(0),
+	} {
+		if got := statedb.GetState(usdbstate.SystemStateAddress, slot); got != (common.Hash{}) {
+			t.Fatalf("K state survived rollback: slot=%s value=%s", slot, got)
+		}
+	}
+	if got := statedb.GetState(usdbstate.SystemStateAddress, usdbstate.PricePolicyRangeIDSlot); got != initialRangeID {
+		t.Fatalf("price range did not roll back: have %s want %s", got, initialRangeID)
+	}
+}
+
+func TestUSDBRewardV1RecipientMismatchLeavesStateUnchanged(t *testing.T) {
+	config := newTestUSDBRewardChainConfig()
+	coinbase := common.HexToAddress("0x1006")
+	statedb := newTestStateDB(t)
+	initializeTestUSDBRewardState(t, statedb, config, big.NewInt(7))
+	engine := &Ethash{
+		config: Config{Log: log.Root()},
+		usdbProfileResolver: &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{
+			RewardRecipient:    common.HexToAddress("0x2006"),
+			TotalMinerBTCSats:  big.NewInt(100_000_000),
+			CollabContribution: big.NewInt(1),
+		}},
+	}
+	header := &types.Header{
+		Number:    big.NewInt(1),
+		Coinbase:  coinbase,
+		Extra:     newTestPayloadBytes(t),
+		UncleHash: types.EmptyUncleHash,
+	}
+	block, err := engine.FinalizeAndAssemble(
+		&stubChainHeaderReader{config: config},
+		header,
+		statedb,
+		nil,
+		nil,
+		nil,
+	)
+	if err == nil || block != nil || !strings.Contains(err.Error(), "reward recipient mismatch") {
+		t.Fatalf("recipient mismatch was not rejected: block=%v err=%v", block, err)
+	}
+	if got := statedb.GetBalance(coinbase); got.Sign() != 0 {
+		t.Fatalf("recipient mismatch changed balance: %s", got)
+	}
+	if got, _ := usdbstate.ReadUint256(statedb, usdbstate.IssuedUSDBAtomsSlot); got.Cmp(big.NewInt(7)) != 0 {
+		t.Fatalf("recipient mismatch changed issued supply: %s", got)
+	}
+	if got := statedb.GetState(usdbstate.SystemStateAddress, usdbstate.KWindowCountSlot); got != (common.Hash{}) {
+		t.Fatalf("recipient mismatch changed K state: %s", got)
+	}
+}
+
+func TestUSDBRewardV1DisablesUncles(t *testing.T) {
+	config := newTestUSDBRewardChainConfig()
+	chain := &stubChainHeaderReader{config: config}
+	engine := &Ethash{config: Config{Log: log.Root()}}
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+	}
+	header := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1_001,
+		Difficulty: CalcDifficulty(config, 1_001, parent),
+		GasLimit:   parent.GasLimit,
+		Extra:      newTestPayloadBytes(t),
+		UncleHash:  common.HexToHash("0x1234"),
+	}
+	if err := engine.verifyHeader(chain, header, parent, false, false, 2_000); !errors.Is(err, errUSDBUnclesDisabled) {
+		t.Fatalf("non-empty uncle hash was not rejected: %v", err)
+	}
+
+	uncle := &types.Header{Number: big.NewInt(0)}
+	block := types.NewBlock(header, nil, []*types.Header{uncle}, nil, trie.NewStackTrie(nil))
+	if err := engine.VerifyUncles(chain, block); !errors.Is(err, errUSDBUnclesDisabled) {
+		t.Fatalf("uncle body was not rejected: %v", err)
+	}
+
+	statedb := newTestStateDB(t)
+	initializeTestUSDBRewardState(t, statedb, config, big.NewInt(0))
+	engine.usdbProfileResolver = &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{
+		RewardRecipient:    header.Coinbase,
+		TotalMinerBTCSats:  big.NewInt(1),
+		CollabContribution: big.NewInt(0),
+	}}
+	if _, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, []*types.Header{uncle}, nil); !errors.Is(err, errUSDBUnclesDisabled) {
+		t.Fatalf("uncle reward transition was not rejected: %v", err)
+	}
+}
+
+func TestPrepareKTransitionUsesPriorFullWindowAndReplacesOldestSample(t *testing.T) {
+	statedb := newTestStateDB(t)
+	const (
+		windowSum = 5_040_000
+		oldSample = 100
+		currentCE = 50
+	)
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.KWindowSumSlot, common.BigToHash(big.NewInt(windowSum)))
+	statedb.SetState(
+		usdbstate.SystemStateAddress,
+		usdbstate.KWindowCountSlot,
+		common.BigToHash(new(big.Int).SetUint64(usdb.KWindowBlocks)),
+	)
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.KWindowCursorSlot, common.Hash{})
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.KCERingSlot(0), common.BigToHash(big.NewInt(oldSample)))
+
+	kBps, writes, err := prepareKTransition(
+		usdb.CollaborationEfficiencyPolicyVersionV1,
+		statedb,
+		big.NewInt(currentCE),
+	)
+	if err != nil {
+		t.Fatalf("full-window K transition failed: %v", err)
+	}
+	if kBps != 9_090 {
+		t.Fatalf("K used the wrong historical average: have %d want 9090", kBps)
+	}
+	for _, write := range writes {
+		statedb.SetState(usdbstate.SystemStateAddress, write.slot, write.value)
+	}
+	for slot, want := range map[common.Hash]string{
+		usdbstate.KWindowSumSlot:    "5039950",
+		usdbstate.KWindowCountSlot:  "50400",
+		usdbstate.KWindowCursorSlot: "1",
+		usdbstate.KCERingSlot(0):    "50",
+		usdbstate.KLastCESlot:       "50",
+		usdbstate.KLastAESlot:       "100",
+		usdbstate.KLastKBpsSlot:     "9090",
+	} {
+		got, readErr := usdbstate.ReadUint256(statedb, slot)
+		if readErr != nil || got.String() != want {
+			t.Fatalf("unexpected K slot %s: have %v want %s err=%v", slot, got, want, readErr)
+		}
+	}
+}
+
+func TestPrepareKTransitionRejectsCorruptWindowState(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*state.StateDB)
+	}{
+		{
+			name: "warmup cursor mismatch",
+			setup: func(statedb *state.StateDB) {
+				statedb.SetState(usdbstate.SystemStateAddress, usdbstate.KWindowCountSlot, common.BigToHash(big.NewInt(1)))
+			},
+		},
+		{
+			name: "warmup sum exceeds initialized bounds",
+			setup: func(statedb *state.StateDB) {
+				statedb.SetState(usdbstate.SystemStateAddress, usdbstate.KWindowSumSlot, common.BigToHash(big.NewInt(1)))
+			},
+		},
+		{
+			name: "warmup next slot already initialized",
+			setup: func(statedb *state.StateDB) {
+				statedb.SetState(usdbstate.SystemStateAddress, usdbstate.KCERingSlot(0), common.BigToHash(big.NewInt(1)))
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			statedb := newTestStateDB(t)
+			test.setup(statedb)
+			if _, writes, err := prepareKTransition(
+				usdb.CollaborationEfficiencyPolicyVersionV1,
+				statedb,
+				big.NewInt(1),
+			); err == nil || len(writes) != 0 {
+				t.Fatalf("corrupt K state was accepted: writes=%v err=%v", writes, err)
+			}
+		})
+	}
+}
+
+func TestPrepareFixedPriceTransitionUsesParentStateAndWritesActiveRange(t *testing.T) {
+	config := newTestUSDBRewardChainConfig()
+	next := config.USDB.Activations[0]
+	next.Block = 10
+	config.USDB.Activations = append(config.USDB.Activations, next)
+	statedb := newTestStateDB(t)
+	initializeTestUSDBRewardState(t, statedb, config, big.NewInt(0))
+
+	price, writes, err := prepareFixedPriceTransition(
+		config,
+		&config.USDB.Activations[1],
+		statedb,
+		10,
+	)
+	if err != nil {
+		t.Fatalf("fixed-price activation transition failed: %v", err)
+	}
+	if price.Cmp(usdb.FixedPriceAtomsPerBTCV1()) != 0 {
+		t.Fatalf("reward did not use parent fixed price: %s", price)
+	}
+	for _, write := range writes {
+		statedb.SetState(usdbstate.SystemStateAddress, write.slot, write.value)
+	}
+	wantRange, err := usdb.FixedPriceRangeIDV1(config.ChainID, 10)
+	if err != nil {
+		t.Fatalf("failed to derive active range: %v", err)
+	}
+	if got := statedb.GetState(usdbstate.SystemStateAddress, usdbstate.PricePolicyRangeIDSlot); got != wantRange {
+		t.Fatalf("child price range mismatch: have %s want %s", got, wantRange)
+	}
+}
+
+func TestPrepareFixedPriceTransitionRejectsParentStateMismatch(t *testing.T) {
+	config := newTestUSDBRewardChainConfig()
+	statedb := newTestStateDB(t)
+	initializeTestUSDBRewardState(t, statedb, config, big.NewInt(0))
+	statedb.SetState(usdbstate.SystemStateAddress, usdbstate.PriceAtomsPerBTCSlot, common.BigToHash(big.NewInt(1)))
+
+	price, writes, err := prepareFixedPriceTransition(
+		config,
+		&config.USDB.Activations[0],
+		statedb,
+		1,
+	)
+	if err == nil || price != nil || len(writes) != 0 {
+		t.Fatalf("invalid parent price state was accepted: price=%v writes=%v err=%v", price, writes, err)
+	}
+}
+
+func TestFinalizeAndAssembleRejectsUnsupportedUSDBRewardVersion(t *testing.T) {
+	config := newTestUSDBRewardChainConfig()
+	config.USDB.Activations[0].Versions.RewardRuleVersion = 2
 	engine := &Ethash{
 		config:              Config{Log: log.Root()},
 		usdbProfileResolver: &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{}},
 	}
-	header := &types.Header{Number: big.NewInt(1), Coinbase: coinbase, Extra: newTestPayloadBytes(t)}
-	statedb := newTestStateDB(t)
-	chain := &stubChainHeaderReader{config: config}
-
-	block, err := engine.FinalizeAndAssemble(chain, header, statedb, nil, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "unsupported usdb reward policies") {
-		t.Fatalf("unimplemented reward activation did not fail closed: block=%v err=%v", block, err)
+	header := &types.Header{
+		Number:    big.NewInt(1),
+		Extra:     newTestPayloadBytes(t),
+		UncleHash: types.EmptyUncleHash,
 	}
-	if got := statedb.GetBalance(coinbase); got.Sign() != 0 {
-		t.Fatalf("unimplemented reward activation changed balance: %s", got)
+	block, err := engine.FinalizeAndAssemble(
+		&stubChainHeaderReader{config: config},
+		header,
+		newTestStateDB(t),
+		nil,
+		nil,
+		nil,
+	)
+	if err == nil || block != nil || !strings.Contains(err.Error(), "unsupported USDB reward rule version") {
+		t.Fatalf("unsupported reward version was not rejected: block=%v err=%v", block, err)
 	}
 }
 

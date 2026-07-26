@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -31,16 +32,19 @@ func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 		t.Fatalf("failed to build payload builder: %v", err)
 	}
 
-	encoded, err := builder.BuildCurrentPayload(context.Background(), 42)
+	built, err := builder.BuildCurrentPayload(context.Background(), 42)
 	if err != nil {
 		t.Fatalf("failed to build profile selector: %v", err)
 	}
-	if len(encoded) != ProfileSelectorPayloadV1Size {
-		t.Fatalf("unexpected payload size: have %d want %d", len(encoded), ProfileSelectorPayloadV1Size)
+	if len(built.Payload) != ProfileSelectorPayloadV1Size {
+		t.Fatalf("unexpected payload size: have %d want %d", len(built.Payload), ProfileSelectorPayloadV1Size)
+	}
+	if built.RewardRecipient != common.HexToAddress("0x1111111111111111111111111111111111111111") {
+		t.Fatalf("unexpected reward recipient: %s", built.RewardRecipient)
 	}
 
 	var payload ProfileSelectorPayload
-	if err := payload.UnmarshalBinary(encoded); err != nil {
+	if err := payload.UnmarshalBinary(built.Payload); err != nil {
 		t.Fatalf("failed to decode profile selector: %v", err)
 	}
 	if payload.BTCHeight != 123 || payload.DifficultyPolicyVersion != 7 {
@@ -86,12 +90,12 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 		{block: 100, want: 2, wantRegistry: BTCRegtestActivationRegistryIDRevision2},
 	} {
 		client.profile.ExternalState.ActivationRegistryID = test.wantRegistry
-		encoded, err := builder.BuildCurrentPayload(context.Background(), test.block)
+		built, err := builder.BuildCurrentPayload(context.Background(), test.block)
 		if err != nil {
 			t.Fatalf("block %d payload failed: %v", test.block, err)
 		}
 		var payload ProfileSelectorPayload
-		if err := payload.UnmarshalBinary(encoded); err != nil {
+		if err := payload.UnmarshalBinary(built.Payload); err != nil {
 			t.Fatalf("block %d payload decode failed: %v", test.block, err)
 		}
 		if payload.DifficultyPolicyVersion != test.want {

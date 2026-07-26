@@ -86,14 +86,15 @@ var (
 // codebase, inherently breaking if the engine is swapped out. Please put common
 // error types into the consensus package.
 var (
-	errOlderBlockTime    = errors.New("timestamp older than parent")
-	errTooManyUncles     = errors.New("too many uncles")
-	errDuplicateUncle    = errors.New("duplicate uncle")
-	errUncleIsAncestor   = errors.New("uncle is ancestor")
-	errDanglingUncle     = errors.New("uncle's parent is not ancestor")
-	errInvalidDifficulty = errors.New("non-positive difficulty")
-	errInvalidMixDigest  = errors.New("invalid mix digest")
-	errInvalidPoW        = errors.New("invalid proof-of-work")
+	errOlderBlockTime     = errors.New("timestamp older than parent")
+	errTooManyUncles      = errors.New("too many uncles")
+	errDuplicateUncle     = errors.New("duplicate uncle")
+	errUncleIsAncestor    = errors.New("uncle is ancestor")
+	errDanglingUncle      = errors.New("uncle's parent is not ancestor")
+	errUSDBUnclesDisabled = errors.New("uncles are disabled by USDB reward policy")
+	errInvalidDifficulty  = errors.New("non-positive difficulty")
+	errInvalidMixDigest   = errors.New("invalid mix digest")
+	errInvalidPoW         = errors.New("invalid proof-of-work")
 )
 
 // Author implements consensus.Engine, returning the header's coinbase as the
@@ -204,6 +205,19 @@ func (ethash *Ethash) verifyHeaderWorker(chain consensus.ChainHeaderReader, head
 // VerifyUncles verifies that the given block's uncles conform to the consensus
 // rules of the stock Ethereum ethash engine.
 func (ethash *Ethash) VerifyUncles(chain consensus.ChainReader, block *types.Block) error {
+	if block.Number() == nil || !block.Number().IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
+	activation, err := chain.Config().USDBActivationAt(block.NumberU64())
+	if err != nil {
+		return fmt.Errorf("invalid usdb consensus config: %w", err)
+	}
+	if activation != nil && activation.Versions.RewardRuleVersion == usdb.RewardRuleVersionV1 {
+		if len(block.Uncles()) != 0 || block.UncleHash() != types.EmptyUncleHash {
+			return errUSDBUnclesDisabled
+		}
+		return nil
+	}
 	// If we're running a full engine faking, accept any input as valid
 	if ethash.config.PowMode == ModeFullFake {
 		return nil
@@ -281,6 +295,11 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	}
 	if activation != nil {
 		policy := &activation.Versions
+		if policy.RewardRuleVersion == usdb.RewardRuleVersionV1 {
+			if uncle || header.UncleHash != types.EmptyUncleHash {
+				return errUSDBUnclesDisabled
+			}
+		}
 		if err := usdb.ValidateProfileSelectorPayload(header.Extra, policy.PayloadVersion, policy.DifficultyPolicyVersion); err != nil {
 			return fmt.Errorf("invalid usdb profile selector: %w", err)
 		}
@@ -836,6 +855,10 @@ func (ethash *Ethash) accumulateRewards(config *params.ChainConfig, state *state
 }
 
 func (ethash *Ethash) accumulateUSDBRewards(config *params.ChainConfig, activation *params.USDBConsensusActivation, state *state.StateDB, header *types.Header, uncles []*types.Header) error {
+	policy := &activation.Versions
+	if err := validateUSDBRewardPolicies(policy); err != nil {
+		return err
+	}
 	profile, err := ethash.resolveUSDBProfile(activation.BTCActivationRegistryID, header.Extra)
 	if err != nil {
 		return fmt.Errorf("failed to resolve usdb profile selector: %w", err)
@@ -843,18 +866,19 @@ func (ethash *Ethash) accumulateUSDBRewards(config *params.ChainConfig, activati
 	if profile == nil {
 		return errors.New("usdb profile resolver returned nil profile")
 	}
-	policy := &activation.Versions
-	if policy.RewardRuleVersion != 0 || policy.CoinbaseEmissionPolicyVersion != 0 || policy.FeeSplitPolicyVersion != 0 {
-		return fmt.Errorf(
-			"unsupported usdb reward policies: reward=%d coinbase=%d fee_split=%d",
-			policy.RewardRuleVersion,
-			policy.CoinbaseEmissionPolicyVersion,
-			policy.FeeSplitPolicyVersion,
-		)
+	if policy.RewardRuleVersion == 0 {
+		// UIP-0007 requires reward and difficulty to validate the same historical
+		// profile even before UIP-0011 activates.
+		accumulateLegacyRewards(config, state, header, uncles)
+		return nil
 	}
-	// UIP-0007 requires reward and difficulty to validate the same historical
-	// profile. Until UIP-0011 activates a reward version, preserve the base Ethash
-	// transition without applying the removed development-only level multiplier.
-	accumulateLegacyRewards(config, state, header, uncles)
+	if len(uncles) != 0 || header.UncleHash != types.EmptyUncleHash {
+		return errUSDBUnclesDisabled
+	}
+	transition, err := prepareUSDBRewardTransition(config, activation, state, header, profile)
+	if err != nil {
+		return err
+	}
+	applyUSDBRewardTransition(state, transition)
 	return nil
 }

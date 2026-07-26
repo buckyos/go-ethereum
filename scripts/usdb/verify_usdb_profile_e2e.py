@@ -29,8 +29,33 @@ BTC_V1_ACTIVE_VERSION_SET = {
 }
 BPS_DENOMINATOR = 10_000
 MINIMUM_DIFFICULTY = 8_192
-LEGACY_BLOCK_REWARD = 2 * 10**18
+BTC_SATS_PER_BTC = 100_000_000
+EMISSION_BLOCKS = 157_680
+K_BPS_BASE = 10_000
+K_BPS_MIN = 8_001
+K_BPS_MAX = 20_000
+K_WINDOW_BLOCKS = 50_400
+FIXED_PRICE_ATOMS_PER_BTC = 100_000_000_000_000_000_000_000
 UINT128_MAX = 2**128 - 1
+UINT64_MAX = 2**64 - 1
+USDB_SYSTEM_STATE_ADDRESS = "0x0000000000000000000000000000000000001000"
+EMPTY_UNCLE_HASH = "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347"
+SYSTEM_STATE_SLOTS = {
+    "schema": "0x173335b1b35d7ee82b9e595fe4798c8e777ab08ec72cb8ea8a8035ee1fade3b1",
+    "issued": "0xdd1651483272028cad87b8ab291a694a9deb1d7f6b60efe175f823c406233da2",
+    "price": "0xdf22b00cd5b1ebfe143e44347701e86394b9867790d8d631d43ef36dd099f884",
+    "real_price": "0xca9c2c48cf84f8c36afc338940b0e06484e790e7190e255a57245056399bb792",
+    "price_policy": "0xc65fb6e80dc7887c39c44824450f50076c21ffb398bc3abc8ec122d277f7ce03",
+    "price_source": "0x93fbc84343f98a946b33b6067ae017273d92029de3e58c3b3c6d37fb033cac9a",
+    "price_range": "0xc3faa41e87f1db8d882f1a24fd36bf5f7f873e141845019088d03d0e2f487697",
+    "k_sum": "0xa05125c861ef555402b28fe982e4e36ddd9572a49576081d06ad23fbdcd9a3ae",
+    "k_count": "0x40db96c2e761efb468bcae40739cb9d71d15e53f4b46a977d213476493a0ecea",
+    "k_cursor": "0xc71798c59dae3ab826f28ffa3db501face181bd2d88225baadcb87ea950c53b2",
+    "k_ring_base": "0x0c0b1b7c7641949e2f45575f48d889a70298842709e50c1070010b910fb3bc31",
+    "k_last_ce": "0x1d2465ef2bfb872650e27eeb6a1327cb569d58e4fd2c4867eb4b8f38b922905c",
+    "k_last_ae": "0xb4d89df049af3068c7073e80bf4918d5606bffb9df517e96c1f996f942c38f58",
+    "k_last_bps": "0x53264b8f3aab69de54c5a4ecadabdbff09c07064034e8fcfdb79056a55dd9954",
+}
 LEVEL_THRESHOLDS = (
     0,
     1_000_000,
@@ -103,6 +128,51 @@ def rpc_call(url, method, params):
     return body.get("result")
 
 
+def storage_word(url, slot, block_number):
+    value = rpc_call(
+        url,
+        "eth_getStorageAt",
+        [USDB_SYSTEM_STATE_ADDRESS, slot, hex(block_number)],
+    )
+    if not isinstance(value, str) or not value.startswith("0x"):
+        raise SystemExit(
+            f"invalid storage word for slot {slot} at block {block_number}: {value!r}"
+        )
+    return value.lower()
+
+
+def storage_uint(url, slot, block_number):
+    return int(storage_word(url, slot, block_number), 16)
+
+
+def rpc_keccak(url, payload):
+    result = rpc_call(url, "web3_sha3", ["0x" + payload.hex()])
+    if not isinstance(result, str) or len(result) != 66:
+        raise SystemExit(f"web3_sha3 returned invalid hash: {result!r}")
+    return result.lower()
+
+
+def k_ring_slot(url, index):
+    if index < 0 or index >= K_WINDOW_BLOCKS:
+        raise SystemExit(f"K ring index is out of range: {index}")
+    key = index.to_bytes(32, "big")
+    base = bytes.fromhex(SYSTEM_STATE_SLOTS["k_ring_base"][2:])
+    return rpc_keccak(url, key + base)
+
+
+def fixed_price_range_id(url, chain_id, start_block):
+    encoded = (
+        b"usdb.price.policy.range:v1"
+        + b"\x00"
+        + chain_id.to_bytes(32, "big")
+        + start_block.to_bytes(8, "big")
+        + (1).to_bytes(4, "big")
+        + (1).to_bytes(4, "big")
+        + FIXED_PRICE_ATOMS_PER_BTC.to_bytes(32, "big")
+    )
+    return rpc_keccak(url, encoded)
+
+
 def parse_canonical_energy(field, value):
     if not isinstance(value, str) or not value or (len(value) > 1 and value[0] == "0"):
         raise SystemExit(f"{field} is not canonical decimal: {value!r}")
@@ -112,6 +182,43 @@ def parse_canonical_energy(field, value):
     if parsed > UINT128_MAX:
         raise SystemExit(f"{field} exceeds uint128: {value}")
     return parsed
+
+
+def parse_canonical_uint64(field, value):
+    if not isinstance(value, str) or not value or (len(value) > 1 and value[0] == "0"):
+        raise SystemExit(f"{field} is not canonical decimal: {value!r}")
+    if not value.isdigit():
+        raise SystemExit(f"{field} is not canonical decimal: {value!r}")
+    parsed = int(value)
+    if parsed > UINT64_MAX:
+        raise SystemExit(f"{field} exceeds uint64: {value}")
+    return parsed
+
+
+def calculate_k_bps(current_energy, average_energy):
+    if average_energy == 0:
+        return K_BPS_BASE
+    if current_energy < average_energy:
+        numerator = 60_000 * average_energy
+        denominator = current_energy + 5 * average_energy
+        penalty = (numerator + denominator - 1) // denominator
+        return max(K_BPS_MIN, K_BPS_MAX - penalty)
+    return min(K_BPS_MAX, 10_000 * current_energy // average_energy)
+
+
+def calculate_emission(total_miner_btc_sats, price_atoms_per_btc, issued, k_bps):
+    target = total_miner_btc_sats * price_atoms_per_btc // BTC_SATS_PER_BTC
+    remaining = max(0, target - issued)
+    emission = remaining * k_bps // (EMISSION_BLOCKS * BPS_DENOMINATOR)
+    return min(remaining, emission)
+
+
+def require_equal(label, actual, expected, block_number):
+    if actual != expected:
+        raise SystemExit(
+            f"{label} mismatch at block {block_number}: "
+            f"have {actual!r} want {expected!r}"
+        )
 
 
 def level_for_energy(energy):
@@ -231,7 +338,46 @@ def resolve_profile(
             f"level={pass_view.get('level')}/{level} "
             f"factor={pass_view.get('difficulty_factor_bps')}/{factor}"
         )
-    return raw, contribution, effective, level, factor
+    reward_recipient = pass_view.get("usdb_main")
+    if (
+        not isinstance(reward_recipient, str)
+        or len(reward_recipient) != 42
+        or not reward_recipient.startswith("0x")
+    ):
+        raise SystemExit(f"profile has invalid usdb_main: {reward_recipient!r}")
+    try:
+        reward_recipient_value = int(reward_recipient[2:], 16)
+    except ValueError as error:
+        raise SystemExit(f"profile has invalid usdb_main: {reward_recipient!r}") from error
+    if reward_recipient_value == 0:
+        raise SystemExit("profile usdb_main is the zero address")
+
+    aggregate = profile.get("miner_aggregate") or {}
+    total_miner_btc_sats = parse_canonical_uint64(
+        "miner_aggregate.total_miner_btc_sats",
+        aggregate.get("total_miner_btc_sats"),
+    )
+    active_miner_owner_count = aggregate.get("active_miner_owner_count")
+    if (
+        not isinstance(active_miner_owner_count, int)
+        or isinstance(active_miner_owner_count, bool)
+        or active_miner_owner_count <= 0
+        or active_miner_owner_count > UINT64_MAX
+    ):
+        raise SystemExit(
+            "profile has invalid active_miner_owner_count: "
+            f"{active_miner_owner_count!r}"
+        )
+    return {
+        "raw": raw,
+        "contribution": contribution,
+        "effective": effective,
+        "level": level,
+        "factor": factor,
+        "reward_recipient": reward_recipient.lower(),
+        "total_miner_btc_sats": total_miner_btc_sats,
+        "active_miner_owner_count": active_miner_owner_count,
+    }
 
 
 def expected_real_difficulty(parent, block, factor):
@@ -287,7 +433,73 @@ def main():
         raise SystemExit("no USDB blocks supplied")
     genesis = rpc_call(args.usdb_chain_rpc_url, "eth_getBlockByNumber", ["0x0", False])
     by_number = {0: genesis}
-    expected_balance = 0
+    chain_id = int(rpc_call(args.usdb_chain_rpc_url, "eth_chainId", []), 16)
+    expected_balance = int(
+        rpc_call(
+            args.usdb_chain_rpc_url,
+            "eth_getBalance",
+            [args.coinbase, "0x0"],
+        ),
+        16,
+    )
+    expected_issued = storage_uint(
+        args.usdb_chain_rpc_url,
+        SYSTEM_STATE_SLOTS["issued"],
+        0,
+    )
+    expected_k_sum = storage_uint(
+        args.usdb_chain_rpc_url,
+        SYSTEM_STATE_SLOTS["k_sum"],
+        0,
+    )
+    expected_k_count = storage_uint(
+        args.usdb_chain_rpc_url,
+        SYSTEM_STATE_SLOTS["k_count"],
+        0,
+    )
+    expected_k_cursor = storage_uint(
+        args.usdb_chain_rpc_url,
+        SYSTEM_STATE_SLOTS["k_cursor"],
+        0,
+    )
+    require_equal(
+        "system schema",
+        storage_uint(args.usdb_chain_rpc_url, SYSTEM_STATE_SLOTS["schema"], 0),
+        1,
+        0,
+    )
+    for label, slot, expected in (
+        ("price", "price", FIXED_PRICE_ATOMS_PER_BTC),
+        ("real price", "real_price", FIXED_PRICE_ATOMS_PER_BTC),
+        ("price policy", "price_policy", 1),
+        ("price source", "price_source", 1),
+    ):
+        require_equal(
+            label,
+            storage_uint(args.usdb_chain_rpc_url, SYSTEM_STATE_SLOTS[slot], 0),
+            expected,
+            0,
+        )
+    expected_price_range = fixed_price_range_id(
+        args.usdb_chain_rpc_url,
+        chain_id,
+        0,
+    )
+    require_equal(
+        "price range",
+        storage_word(args.usdb_chain_rpc_url, SYSTEM_STATE_SLOTS["price_range"], 0),
+        expected_price_range,
+        0,
+    )
+    if (
+        expected_k_sum != 0
+        or expected_k_count != 0
+        or expected_k_cursor != 0
+    ):
+        raise SystemExit(
+            "genesis K window is not empty: "
+            f"sum={expected_k_sum} count={expected_k_count} cursor={expected_k_cursor}"
+        )
     all_raw = []
     stage1_raw = []
     stage2_raw = []
@@ -300,14 +512,12 @@ def main():
         if parent is None:
             raise SystemExit(f"missing parent block {number - 1}")
         by_number[number] = block
-        block_coinbase = (block.get("miner") or block.get("author") or "").lower()
-        if block_coinbase != args.coinbase.lower():
+        if block.get("transactions"):
             raise SystemExit(
-                f"unexpected block coinbase at height {number}: "
-                f"{block_coinbase} != {args.coinbase}"
+                f"deterministic reward E2E does not permit transactions at block {number}"
             )
-        if block.get("uncles"):
-            raise SystemExit(f"deterministic E2E does not permit uncles at block {number}")
+        if block.get("uncles") or block.get("sha3Uncles", "").lower() != EMPTY_UNCLE_HASH:
+            raise SystemExit(f"USDB reward v1 requires empty uncles at block {number}")
 
         selector = decode_selector(block)
         expected_policy_version = 1
@@ -329,13 +539,26 @@ def main():
                 f"unexpected pass id at block {number}: "
                 f"{selector['pass_id']} != {args.expected_pass_id}"
             )
-        raw, contribution, effective, level, factor = resolve_profile(
+        profile = resolve_profile(
             args.usdb_indexer_rpc_url,
             selector,
             expected_registry_id,
             args.expected_active_version_set_id,
         )
+        raw = profile["raw"]
+        contribution = profile["contribution"]
+        effective = profile["effective"]
+        level = profile["level"]
+        factor = profile["factor"]
         all_raw.append(raw)
+        block_coinbase = (block.get("miner") or block.get("author") or "").lower()
+        require_equal("block coinbase", block_coinbase, args.coinbase.lower(), number)
+        require_equal(
+            "profile reward recipient",
+            profile["reward_recipient"],
+            block_coinbase,
+            number,
+        )
         expected_difficulty = expected_policy_difficulty(
             parent,
             block,
@@ -348,7 +571,170 @@ def main():
                 f"difficulty mismatch at block {number}: "
                 f"have {actual_difficulty} want {expected_difficulty}"
             )
-        expected_balance += LEGACY_BLOCK_REWARD
+
+        parent_number = number - 1
+        require_equal(
+            "parent issued supply",
+            storage_uint(
+                args.usdb_chain_rpc_url,
+                SYSTEM_STATE_SLOTS["issued"],
+                parent_number,
+            ),
+            expected_issued,
+            parent_number,
+        )
+        require_equal(
+            "parent K sum",
+            storage_uint(
+                args.usdb_chain_rpc_url,
+                SYSTEM_STATE_SLOTS["k_sum"],
+                parent_number,
+            ),
+            expected_k_sum,
+            parent_number,
+        )
+        require_equal(
+            "parent K count",
+            storage_uint(
+                args.usdb_chain_rpc_url,
+                SYSTEM_STATE_SLOTS["k_count"],
+                parent_number,
+            ),
+            expected_k_count,
+            parent_number,
+        )
+        require_equal(
+            "parent K cursor",
+            storage_uint(
+                args.usdb_chain_rpc_url,
+                SYSTEM_STATE_SLOTS["k_cursor"],
+                parent_number,
+            ),
+            expected_k_cursor,
+            parent_number,
+        )
+        parent_price = storage_uint(
+            args.usdb_chain_rpc_url,
+            SYSTEM_STATE_SLOTS["price"],
+            parent_number,
+        )
+        require_equal(
+            "parent fixed price",
+            parent_price,
+            FIXED_PRICE_ATOMS_PER_BTC,
+            parent_number,
+        )
+        require_equal(
+            "parent fixed price range",
+            storage_word(
+                args.usdb_chain_rpc_url,
+                SYSTEM_STATE_SLOTS["price_range"],
+                parent_number,
+            ),
+            expected_price_range,
+            parent_number,
+        )
+
+        average_energy = (
+            expected_k_sum // K_WINDOW_BLOCKS
+            if expected_k_count == K_WINDOW_BLOCKS
+            else 0
+        )
+        k_bps = (
+            calculate_k_bps(contribution, average_energy)
+            if expected_k_count == K_WINDOW_BLOCKS
+            else K_BPS_BASE
+        )
+        ring_slot = k_ring_slot(args.usdb_chain_rpc_url, expected_k_cursor)
+        if expected_k_count == K_WINDOW_BLOCKS:
+            old_sample = storage_uint(
+                args.usdb_chain_rpc_url,
+                ring_slot,
+                parent_number,
+            )
+        else:
+            old_sample = 0
+            require_equal(
+                "uninitialized warmup K ring slot",
+                storage_uint(
+                    args.usdb_chain_rpc_url,
+                    ring_slot,
+                    parent_number,
+                ),
+                0,
+                parent_number,
+            )
+        emission = calculate_emission(
+            profile["total_miner_btc_sats"],
+            parent_price,
+            expected_issued,
+            k_bps,
+        )
+        expected_issued += emission
+        expected_balance += emission
+        expected_k_sum = expected_k_sum - old_sample + contribution
+        expected_k_count = min(expected_k_count + 1, K_WINDOW_BLOCKS)
+        expected_k_cursor = (expected_k_cursor + 1) % K_WINDOW_BLOCKS
+
+        require_equal(
+            "issued supply",
+            storage_uint(
+                args.usdb_chain_rpc_url,
+                SYSTEM_STATE_SLOTS["issued"],
+                number,
+            ),
+            expected_issued,
+            number,
+        )
+        require_equal(
+            "K ring sample",
+            storage_uint(args.usdb_chain_rpc_url, ring_slot, number),
+            contribution,
+            number,
+        )
+        for label, slot, expected in (
+            ("K sum", "k_sum", expected_k_sum),
+            ("K count", "k_count", expected_k_count),
+            ("K cursor", "k_cursor", expected_k_cursor),
+            ("K last CE", "k_last_ce", contribution),
+            ("K last AE", "k_last_ae", average_energy),
+            ("K last bps", "k_last_bps", k_bps),
+            ("price", "price", FIXED_PRICE_ATOMS_PER_BTC),
+            ("real price", "real_price", FIXED_PRICE_ATOMS_PER_BTC),
+            ("price policy", "price_policy", 1),
+            ("price source", "price_source", 1),
+        ):
+            require_equal(
+                label,
+                storage_uint(
+                    args.usdb_chain_rpc_url,
+                    SYSTEM_STATE_SLOTS[slot],
+                    number,
+                ),
+                expected,
+                number,
+            )
+        active_price_start = (
+            args.activation_conformance_block
+            if args.activation_conformance_block is not None
+            and number >= args.activation_conformance_block
+            else 0
+        )
+        expected_price_range = fixed_price_range_id(
+            args.usdb_chain_rpc_url,
+            chain_id,
+            active_price_start,
+        )
+        require_equal(
+            "price range",
+            storage_word(
+                args.usdb_chain_rpc_url,
+                SYSTEM_STATE_SLOTS["price_range"],
+                number,
+            ),
+            expected_price_range,
+            number,
+        )
         if args.stage1_end is not None:
             (stage1_raw if number <= args.stage1_end else stage2_raw).append(raw)
         print(
@@ -365,7 +751,14 @@ def main():
                     "difficulty_policy_version": expected_policy_version,
                     "activation_registry_id": expected_registry_id,
                     "difficulty": actual_difficulty,
-                    "reward": LEGACY_BLOCK_REWARD,
+                    "reward_recipient": profile["reward_recipient"],
+                    "total_miner_btc_sats": profile["total_miner_btc_sats"],
+                    "active_miner_owner_count": profile[
+                        "active_miner_owner_count"
+                    ],
+                    "k_bps": k_bps,
+                    "reward": emission,
+                    "issued_usdb_atoms": expected_issued,
                 },
                 sort_keys=True,
             )
@@ -408,6 +801,11 @@ def main():
                 "blocks": len(blocks),
                 "expected_balance": expected_balance,
                 "actual_balance": actual_balance,
+                "issued_usdb_atoms": expected_issued,
+                "k_window_sum": expected_k_sum,
+                "k_window_count": expected_k_count,
+                "k_window_cursor": expected_k_cursor,
+                "price_atoms_per_btc": FIXED_PRICE_ATOMS_PER_BTC,
                 "raw_energy": all_raw,
                 "stage1_raw_energy": stage1_raw,
                 "stage2_raw_energy": stage2_raw,

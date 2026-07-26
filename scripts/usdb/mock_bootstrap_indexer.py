@@ -13,6 +13,9 @@ REGISTRY_ID = "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
 ACTIVE_VERSION_SET_ID = "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
 SNAPSHOT_ID = "11" * 32
 SYSTEM_STATE_ID = "22" * 32
+DEFAULT_USDB_MAIN = "0x1111111111111111111111111111111111111111"
+DEFAULT_TOTAL_MINER_BTC_SATS = "100000000"
+DEFAULT_COLLAB_CONTRIBUTION = "100"
 ACTIVE_VERSION_SET = {
     "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
     "pass_state_machine_version": "uip-0002-pass-state-machine:v1",
@@ -37,7 +40,13 @@ def build_system_state() -> dict[str, Any]:
     }
 
 
-def build_pass_profile(pass_id: str, raw_params: Any) -> dict[str, Any]:
+def build_pass_profile(
+    pass_id: str,
+    raw_params: Any,
+    usdb_main: str = DEFAULT_USDB_MAIN,
+    total_miner_btc_sats: str = DEFAULT_TOTAL_MINER_BTC_SATS,
+    collab_contribution: str = DEFAULT_COLLAB_CONTRIBUTION,
+) -> dict[str, Any]:
     if not isinstance(raw_params, list) or len(raw_params) != 1:
         raise ValueError("get_pass_economic_profile requires one parameter object")
     params = raw_params[0]
@@ -85,12 +94,17 @@ def build_pass_profile(pass_id: str, raw_params: Any) -> dict[str, Any]:
             "owner_btc_addr": None,
             "state": "active",
             "pass_kind": "standard",
+            "usdb_main": usdb_main,
             "raw_energy": "0",
-            "collab_contribution": "0",
-            "effective_energy": "0",
+            "collab_contribution": collab_contribution,
+            "effective_energy": collab_contribution,
             "level": 0,
             "difficulty_factor_bps": 10000,
             "collab_breakdown_count": 0,
+        },
+        "miner_aggregate": {
+            "total_miner_btc_sats": total_miner_btc_sats,
+            "active_miner_owner_count": 1,
         },
     }
 
@@ -154,16 +168,32 @@ class BootstrapIndexerHandler(BaseHTTPRequestHandler):
 
 
 class BootstrapIndexerServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], pass_id: str) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        pass_id: str,
+        usdb_main: str,
+        total_miner_btc_sats: str,
+        collab_contribution: str,
+    ) -> None:
         super().__init__(address, BootstrapIndexerHandler)
         self.pass_id = pass_id
+        self.usdb_main = usdb_main
+        self.total_miner_btc_sats = total_miner_btc_sats
+        self.collab_contribution = collab_contribution
 
     @staticmethod
     def system_state() -> dict[str, Any]:
         return build_system_state()
 
     def pass_profile(self, raw_params: Any) -> dict[str, Any]:
-        return build_pass_profile(self.pass_id, raw_params)
+        return build_pass_profile(
+            self.pass_id,
+            raw_params,
+            self.usdb_main,
+            self.total_miner_btc_sats,
+            self.collab_contribution,
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -171,12 +201,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--pass-id", required=True)
+    parser.add_argument("--usdb-main", default=DEFAULT_USDB_MAIN)
+    parser.add_argument(
+        "--total-miner-btc-sats",
+        default=DEFAULT_TOTAL_MINER_BTC_SATS,
+    )
+    parser.add_argument(
+        "--collab-contribution",
+        default=DEFAULT_COLLAB_CONTRIBUTION,
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    server = BootstrapIndexerServer((args.listen, args.port), args.pass_id)
+    server = BootstrapIndexerServer(
+        (args.listen, args.port),
+        args.pass_id,
+        args.usdb_main,
+        args.total_miner_btc_sats,
+        args.collab_contribution,
+    )
     print(f"mock bootstrap indexer listening on {args.listen}:{args.port}", flush=True)
     try:
         server.serve_forever()

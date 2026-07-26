@@ -32,6 +32,31 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+func TestFakeSealDelay(t *testing.T) {
+	const delay = 25 * time.Millisecond
+
+	engine := New(Config{PowMode: ModeFake, FakeSealDelay: delay}, nil, false)
+	defer engine.Close()
+
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1)})
+	results := make(chan *types.Block, 1)
+	started := time.Now()
+	if err := engine.Seal(nil, block, results, nil); err != nil {
+		t.Fatalf("failed to fake-seal block: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < delay {
+		t.Fatalf("fake seal returned before configured delay: have %s, want at least %s", elapsed, delay)
+	}
+	select {
+	case sealed := <-results:
+		if sealed.Nonce() != 0 || sealed.MixDigest() != (common.Hash{}) {
+			t.Fatalf("fake seal did not clear PoW fields")
+		}
+	default:
+		t.Fatalf("fake seal did not publish a result")
+	}
+}
+
 // Tests whether remote HTTP servers are correctly notified of new work.
 func TestRemoteNotify(t *testing.T) {
 	// Start a simple web server to capture notifications.

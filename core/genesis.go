@@ -34,6 +34,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/usdbstate"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -527,7 +528,7 @@ func DefaultUSDBGenesisBlock() *Genesis {
 		Difficulty: new(big.Int).Set(params.USDBGenesisDifficulty),
 		Alloc:      GenesisAlloc{},
 	}
-	if err := initializeUSDBGenesisSystemState(genesis.Alloc); err != nil {
+	if err := initializeUSDBGenesisSystemState(genesis.Alloc, genesis.Config); err != nil {
 		panic(fmt.Sprintf("invalid built-in USDB genesis system state: %v", err))
 	}
 	return genesis
@@ -578,7 +579,7 @@ func buildUSDBGenesisBlockWithBootstrap(base *Genesis, opts USDBBootstrapGenesis
 	genesis.Alloc[opts.BootstrapAdmin] = GenesisAccount{
 		Balance: new(big.Int).Set(opts.BootstrapAdminBalance),
 	}
-	if err := initializeUSDBGenesisSystemState(genesis.Alloc); err != nil {
+	if err := initializeUSDBGenesisSystemState(genesis.Alloc, genesis.Config); err != nil {
 		return nil, fmt.Errorf("initialize USDB bootstrap system state: %w", err)
 	}
 	if opts.GenesisDifficulty != nil {
@@ -588,14 +589,21 @@ func buildUSDBGenesisBlockWithBootstrap(base *Genesis, opts USDBBootstrapGenesis
 		genesis.Config.EthPoWMinimumDifficultyOverride = new(big.Int).Set(opts.MinimumDifficulty)
 	}
 	genesis.Config.DividendAddress = opts.DividendAddress
+	genesis.Config.DividendCodeHash = crypto.Keccak256Hash(opts.DividendCode)
 	genesis.Config.DividendFeeSplitBlock = new(big.Int).Set(opts.DividendFeeSplitBlock)
+	for i := range genesis.Config.USDB.Activations {
+		genesis.Config.USDB.Activations[i].Versions.FeeSplitPolicyVersion = usdb.FeeSplitPolicyVersionV1
+	}
 	if err := genesis.Config.CheckConfigForkOrder(); err != nil {
 		return nil, fmt.Errorf("invalid USDB bootstrap chain config: %w", err)
 	}
 	return genesis, nil
 }
 
-func initializeUSDBGenesisSystemState(alloc GenesisAlloc) error {
+func initializeUSDBGenesisSystemState(alloc GenesisAlloc, config *params.ChainConfig) error {
+	if config == nil {
+		return errors.New("USDB genesis system state requires chain config")
+	}
 	genesisSupply, err := calculateUSDBGenesisSupply(alloc)
 	if err != nil {
 		return err
@@ -603,6 +611,34 @@ func initializeUSDBGenesisSystemState(alloc GenesisAlloc) error {
 	storage, err := usdbstate.GenesisStorage(genesisSupply)
 	if err != nil {
 		return fmt.Errorf("encode USDB genesis system storage: %w", err)
+	}
+	activation, err := config.USDBActivationAt(0)
+	if err != nil {
+		return fmt.Errorf("resolve USDB genesis activation: %w", err)
+	}
+	if activation != nil {
+		switch activation.Versions.PricePolicyVersion {
+		case 0:
+		case usdb.PricePolicyVersionV1:
+			rangeID, err := usdb.FixedPriceRangeIDV1(config.ChainID, activation.Block)
+			if err != nil {
+				return fmt.Errorf("derive USDB genesis fixed-price range: %w", err)
+			}
+			if err := usdbstate.ApplyFixedPriceState(
+				storage,
+				usdb.FixedPriceAtomsPerBTCV1(),
+				usdb.PricePolicyVersionV1,
+				usdb.FixedPriceSourceKindV1,
+				rangeID,
+			); err != nil {
+				return fmt.Errorf("initialize USDB genesis fixed-price state: %w", err)
+			}
+		default:
+			return fmt.Errorf(
+				"unsupported USDB genesis price policy version %d",
+				activation.Versions.PricePolicyVersion,
+			)
+		}
 	}
 	if account, exists := alloc[usdbstate.SystemStateAddress]; exists {
 		if account.Balance == nil || account.Balance.Sign() != 0 ||
@@ -656,6 +692,9 @@ func validateUSDBBootstrapGenesisConfig(base *Genesis, opts USDBBootstrapGenesis
 	}
 	if base.Config == nil {
 		return errors.New("USDB bootstrap genesis base has no chain config")
+	}
+	if base.Config.USDB == nil || len(base.Config.USDB.Activations) == 0 {
+		return errors.New("USDB bootstrap genesis base has no activation schedule")
 	}
 	if base.Difficulty == nil || base.Difficulty.Sign() <= 0 {
 		return errors.New("USDB bootstrap genesis base has invalid difficulty")

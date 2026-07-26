@@ -193,10 +193,14 @@ func resolveProfileRewardInputs(view *PassEconomicProfileView) (common.Address, 
 			ErrProfileRewardInputMismatch,
 		)
 	}
-	return common.HexToAddress(*view.Pass.USDBMain),
-		totalMinerBTCSats,
-		view.MinerAggregate.ActiveMinerOwnerCount,
-		nil
+	rewardRecipient := common.HexToAddress(*view.Pass.USDBMain)
+	if rewardRecipient == (common.Address{}) {
+		return common.Address{}, nil, 0, fmt.Errorf(
+			"%w: pass.usdb_main is the zero address",
+			ErrProfileRewardInputMismatch,
+		)
+	}
+	return rewardRecipient, totalMinerBTCSats, view.MinerAggregate.ActiveMinerOwnerCount, nil
 }
 
 func parseCanonicalUint64Decimal(field, value string) (*big.Int, error) {

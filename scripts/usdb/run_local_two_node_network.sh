@@ -21,7 +21,11 @@ BOOTSTRAP_STATE_FILE=${BOOTSTRAP_STATE_FILE:-"$WORK_DIR/sourcedao-bootstrap-stat
 BOOTSTRAP_REPLAY_STATE_FILE=${BOOTSTRAP_REPLAY_STATE_FILE:-"$WORK_DIR/sourcedao-bootstrap-replay-state.json"}
 NODE1_VALIDATION_FILE=${NODE1_VALIDATION_FILE:-"$WORK_DIR/node1-bootstrap-validation.json"}
 NODE2_VALIDATION_FILE=${NODE2_VALIDATION_FILE:-"$WORK_DIR/node2-bootstrap-validation.json"}
+FEE_PROBE_FILE=${FEE_PROBE_FILE:-"$WORK_DIR/usdb-fee-split-probe.json"}
+FEE_PROBE_TIMEOUT_MS=${FEE_PROBE_TIMEOUT_MS:-600000}
 USDB_BOOTSTRAP_FAKE_POW=${USDB_BOOTSTRAP_FAKE_POW:-1}
+USDB_BOOTSTRAP_FAKE_POW_DELAY=${USDB_BOOTSTRAP_FAKE_POW_DELAY:-1s}
+USDB_BOOTSTRAP_POST_BOOTSTRAP_FAKE_POW_DELAY=${USDB_BOOTSTRAP_POST_BOOTSTRAP_FAKE_POW_DELAY:-$USDB_BOOTSTRAP_FAKE_POW_DELAY}
 USDB_BOOTSTRAP_USE_MOCK_INDEXER=${USDB_BOOTSTRAP_USE_MOCK_INDEXER:-$USDB_BOOTSTRAP_FAKE_POW}
 USDB_BOOTSTRAP_PASS_ID=${USDB_BOOTSTRAP_PASS_ID:-3333333333333333333333333333333333333333333333333333333333333333i0}
 USDB_QUERY_TIMEOUT=${USDB_QUERY_TIMEOUT:-5s}
@@ -34,6 +38,9 @@ NODE1_HTTP_PORT=${NODE1_HTTP_PORT:-18545}
 NODE1_P2P_PORT=${NODE1_P2P_PORT:-31303}
 NODE1_AUTHRPC_PORT=${NODE1_AUTHRPC_PORT:-18551}
 NODE1_USDB_CHAIN_MINER_ADDRESS=${NODE1_USDB_CHAIN_MINER_ADDRESS:-0x0000000000000000000000000000000000001003}
+USDB_PROFILE_REWARD_RECIPIENT=${USDB_PROFILE_REWARD_RECIPIENT:-0x1111111111111111111111111111111111111111}
+USDB_PROFILE_TOTAL_MINER_BTC_SATS=${USDB_PROFILE_TOTAL_MINER_BTC_SATS:-100000000}
+USDB_PROFILE_COLLAB_CONTRIBUTION=${USDB_PROFILE_COLLAB_CONTRIBUTION:-100}
 NODE1_LOG=${NODE1_LOG:-"$WORK_DIR/node1.log"}
 
 NODE2_DATADIR=${NODE2_DATADIR:-"$WORK_DIR/node2"}
@@ -57,9 +64,11 @@ POW_ARGS=()
 case "$USDB_BOOTSTRAP_FAKE_POW" in
   1|true|TRUE|yes|YES)
     # This local network validates USDB consensus metadata, not Ethash work.
-    POW_ARGS=(--fakepow)
+    USE_FAKE_POW=1
+    POW_ARGS=(--fakepow --fakepow.delay "$USDB_BOOTSTRAP_FAKE_POW_DELAY")
     ;;
   0|false|FALSE|no|NO)
+    USE_FAKE_POW=0
     ;;
   *)
     echo "USDB_BOOTSTRAP_FAKE_POW must be a boolean, have: $USDB_BOOTSTRAP_FAKE_POW" >&2
@@ -150,6 +159,9 @@ start_mock_indexer() {
   python3 "$ROOT_DIR/scripts/usdb/mock_bootstrap_indexer.py" \
     --port "$USDB_BOOTSTRAP_INDEXER_PORT" \
     --pass-id "$USDB_BOOTSTRAP_PASS_ID" \
+    --usdb-main "$USDB_PROFILE_REWARD_RECIPIENT" \
+    --total-miner-btc-sats "$USDB_PROFILE_TOTAL_MINER_BTC_SATS" \
+    --collab-contribution "$USDB_PROFILE_COLLAB_CONTRIBUTION" \
     >"$MOCK_INDEXER_LOG" 2>&1 &
   MOCK_INDEXER_PID=$!
 
@@ -351,12 +363,25 @@ start_node2() {
       --port "$NODE2_P2P_PORT" \
       --ipcpath "$NODE2_DATADIR/geth.ipc" \
       --nodiscover \
+      --syncmode full \
       "${POW_ARGS[@]}" \
       --ethash.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL" \
       --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
       --maxpeers 10
   ) >>"$NODE2_LOG" 2>&1 &
   NODE2_PID=$!
+}
+
+accelerate_fake_pow_after_bootstrap() {
+  if [[ "$USE_FAKE_POW" != "1" ]] ||
+     [[ "$USDB_BOOTSTRAP_POST_BOOTSTRAP_FAKE_POW_DELAY" == "$USDB_BOOTSTRAP_FAKE_POW_DELAY" ]]; then
+    return
+  fi
+  echo "Restarting node 1 with post-bootstrap fake-PoW delay $USDB_BOOTSTRAP_POST_BOOTSTRAP_FAKE_POW_DELAY"
+  stop_named_process NODE1_PID
+  POW_ARGS=(--fakepow --fakepow.delay "$USDB_BOOTSTRAP_POST_BOOTSTRAP_FAKE_POW_DELAY")
+  start_node1
+  wait_for_chain "$NODE1_RPC"
 }
 
 connect_nodes() {
@@ -402,6 +427,45 @@ run_source_dao_validation() {
   )
 }
 
+run_source_dao_fee_probe() {
+  local rpc_url=$1
+  local output_file=$2
+  local dividend_address fee_split_block
+  dividend_address=$(jq -r '.predeploys.dividend.address' "$USDB_CONFIG")
+  fee_split_block=$(jq -r '.dividendFeeSplitBlock' "$USDB_CONFIG")
+  if [[ -z "$dividend_address" || "$dividend_address" == "null" ]]; then
+    echo "USDB config has no Dividend address" >&2
+    return 1
+  fi
+  if [[ ! "$fee_split_block" =~ ^[1-9][0-9]*$ ]]; then
+    echo "USDB config has invalid Dividend fee-split block: $fee_split_block" >&2
+    return 1
+  fi
+  (
+    cd "$SOURCE_DAO_DIR"
+    source "$HOME/.nvm/nvm.sh"
+    nvm use 24 >/dev/null
+    SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY="$SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY" \
+      npx tsx scripts/usdb_fee_split_probe.ts \
+        --rpc-url "$rpc_url" \
+        --dividend-address "$dividend_address" \
+        --reward-recipient "$USDB_PROFILE_REWARD_RECIPIENT" \
+        --fee-split-block "$fee_split_block" \
+        --timeout-ms "$FEE_PROBE_TIMEOUT_MS" \
+        --output "$output_file"
+  )
+  if ! jq -e '
+    .status == "ok"
+    and (.probe.daoFee | tonumber) > 0
+    and (.probe.emission | tonumber) > 0
+    and (.ledgerSync.pendingBefore | tonumber) > 0
+    and .ledgerSync.pendingAfter == .ledgerSync.daoFee
+  ' "$output_file" >/dev/null; then
+    echo "USDB fee split probe did not produce the expected accounting result" >&2
+    return 1
+  fi
+}
+
 assert_idempotent_replay_state() {
   local state_file=$1
   if ! jq -e '
@@ -440,6 +504,10 @@ run_full_bootstrap_lifecycle() {
 
   echo "Running SourceDAO full bootstrap against node 1"
   run_source_dao_full_bootstrap "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE"
+  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
+  accelerate_fake_pow_after_bootstrap
+  echo "Running UIP-0011 fee split and Dividend ledger-sync probe"
+  run_source_dao_fee_probe "$NODE1_RPC" "$FEE_PROBE_FILE"
   run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
 
   bootstrap_height=$(wait_for_height "$NODE1_RPC" 1)
@@ -496,7 +564,8 @@ rm -f \
   "$BOOTSTRAP_STATE_FILE" \
   "$BOOTSTRAP_REPLAY_STATE_FILE" \
   "$NODE1_VALIDATION_FILE" \
-  "$NODE2_VALIDATION_FILE"
+  "$NODE2_VALIDATION_FILE" \
+  "$FEE_PROBE_FILE"
 
 echo "Generating shared USDB bootstrap genesis from $USDB_CONFIG"
 run_geth dumpgenesis \
@@ -564,6 +633,7 @@ if [[ "$RUN_FULL_BOOTSTRAP" == "1" ]]; then
   echo "Full-bootstrap restart/joiner lifecycle test passed."
   echo "bootstrap state: $BOOTSTRAP_STATE_FILE"
   echo "replay state:    $BOOTSTRAP_REPLAY_STATE_FILE"
+  echo "fee probe:       $FEE_PROBE_FILE"
 fi
 
 if [[ "$KEEP_RUNNING" == "1" ]]; then

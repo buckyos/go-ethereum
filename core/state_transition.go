@@ -24,12 +24,22 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/usdbstate"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 )
 
 var emptyCodeHash = crypto.Keccak256Hash(nil)
+
+type transactionFeeRoute uint8
+
+const (
+	legacyTransactionFeeRoute transactionFeeRoute = iota
+	usdbMinerTransactionFeeRoute
+	usdbSplitTransactionFeeRoute
+)
 
 /*
 The State Transitioning Model
@@ -42,8 +52,10 @@ The state transitioning model does all the necessary work to work out a valid ne
 3) Create a new state object if the recipient is \0*32
 4) Value transfer
 == If contract creation ==
-  4a) Attempt to run transaction data
-  4b) If valid, use result as code for the new state object
+
+	4a) Attempt to run transaction data
+	4b) If valid, use result as code for the new state object
+
 == end ==
 5) Run Script section
 6) Derive new state root
@@ -262,17 +274,25 @@ func (st *StateTransition) preCheck() error {
 // TransitionDb will transition the state by applying the current message and
 // returning the evm execution result with following fields.
 //
-// - used gas:
-//      total gas used (including gas being refunded)
-// - returndata:
-//      the returned data from evm
-// - concrete execution error:
-//      various **EVM** error which aborts the execution,
-//      e.g. ErrOutOfGas, ErrExecutionReverted
+//   - used gas:
+//     total gas used (including gas being refunded)
+//   - returndata:
+//     the returned data from evm
+//   - concrete execution error:
+//     various **EVM** error which aborts the execution,
+//     e.g. ErrOutOfGas, ErrExecutionReverted
 //
 // However if any consensus issue encountered, return the error directly with
 // nil evm execution result.
 func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
+	feeRoute, err := resolveTransactionFeeRoute(
+		st.evm.ChainConfig(),
+		st.evm.Context.BlockNumber,
+		st.state,
+	)
+	if err != nil {
+		return nil, err
+	}
 	// First check this message satisfies all consensus rules before
 	// applying the message. The rules include these clauses
 	//
@@ -349,6 +369,21 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		// Skip fee payment when NoBaseFee is set and the fee fields
 		// are 0. This avoids a negative effectiveTip being applied to
 		// the coinbase when simulating calls.
+	} else if feeRoute != legacyTransactionFeeRoute {
+		transactionFee := new(big.Int).Mul(
+			new(big.Int).SetUint64(st.gasUsed()),
+			st.gasPrice,
+		)
+		if feeRoute == usdbSplitTransactionFeeRoute {
+			split, err := usdb.SplitTransactionFeeV1(transactionFee)
+			if err != nil {
+				return nil, fmt.Errorf("split USDB transaction fee: %w", err)
+			}
+			st.state.AddBalance(st.evm.Context.Coinbase, split.MinerAtoms)
+			st.state.AddBalance(st.evm.ChainConfig().DividendAddress, split.DAOAtoms)
+		} else {
+			st.state.AddBalance(st.evm.Context.Coinbase, transactionFee)
+		}
 	} else {
 		fee := new(big.Int).SetUint64(st.gasUsed())
 		fee.Mul(fee, effectiveTip)
@@ -367,6 +402,40 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		Err:        vmerr,
 		ReturnData: ret,
 	}, nil
+}
+
+func resolveTransactionFeeRoute(config *params.ChainConfig, blockNumber *big.Int, statedb vm.StateDB) (transactionFeeRoute, error) {
+	if config == nil || blockNumber == nil {
+		return legacyTransactionFeeRoute, nil
+	}
+	if blockNumber.Sign() < 0 || !blockNumber.IsUint64() {
+		return legacyTransactionFeeRoute, fmt.Errorf("invalid USDB fee block number %v", blockNumber)
+	}
+	activation, err := config.USDBActivationAt(blockNumber.Uint64())
+	if err != nil {
+		return legacyTransactionFeeRoute, fmt.Errorf("resolve USDB fee policy: %w", err)
+	}
+	if activation == nil {
+		return legacyTransactionFeeRoute, nil
+	}
+	switch activation.Versions.FeeSplitPolicyVersion {
+	case 0:
+		return usdbMinerTransactionFeeRoute, nil
+	case usdb.FeeSplitPolicyVersionV1:
+		ready, err := usdbstate.ResolveDividendFeeGate(statedb, config, blockNumber)
+		if err != nil {
+			return legacyTransactionFeeRoute, fmt.Errorf("validate USDB Dividend fee gate: %w", err)
+		}
+		if ready {
+			return usdbSplitTransactionFeeRoute, nil
+		}
+		return usdbMinerTransactionFeeRoute, nil
+	default:
+		return legacyTransactionFeeRoute, fmt.Errorf(
+			"unsupported USDB fee split policy version %d",
+			activation.Versions.FeeSplitPolicyVersion,
+		)
+	}
 }
 
 func (st *StateTransition) refundGas(refundQuotient uint64) {

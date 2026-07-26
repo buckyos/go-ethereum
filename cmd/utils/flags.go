@@ -681,6 +681,11 @@ var (
 		Usage:    "Disables proof-of-work verification",
 		Category: flags.LoggingCategory,
 	}
+	FakePoWDelayFlag = &cli.DurationFlag{
+		Name:     "fakepow.delay",
+		Usage:    "Delays fake proof-of-work sealing for local deterministic tests",
+		Category: flags.LoggingCategory,
+	}
 	NoCompactionFlag = &cli.BoolFlag{
 		Name:     "nocompaction",
 		Usage:    "Disables db compaction after import",
@@ -1660,6 +1665,12 @@ func setTxPool(ctx *cli.Context, cfg *core.TxPoolConfig) {
 }
 
 func setEthash(ctx *cli.Context, cfg *ethconfig.Config) {
+	if ctx.Bool(FakePoWFlag.Name) {
+		cfg.Ethash.PowMode = ethash.ModeFake
+	}
+	if ctx.IsSet(FakePoWDelayFlag.Name) {
+		cfg.Ethash.FakeSealDelay = ctx.Duration(FakePoWDelayFlag.Name)
+	}
 	if ctx.IsSet(EthashCacheDirFlag.Name) {
 		cfg.Ethash.CacheDir = ctx.String(EthashCacheDirFlag.Name)
 	}
@@ -2262,6 +2273,9 @@ func MakeChain(ctx *cli.Context, stack *node.Node) (chain *core.BlockChain, chai
 	setEthashUSDBIndexer(ctx, &ethashConf)
 	if ctx.Bool(FakePoWFlag.Name) {
 		ethashConf.PowMode = ethash.ModeFake
+	}
+	if ctx.IsSet(FakePoWDelayFlag.Name) {
+		ethashConf.FakeSealDelay = ctx.Duration(FakePoWDelayFlag.Name)
 	}
 	engine = ethconfig.CreateConsensusEngine(stack, config, &ethashConf, nil, false, chainDb)
 	if gcmode := ctx.String(GCModeFlag.Name); gcmode != "full" && gcmode != "archive" {

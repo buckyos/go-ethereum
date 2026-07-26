@@ -2,16 +2,17 @@
 
 ## 1. 目标
 
-本阶段只落最小可运行实现，目标是把 `Dao + Dividend` 冷启动方案接到 `go-ethereum` 的链配置与 bring-up 流程里，为后续手续费分账实现铺路。
-
-第一阶段不直接修改手续费状态转换公式，而是先完成：
+当前开发实现已经把 `Dao + Dividend` 冷启动、共识 readiness 和 UIP-0011
+手续费分账接到 `go-ethereum` 的链配置与状态转换。实现包括：
 
 - 链配置中的 `DividendAddress`
 - 链配置中的 `DividendFeeSplitBlock`
-- genesis / bootstrap 对系统合约地址的承载约定
-- 对应的配置单测与集成测试骨架
-
-同时，第一阶段要把“测试 helper”再往前推一步，变成开发者可直接使用的固定 bootstrap genesis 生成流程。
+- 链配置承诺的 `DividendCodeHash`
+- genesis / bootstrap 对系统合约地址和 runtime code 的承载约定
+- `Dividend.bootstrapFinalized()` 一向 readiness marker
+- 激活前全归矿工、激活后 60%/40% 的实际手续费状态转换
+- Dividend native balance 与合约内部 ledger 的显式同步测试
+- restart、fresh joiner、历史 state root 和幂等重放测试
 
 ## 2. 设计边界
 
@@ -31,6 +32,7 @@
 
 - `DividendAddress`
 - `DividendFeeSplitBlock`
+- `DividendCodeHash`
 
 原因：
 
@@ -40,7 +42,7 @@
 
 ### 2.2 本阶段不纳入共识配置的字段
 
-暂不放入 `ChainConfig`：
+不放入 `ChainConfig`：
 
 - `DaoAddress`
 - `bootstrapAdmin`
@@ -94,7 +96,7 @@
 - `DividendAddress` 的 runtime code
 - `bootstrapAdmin` 的初始余额
 
-第一阶段建议：
+开发期与 public release 的约束：
 
 - 不把 SourceDAO 合约字节码硬编码进内置 `DefaultUSDBGenesisBlock()`
 - 先使用外部 genesis JSON 或测试专用 genesis builder 注入 code
@@ -104,9 +106,9 @@
 不要求等于当前内置开发 genesis hash。public network 发布时则必须冻结 spec 和 artifacts，把最终
 generated genesis hash 同步绑定到该网络的 `USDBGenesisHash`、chain config 和 release manifest。
 
-### 3.2.1 第一阶段的生成入口
+### 3.2.1 Genesis 生成入口
 
-第一阶段推荐的本地 bring-up 流程是：
+当前开发期推荐的本地 bring-up 流程是：
 
 1. 使用 `geth dumpgenesis --usdb --usdb.bootstrap.config <path> --usdb.bootstrap.artifacts <dir>`
    读取 versioned public genesis spec 和独立的 SourceDAO artifact root。
@@ -211,15 +213,18 @@ PoW difficulty。
 该入口复用双节点脚本和 SourceDAO full bootstrap/strict validator，固定执行：
 
 1. 只启动 node1，并执行完整 SourceDAO bootstrap。
-2. 保存 full bootstrap state，并在 node1 上执行 strict validation。
-3. 固定 bootstrap 完成高度的 block hash 和 state root。
-4. 使用原 datadir 重启 node1，检查固定区块身份和完整合约状态不变。
-5. bootstrap 完成后才启动全新 node2，使其从同一 genesis 重放历史。
-6. 检查 node2 在固定高度得到相同 block hash/state root，且两端 strict validation 摘要一致。
-7. 再次执行 full bootstrap，要求 state 中不存在新的 `completed` 或 `error` operation。
+2. 写入 `Dividend.bootstrapFinalized()`，保存 state 并执行 strict validation。
+3. 跨过 `DividendFeeSplitBlock`，验证 emission、60%/40% fee 和 Dividend ledger sync。
+4. 固定 bootstrap 完成高度的 block hash 和 state root。
+5. 使用原 datadir 重启 node1，检查固定区块身份和完整合约状态不变。
+6. bootstrap 完成后才启动 `--syncmode full` 的全新 node2，使其从同一 genesis 重放历史。
+7. 检查 node2 在固定高度得到相同 block hash/state root，且两端 strict validation 摘要一致。
+8. 再次执行 full bootstrap，要求 state 中不存在新的 `completed` 或 `error` operation。
 
-该测试默认使用 fake PoW 和 test-only UIP-0006 indexer fixture，只证明 bootstrap persistence、
-historical replay、validator 接线和幂等性，不作为真实 BTC-side state 或 PoW 难度标定证据。
+该测试默认使用 1 秒 fake-PoW seal interval 和 test-only UIP-0006 indexer fixture。1 秒下限避免
+链上时间快于墙钟而使 fresh joiner 以 `block in the future` 拒绝历史。该入口证明 bootstrap
+persistence、reward/fee state transition、historical replay、validator 接线和幂等性，但不作为
+真实 BTC-side state 或 PoW 难度标定证据。
 
 ### 3.3 状态转换
 
@@ -227,21 +232,27 @@ historical replay、validator 接线和幂等性，不作为真实 BTC-side stat
 
 - `/home/bucky/work/go-ethereum/core/state_transition.go`
 
-本阶段只预留接入点，不立即改分账公式。
+当前实现按每笔交易的退款后实际手续费
+`gas_used * effective_gas_price` 分账，包含 base fee 和 tip：
 
-后续接线原则：
+- USDB activation 未启用时保留 legacy ETHW 路径。
+- `fee_split_policy_version = 0` 时，实际手续费全部归 `header.Coinbase`。
+- policy v1 但高度低于 `DividendFeeSplitBlock` 时，实际手续费仍全部归矿工。
+- policy v1 且到达 gate 后，validator 必须同时确认 `DividendAddress`、
+  `DividendCodeHash` 和 `Dividend.bootstrapFinalized() == true`；任一不满足即 fail closed。
+- readiness 满足后，每笔交易 `40%` 向下取整计入 Dividend，剩余 `60%` 加 rounding
+  remainder 计入矿工。
+- USDB policy 路径不会再叠加 legacy `MinerDAOAddress` 分账。
 
-- `cfg.IsDividendFeeSplit(blockNumber)` 只提供 address/height 静态 gate，不能单独启用分账
-- 还必须由目标高度的 USDB activation checkpoint 解析出受支持的非零
-  `fee_split_policy_version`
-- 还必须满足 UIP-0010 冻结、可从 USDB chain state 确定性读取的 bootstrap
-  readiness predicate
-- 激活前仍走旧逻辑
-- 激活后再把目标金额记入 `cfg.DividendAddress`
+readiness slot 固定为：
 
-本地 `bootstrap_state` / `bootstrap_marker` 不参与共识。当前 SourceDAO 尚无冻结的
-on-chain readiness predicate，因此现阶段 checkpoint 必须保持
-`fee_split_policy_version = 0`；仅设置 `DividendFeeSplitBlock` 不会授权实际分账。
+```text
+keccak256("sourcedao.dividend.bootstrap-finalized:v1")
+= 0x7d8bb76c5e489191d3f481f0b7ade016df922a8ec91d3eb9c93c07ee5a337054
+```
+
+共识层直接增加 Dividend native balance，不执行 Solidity `receive()`。合约 ledger 通过显式
+`updateTokenBalance(0)` 同步；同步交易自身产生的新 DAO fee 留作下一轮 pending。
 
 ### 3.4 Bring-up / bootstrap
 
@@ -254,14 +265,17 @@ on-chain readiness predicate，因此现阶段 checkpoint 必须保持
    - `Dao.initialize()`
    - `Dividend.initialize(cycleMinLength, DaoAddress)`
    - `Dao.setTokenDividendAddress(DividendAddress)`
-3. 等到 `DividendFeeSplitBlock`
-4. 才开始验证手续费进入 `DividendAddress`
+   - 部署并 wiring full scope 的其他模块
+   - `Dividend.finalizeBootstrap()`
+3. strict validator 同时检查 full wiring 和 `bootstrapFinalized()`
+4. 等到 `DividendFeeSplitBlock`
+5. 验证手续费进入 `DividendAddress`，并执行一次 ledger sync
 
-## 4. 第一阶段默认策略
+## 4. 当前默认策略
 
 ### 4.1 内置 USDB genesis 的默认行为
 
-内置 `USDBChainConfig` 第一阶段建议保持：
+内置 development `USDBChainConfig` 保持：
 
 - `DividendFeeSplitBlock = nil`
 - `DividendAddress = 0x0`
@@ -273,22 +287,22 @@ on-chain readiness predicate，因此现阶段 checkpoint 必须保持
 
 开发和联调阶段：
 
-- 使用自定义 genesis / config 覆盖这两个字段
+- 使用严格 public spec 生成 bootstrap overlay；overlay 绑定 address、height、code hash，
+  并把 activation 的 `fee_split_policy_version` 设置为 `1`
 
 ### 4.2 激活块建议
 
-开发阶段可以先用一个很小但大于 bootstrap 所需块数的值，例如：
+当前开发 spec 使用：
 
-- `DividendFeeSplitBlock = 16`
+- `DividendFeeSplitBlock = 256`
 
-该值当前只用于覆盖 chain-config gate 和 bootstrap timing，不代表非零 fee policy 已启用。
-冻结 on-chain readiness predicate 后，才可以稳定覆盖三种实际分账状态：
+该值只用于开发测试，不是 public network 参数。当前测试覆盖三种实际分账状态：
 
 - 链已启动但未初始化
 - 已初始化但未激活 fee split
 - 已激活 fee split
 
-## 5. 测试设计
+## 5. 测试覆盖
 
 ## 5.1 配置单测
 
@@ -296,84 +310,68 @@ on-chain readiness predicate，因此现阶段 checkpoint 必须保持
 
 - `/home/bucky/work/go-ethereum/params/config_test.go`
 
-新增测试：
+当前配置测试覆盖：
 
-1. `DividendFeeSplitBlock=nil` 时不激活
-2. `DividendAddress=0x0` 时不激活
-3. 两者都设置后，在阈值块前后返回值正确
+1. fee gate 配置必须同时具备正数 `DividendFeeSplitBlock`、非零
+   `DividendAddress` 和非零 `DividendCodeHash`。
+2. fee policy v1 不得早于 UIP-0010/bootstrap 及 UIP-0011 reward activation。
+3. 已生效 gate 的高度、地址或 code hash 变化会触发 `CheckCompatible`。
 
 ## 5.2 Genesis 层测试
 
-位置可放：
+文件：
 
 - `core/genesis_test.go`
 
-测试目标：
+当前测试覆盖：
 
-- 测试专用 genesis 可以预置 `DaoAddress` 与 `DividendAddress` 的 code
-- `bootstrapAdmin` 初始余额正确
-
-这里先做“状态写入正确”的测试，不必一开始就联 SourceDAO ABI。
+- bootstrap overlay 预置 `DaoAddress` 与 `DividendAddress` runtime code。
+- `bootstrapAdmin` 初始余额正确。
+- `DividendCodeHash` 从冻结 artifact 派生并绑定到 chain config。
+- issued supply 与 UIP-0011 至 UIP-0013 reserved system slots 初始化正确。
 
 ## 5.3 Bootstrap 集成测试
 
-建议新建单独 integration/regtest：
+当前 SourceDAO 与 geth integration/regtest 覆盖：
 
-1. 启动单节点私链
-2. 导入测试 genesis
-3. 发送 bootstrap 交易
-4. 调用只读方法确认：
+1. 启动单节点私链并导入冻结 bootstrap genesis。
+2. 执行 full bootstrap 和 `Dividend.finalizeBootstrap()`。
+3. strict validation 确认：
    - `Dao` 已初始化
    - `Dividend` 已初始化
    - `Dao.dividend() == DividendAddress`
+   - runtime code hash 与 finalized marker 均匹配
 
 ## 5.4 激活块测试
 
 在 bootstrap 完成后：
 
-1. 激活前发送普通交易
-   - `Dividend` 余额不增加
-2. 到达激活块后发送普通交易
-   - `Dividend` 余额增加
+1. 激活前发送普通交易，实际手续费全部归 miner。
+2. 到达激活块后但 readiness 不满足时，区块执行 fail closed。
+3. readiness 满足后发送普通交易，实际手续费按 `60% / 40%` 分账。
 
-这条测试应在 on-chain readiness predicate 和手续费分账逻辑都接入后补齐；测试必须同时
-证明本地 marker 不能改变 validator 结果。
+`scripts/usdb/run_local_full_bootstrap_restart_joiner.sh` 已执行该测试，并额外校验：
+
+- sender 扣款等于退款后实际手续费。
+- reward recipient 增量等于 UIP-0011 emission 加 miner fee。
+- Dividend 增量等于 DAO fee。
+- ledger sync 吸收同步前 pending，且同步交易的新 DAO fee 成为下一轮 pending。
 
 ## 6. 开发顺序
 
-第一批：
+已完成：
 
-1. `ChainConfig` 增加 `DividendAddress` / `DividendFeeSplitBlock`
-2. 增加 `IsDividendFeeSplit(...)`
-3. 单测覆盖配置行为
-4. 文档与 bring-up 约定同步
-5. 增加开发期 bootstrap genesis 生成入口
+1. ChainConfig、genesis public spec、artifact/code commitment。
+2. DAO/Dividend direct predeploy 和 full bootstrap。
+3. 单向 readiness marker 与 strict validator。
+4. UIP-0011 fee policy v1 状态转换和负向测试。
+5. fee/ledger、restart、fresh joiner 和幂等 live E2E。
 
-当前第一批完成后，开发者应当可以：
-
-- 从 SourceDAO 本地配置直接导出 `genesis-bootstrap.json`
-- 在单机上启动一条带 `Dao` / `Dividend` runtime code 的 USDB 开发链
-- 后续再用 bootstrap admin 发送初始化交易
-
-第二批：
-
-1. 测试专用 genesis 清单 / builder
-2. 预置系统地址 code 的链级测试
-3. bootstrap admin 初始化流程测试
-
-第三批：
-
-1. 手续费分账逻辑接入 `state_transition.go`
-2. 激活块前后行为测试
-3. 重启一致性测试
+public release 前仍需冻结最终地址、artifact、genesis hash、activation height、manifest
+signature 和 bootstrap-admin custody。
 
 ## 7. 当前结论
 
-第一阶段最小可落地实现，不是“马上把 fee split 打开”，而是：
-
-- 先把链配置与 cold-start 结构准备好
-- 再把 bootstrap bring-up 流程跑通
-- 冻结 consensus-readable bootstrap readiness predicate
-- 最后接入手续费分账公式
-
-这能把配置正确性、系统合约冷启动、共识状态转换三个风险面分开验证。
+开发实现已经完成从 chain config、cold start、on-chain readiness 到 fee state transition 的闭环。
+本地 marker 和 RPC 健康状态不参与共识；validator 只信任 chain config、Dividend runtime code 和
+state-root 承诺的 finalized slot。剩余工作属于 public release 参数冻结和更大规模网络演练。

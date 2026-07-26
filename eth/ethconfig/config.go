@@ -236,6 +236,7 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 		}
 		engine = ethash.NewWithChainConfig(ethash.Config{
 			PowMode:          config.PowMode,
+			FakeSealDelay:    config.FakeSealDelay,
 			CacheDir:         stack.ResolvePath(config.CacheDir),
 			CachesInMem:      config.CachesInMem,
 			CachesOnDisk:     config.CachesOnDisk,

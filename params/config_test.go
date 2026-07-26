@@ -162,8 +162,9 @@ func TestUSDBConsensusAtUsesChainConfigVersions(t *testing.T) {
 		t.Fatalf("failed to resolve built-in USDB policy: %v", err)
 	}
 	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 ||
-		policy.RewardRuleVersion != 0 || policy.CoinbaseEmissionPolicyVersion != 0 ||
-		policy.CollaborationEfficiencyPolicyVersion != 0 || policy.PricePolicyVersion != 0 ||
+		policy.RewardRuleVersion != 1 || policy.CoinbaseEmissionPolicyVersion != 1 ||
+		policy.FeeSplitPolicyVersion != 0 ||
+		policy.CollaborationEfficiencyPolicyVersion != 1 || policy.PricePolicyVersion != 1 ||
 		policy.QuotePolicyVersion != 0 || policy.AuxPoolPolicyVersion != 0 {
 		t.Fatalf("unexpected built-in USDB policy: %+v", policy)
 	}
@@ -230,11 +231,11 @@ func TestUSDBConsensusConfigJSONRoundTrip(t *testing.T) {
 	for _, field := range []string{
 		`"btcActivationRegistryId":"` + testBTCActivationRegistryID + `"`,
 		`"activations"`,
-		`"rewardRuleVersion":0`,
-		`"coinbaseEmissionPolicyVersion":0`,
+		`"rewardRuleVersion":1`,
+		`"coinbaseEmissionPolicyVersion":1`,
 		`"feeSplitPolicyVersion":0`,
-		`"collaborationEfficiencyPolicyVersion":0`,
-		`"pricePolicyVersion":0`,
+		`"collaborationEfficiencyPolicyVersion":1`,
+		`"pricePolicyVersion":1`,
 		`"quotePolicyVersion":0`,
 		`"auxPoolPolicyVersion":0`,
 	} {
@@ -375,6 +376,10 @@ func TestIsDividendFeeSplit(t *testing.T) {
 		t.Fatalf("fee split must stay disabled without a dividend address")
 	}
 	cfg.DividendAddress = addr
+	if cfg.IsDividendFeeSplit(big.NewInt(10)) {
+		t.Fatalf("fee split must stay disabled without a dividend code hash")
+	}
+	cfg.DividendCodeHash = common.HexToHash("0x1234")
 	if cfg.IsDividendFeeSplit(big.NewInt(9)) {
 		t.Fatalf("fee split activated before the configured block")
 	}

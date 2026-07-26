@@ -5,8 +5,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+// BuiltProfileSelector is the validated miner-side output for one USDB block.
+type BuiltProfileSelector struct {
+	Payload         []byte
+	RewardRecipient common.Address
+}
 
 // PayloadBuilder creates the current UIP-0007 selector used by miner/header assembly.
 type PayloadBuilder struct {
@@ -68,7 +75,7 @@ func (b *PayloadBuilder) Close() {
 
 // BuildCurrentPayload emits a selector for blockNumber only after resolving its
 // consensus policy and validating the configured pass in current state.
-func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64) ([]byte, error) {
+func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64) (*BuiltProfileSelector, error) {
 	activation, err := b.chainConfig.USDBActivationAt(blockNumber)
 	if err != nil {
 		return nil, err
@@ -121,7 +128,14 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if profile.View.ExternalState.ActiveVersionSetID != systemState.ActiveVersionSetID {
 		return nil, fmt.Errorf("current usdb activation identity changed while building payload")
 	}
-	return payload.MarshalBinary()
+	encoded, err := payload.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	return &BuiltProfileSelector{
+		Payload:         encoded,
+		RewardRecipient: profile.RewardRecipient,
+	}, nil
 }
 
 func validateCurrentActivationIdentity(

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/node"
@@ -111,7 +112,9 @@ func TestSetEthashAppliesUSDBFlags(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
 		EthashUSDBIndexerRPCURLFlag,
 		EthashUSDBIndexerTimeoutFlag,
-	}, "--ethash.usdb-indexer.rpcurl", "http://127.0.0.1:18548", "--ethash.usdb-indexer.timeout", "6s")
+		FakePoWFlag,
+		FakePoWDelayFlag,
+	}, "--ethash.usdb-indexer.rpcurl", "http://127.0.0.1:18548", "--ethash.usdb-indexer.timeout", "6s", "--fakepow", "--fakepow.delay", "250ms")
 
 	cfg := ethconfig.Defaults
 	setEthash(ctx, &cfg)
@@ -121,6 +124,12 @@ func TestSetEthashAppliesUSDBFlags(t *testing.T) {
 	}
 	if cfg.Ethash.USDBIndexer.QueryTimeout != 6*time.Second {
 		t.Fatalf("unexpected ethash usdb-indexer timeout: %s", cfg.Ethash.USDBIndexer.QueryTimeout)
+	}
+	if cfg.Ethash.PowMode != ethash.ModeFake {
+		t.Fatalf("fake-PoW flag did not reach the node ethash config: %d", cfg.Ethash.PowMode)
+	}
+	if cfg.Ethash.FakeSealDelay != 250*time.Millisecond {
+		t.Fatalf("unexpected fake-PoW seal delay: %s", cfg.Ethash.FakeSealDelay)
 	}
 }
 

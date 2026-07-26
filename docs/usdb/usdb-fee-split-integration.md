@@ -1,5 +1,12 @@
 # USDB Chain 手续费分账改造备忘
 
+> 历史设计稿：本文记录 UIP-0010/UIP-0011 落地前的方案比较，不再作为现行实现依据。
+> 当前规则是按退款后实际手续费执行 `60% miner / 40% Dividend`，并由 activation、
+> `DividendFeeSplitBlock`、冻结 runtime code hash 与
+> `Dividend.bootstrapFinalized()` 共同 fail closed。请以 UIP-0010、UIP-0011、
+> `docs/usdb/usdb-dividend-bootstrap-implementation.md` 及 `core/state_transition.go`
+> 为准。下文 `MinerDAOAddress` 和“第一阶段”内容仅保留为历史记录。
+
 ## 1. 需求
 
 当前需要在 USDB chain 侧引入一条新的手续费分账规则：

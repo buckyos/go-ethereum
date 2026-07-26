@@ -5,14 +5,14 @@
     "dao": {
       "address": "0x0000000000000000000000000000000000001001",
       "artifact": "contracts/Dao.sol/SourceDao.json",
-      "runtimeCodeHash": "0x1e658f8d1e59e836bb9561337f3fedf58715076bc6dfb5d9c5b6dcc7a248e1c7",
-      "artifactSha256": "af6dd01a48dcf52acd8fb853dd622d165d4a6e341ef880acf2f4f65615860da5"
+      "runtimeCodeHash": "0xc6549189a694031f7d94e6b1b8b11b2bc43d1753cdaa7ac885a97c5e6d462593",
+      "artifactSha256": "f3ca9cc6bcd687c72843bd0560b8b003aae4897d3b6298c38db69b714f20d506"
     },
     "dividend": {
       "address": "0x0000000000000000000000000000000000001002",
       "artifact": "contracts/Dividend.sol/DividendContract.json",
-      "runtimeCodeHash": "0x64f7c8b65a98a8a68ab284976051a4572e5d661eb8139662f55ea532adae82d4",
-      "artifactSha256": "edc0d344db7b3782aa14696ff393b47480a617c0eeb566f70b1b3c28e4ea5184"
+      "runtimeCodeHash": "0x83a65baf939d7c7703d15fcaf7e7e6c0102d7fc7ddbf378b9166c2be5d2ff046",
+      "artifactSha256": "2e286d2a90cb9f5d3791ee0b16332d70c0b4b8f454b38985e181e698a9c3f03b"
     }
   },
   "bootstrapAdmin": {
@@ -21,5 +21,5 @@
   },
   "genesisDifficulty": "0x180000",
   "minimumDifficulty": "0x100000",
-  "dividendFeeSplitBlock": 16
+  "dividendFeeSplitBlock": 256
 }

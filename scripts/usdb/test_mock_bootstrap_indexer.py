@@ -12,6 +12,9 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from mock_bootstrap_indexer import (  # noqa: E402
     ACTIVE_VERSION_SET,
     ACTIVE_VERSION_SET_ID,
+    DEFAULT_COLLAB_CONTRIBUTION,
+    DEFAULT_TOTAL_MINER_BTC_SATS,
+    DEFAULT_USDB_MAIN,
     REGISTRY_ID,
     SNAPSHOT_ID,
     SYSTEM_STATE_ID,
@@ -66,6 +69,23 @@ class MockBootstrapIndexerTest(unittest.TestCase):
         self.assertEqual(profile["external_state"]["snapshot_id"], SNAPSHOT_ID)
         self.assertEqual(profile["pass"]["pass_id"], PASS_ID)
         self.assertEqual(profile["pass"]["difficulty_factor_bps"], 10000)
+        self.assertEqual(profile["pass"]["usdb_main"], DEFAULT_USDB_MAIN)
+        self.assertEqual(
+            profile["pass"]["collab_contribution"],
+            DEFAULT_COLLAB_CONTRIBUTION,
+        )
+        self.assertEqual(
+            profile["pass"]["effective_energy"],
+            DEFAULT_COLLAB_CONTRIBUTION,
+        )
+        self.assertEqual(
+            profile["miner_aggregate"]["total_miner_btc_sats"],
+            DEFAULT_TOTAL_MINER_BTC_SATS,
+        )
+        self.assertEqual(
+            profile["miner_aggregate"]["active_miner_owner_count"],
+            1,
+        )
 
     def test_profile_rejects_tampered_expected_state(self) -> None:
         params = profile_params()
