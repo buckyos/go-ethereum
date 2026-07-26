@@ -21,11 +21,14 @@ BLOCK_WAIT_SECONDS=${BLOCK_WAIT_SECONDS:-180}
 ENERGY_TOPUP_AMOUNT_BTC=${ENERGY_TOPUP_AMOUNT_BTC:-1.0}
 ENERGY_GROWTH_BLOCKS=${ENERGY_GROWTH_BLOCKS:-2}
 ACTIVATION_CONFORMANCE_BLOCK=${ACTIVATION_CONFORMANCE_BLOCK:-}
+ECONOMIC_CONFORMANCE_V2_BLOCK=${ECONOMIC_CONFORMANCE_V2_BLOCK:-}
+ECONOMIC_CONFORMANCE_V3_BLOCK=${ECONOMIC_CONFORMANCE_V3_BLOCK:-}
 INDEXER_OUTAGE_CHECK=${INDEXER_OUTAGE_CHECK:-0}
 SELECTOR_TAMPER_CHECK=${SELECTOR_TAMPER_CHECK:-0}
 ACTIVATION_FRESH_VALIDATOR_CHECK=${ACTIVATION_FRESH_VALIDATOR_CHECK:-0}
 OUTAGE_OBSERVE_SECONDS=${OUTAGE_OBSERVE_SECONDS:-4}
 USDB_QUERY_TIMEOUT=${USDB_QUERY_TIMEOUT:-1s}
+USDB_CHAIN_GCMODE=${USDB_CHAIN_GCMODE:-archive}
 
 USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x1111111111111111111111111111111111111111}
 MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$USDB_CHAIN_MINER_ADDRESS}
@@ -63,6 +66,7 @@ export REGTEST_LOG_PREFIX="[usdb-profile-e2e/usdb]"
 GETH_BIN=${GETH_BIN:-}
 GETH_GO=${GETH_GO:-/usr/local/go/bin/go}
 PRE_ACTIVATION_GETH_BIN=${PRE_ACTIVATION_GETH_BIN:-}
+MID_ACTIVATION_GETH_BIN=${MID_ACTIVATION_GETH_BIN:-}
 POST_ACTIVATION_GETH_BIN=${POST_ACTIVATION_GETH_BIN:-}
 
 if [[ -n "$GETH_BIN" ]]; then
@@ -74,6 +78,11 @@ if [[ -n "$PRE_ACTIVATION_GETH_BIN" ]]; then
   PRE_ACTIVATION_GETH_CMD=("$PRE_ACTIVATION_GETH_BIN")
 else
   PRE_ACTIVATION_GETH_CMD=("${GETH_CMD[@]}")
+fi
+if [[ -n "$MID_ACTIVATION_GETH_BIN" ]]; then
+  MID_ACTIVATION_GETH_CMD=("$MID_ACTIVATION_GETH_BIN")
+else
+  MID_ACTIVATION_GETH_CMD=("${GETH_CMD[@]}")
 fi
 if [[ -n "$POST_ACTIVATION_GETH_BIN" ]]; then
   POST_ACTIVATION_GETH_CMD=("$POST_ACTIVATION_GETH_BIN")
@@ -116,6 +125,10 @@ usdb_chain_rpc_call_url() {
 
 usdb_chain_validator_required() {
   [[ "$INDEXER_OUTAGE_CHECK" == "1" || "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]]
+}
+
+usdb_chain_economic_conformance_enabled() {
+  [[ -n "$ECONOMIC_CONFORMANCE_V2_BLOCK" && -n "$ECONOMIC_CONFORMANCE_V3_BLOCK" ]]
 }
 
 usdb_chain_wait_rpc_ready() {
@@ -212,6 +225,7 @@ usdb_chain_start_node() {
     exec "${command[@]}" \
       --datadir "$DATADIR" \
       --networkid "$NETWORK_ID" \
+      --gcmode "$USDB_CHAIN_GCMODE" \
       --http \
       --http.addr "$HTTP_ADDR" \
       --http.port "$HTTP_PORT" \
@@ -275,6 +289,7 @@ usdb_chain_start_validator() {
     exec "${command[@]}" \
       --datadir "$VALIDATOR_DATADIR" \
       --networkid "$NETWORK_ID" \
+      --gcmode "$USDB_CHAIN_GCMODE" \
       --http \
       --http.addr "$VALIDATOR_HTTP_ADDR" \
       --http.port "$VALIDATOR_HTTP_PORT" \
@@ -403,6 +418,12 @@ verify_profile_blocks() {
   local -a activation_args=()
   if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
     activation_args+=(--activation-conformance-block "$ACTIVATION_CONFORMANCE_BLOCK")
+  fi
+  if usdb_chain_economic_conformance_enabled; then
+    activation_args+=(
+      --economic-conformance-v2-block "$ECONOMIC_CONFORMANCE_V2_BLOCK"
+      --economic-conformance-v3-block "$ECONOMIC_CONFORMANCE_V3_BLOCK"
+    )
   fi
 
   python3 "$ROOT_DIR/scripts/usdb/verify_usdb_profile_e2e.py" \
@@ -586,18 +607,47 @@ main() {
       exit 1
     fi
   fi
+  if [[ -n "$ECONOMIC_CONFORMANCE_V2_BLOCK" || -n "$ECONOMIC_CONFORMANCE_V3_BLOCK" ]]; then
+    if ! usdb_chain_economic_conformance_enabled; then
+      echo "ECONOMIC_CONFORMANCE_V2_BLOCK and ECONOMIC_CONFORMANCE_V3_BLOCK must be set together" >&2
+      exit 1
+    fi
+    if (( ECONOMIC_CONFORMANCE_V2_BLOCK < 2 )); then
+      echo "ECONOMIC_CONFORMANCE_V2_BLOCK must be at least 2" >&2
+      exit 1
+    fi
+    if (( ECONOMIC_CONFORMANCE_V3_BLOCK <= ECONOMIC_CONFORMANCE_V2_BLOCK )); then
+      echo "ECONOMIC_CONFORMANCE_V3_BLOCK must follow ECONOMIC_CONFORMANCE_V2_BLOCK" >&2
+      exit 1
+    fi
+    if (( TARGET_BLOCKS <= ECONOMIC_CONFORMANCE_V3_BLOCK )); then
+      echo "TARGET_BLOCKS must be after ECONOMIC_CONFORMANCE_V3_BLOCK" >&2
+      exit 1
+    fi
+    if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
+      echo "difficulty and economic activation conformance modes cannot be combined" >&2
+      exit 1
+    fi
+    if [[ -z "$MID_ACTIVATION_GETH_BIN" || -z "$POST_ACTIVATION_GETH_BIN" ]]; then
+      echo "economic activation conformance requires MID_ACTIVATION_GETH_BIN and POST_ACTIVATION_GETH_BIN" >&2
+      exit 1
+    fi
+  fi
   for check_name in INDEXER_OUTAGE_CHECK SELECTOR_TAMPER_CHECK ACTIVATION_FRESH_VALIDATOR_CHECK; do
     if [[ "${!check_name}" != "0" && "${!check_name}" != "1" ]]; then
       echo "${check_name} must be 0 or 1" >&2
       exit 1
     fi
   done
-  if [[ "$INDEXER_OUTAGE_CHECK" == "1" && -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
-    echo "INDEXER_OUTAGE_CHECK cannot be combined with ACTIVATION_CONFORMANCE_BLOCK" >&2
+  if [[ "$INDEXER_OUTAGE_CHECK" == "1" ]] &&
+    { [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]] || usdb_chain_economic_conformance_enabled; }; then
+    echo "INDEXER_OUTAGE_CHECK cannot be combined with activation conformance" >&2
     exit 1
   fi
-  if [[ "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" && -z "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
-    echo "ACTIVATION_FRESH_VALIDATOR_CHECK requires ACTIVATION_CONFORMANCE_BLOCK" >&2
+  if [[ "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]] &&
+    [[ -z "$ACTIVATION_CONFORMANCE_BLOCK" ]] &&
+    ! usdb_chain_economic_conformance_enabled; then
+    echo "ACTIVATION_FRESH_VALIDATOR_CHECK requires an activation conformance mode" >&2
     exit 1
   fi
   regtest_assert_ord_server_port_available
@@ -707,6 +757,12 @@ EOF
     python3 "$ROOT_DIR/scripts/usdb/configure_usdb_activation_conformance_genesis.py" \
       --genesis "$GENESIS_JSON" \
       --activation-block "$ACTIVATION_CONFORMANCE_BLOCK"
+  elif usdb_chain_economic_conformance_enabled; then
+    usdb_chain_log "Adding test-only economic activations at USDB blocks ${ECONOMIC_CONFORMANCE_V2_BLOCK} and ${ECONOMIC_CONFORMANCE_V3_BLOCK}"
+    python3 "$ROOT_DIR/scripts/usdb/configure_usdb_economic_activation_conformance_genesis.py" \
+      --genesis "$GENESIS_JSON" \
+      --v2-activation-block "$ECONOMIC_CONFORMANCE_V2_BLOCK" \
+      --v3-activation-block "$ECONOMIC_CONFORMANCE_V3_BLOCK"
   fi
   usdb_chain_log "Initializing USDB-chain datadir ${DATADIR}"
   run_geth init --datadir "$DATADIR" "$GENESIS_JSON" >/dev/null
@@ -731,6 +787,42 @@ EOF
     regtest_stop_process "$GETH_PID"
     GETH_PID=""
     sleep 1
+    usdb_chain_start_node true "${POST_ACTIVATION_GETH_CMD[@]}"
+    usdb_chain_wait_rpc_ready
+  elif usdb_chain_economic_conformance_enabled; then
+    local v2_pre_activation_height=$((ECONOMIC_CONFORMANCE_V2_BLOCK - 1))
+    local v3_pre_activation_height=$((ECONOMIC_CONFORMANCE_V3_BLOCK - 1))
+    local stalled_height
+
+    usdb_chain_log "Starting default binary before fake v2 activation"
+    usdb_chain_start_node false "${PRE_ACTIVATION_GETH_CMD[@]}"
+    usdb_chain_wait_rpc_ready
+    usdb_chain_wait_block_height "$v2_pre_activation_height" >/dev/null
+    usdb_chain_wait_log_pattern "unsupported usdb quote policy version 65534"
+    stalled_height="$(usdb_chain_current_height)"
+    if (( stalled_height != v2_pre_activation_height )); then
+      echo "Default binary crossed fake v2 boundary: have ${stalled_height}, want ${v2_pre_activation_height}" >&2
+      exit 1
+    fi
+    usdb_chain_log "Default binary failed closed; restarting fake v2 binary"
+    regtest_stop_process "$GETH_PID"
+    GETH_PID=""
+    sleep 1
+
+    usdb_chain_start_node true "${MID_ACTIVATION_GETH_CMD[@]}"
+    usdb_chain_wait_rpc_ready
+    usdb_chain_wait_block_height "$v3_pre_activation_height" >/dev/null
+    usdb_chain_wait_log_pattern "unsupported usdb quote policy version 65535"
+    stalled_height="$(usdb_chain_current_height)"
+    if (( stalled_height != v3_pre_activation_height )); then
+      echo "Fake v2 binary crossed fake v3 boundary: have ${stalled_height}, want ${v3_pre_activation_height}" >&2
+      exit 1
+    fi
+    usdb_chain_log "Fake v2 binary failed closed; restarting fake v3 binary"
+    regtest_stop_process "$GETH_PID"
+    GETH_PID=""
+    sleep 1
+
     usdb_chain_start_node true "${POST_ACTIVATION_GETH_CMD[@]}"
     usdb_chain_wait_rpc_ready
   else

@@ -14,11 +14,11 @@ The built-in development chain activates these policies from USDB block `0`:
 - USDB activation checkpoint binding
   `btcActivationRegistryId = 22d820e6...aaf83d` (`btc-regtest` revision 1)
 
-The remaining UIP-0009 version families are present in the chain-config
-activation checkpoint but remain `0` until their defining UIP is implemented. In
-particular, UIP-0011 reward and CoinBase emission are not active. Blocks still
-receive the existing Constantinople Ethash reward while both difficulty and the
-reward transition require a valid selector-bound historical profile.
+The same checkpoint activates UIP-0011 CoinBase emission, UIP-0012
+collaboration efficiency, and UIP-0013 fixed price at version `1`.
+`fee_split_policy_version = 0` retains the bootstrap window behavior, while
+`quote_policy_version = 0` and `aux_pool_policy_version = 0` explicitly disable
+UIP-0014 and UIP-0015. Unknown non-zero versions fail closed.
 
 Runtime CLI flags only provide companion-service access and the selected pass:
 
@@ -46,7 +46,8 @@ Each live runner performs the following operations:
    v1 active-version-set ID, and complete active-version-set golden.
 8. Independently recompute effective energy, level, difficulty factor, base
    difficulty, and real difficulty.
-9. Verify the static pre-UIP-0011 block reward and final coinbase balance.
+9. Recompute issued supply, K, fixed-price state, CoinBase emission, reward
+   credits, and final balances.
 
 The common validator is:
 
@@ -54,6 +55,10 @@ The common validator is:
 
 It is shared by all live runners so offsets, profile validation, formula
 thresholds, and rounding cannot drift between scenarios.
+
+Historical storage assertions run nodes with `--gcmode archive`; otherwise a
+fast local PoW run can prune early tries before the validator queries each
+block's system slots.
 
 ## Required Assertions
 
@@ -72,8 +77,12 @@ For every mined block the common validator checks:
 - `real_difficulty = ceil(base_difficulty * factor / 10000)`.
 - The header difficulty exactly equals the independently recomputed value.
 - No deterministic smoke block contains uncles.
-- Until reward versions activate, each block contributes the existing `2e18`
-  base reward and energy does not change the reward.
+- CoinBase emission uses the parent fixed price, issued supply, miner BTC
+  aggregate, and K derived from the prior 50,400-sample window.
+- `quote_policy_version = 0` writes no quote activity state and uses the nominal
+  profile factor / collaboration contribution.
+- `aux_pool_policy_version = 0` credits 100% of CoinBase emission to the profile
+  reward recipient.
 
 ## Live Runners
 
@@ -93,7 +102,7 @@ For every mined block the common validator checks:
 - Advances BTC state and increases the same pass raw energy.
 - Mines a second USDB-chain stage with the same pass id.
 - Confirms both stages independently satisfy the profile/difficulty formula.
-- Confirms reward remains unchanged while UIP-0011 is inactive.
+- Confirms reward and issued-supply transitions use each selector-bound profile.
 
 ### Historical Replay and Fresh Validator
 
@@ -131,6 +140,23 @@ For every mined block the common validator checks:
 - Starts an independent tagged validator from genesis and requires it to accept
   the complete activation-spanning chain at the same height and head hash.
 
+### Quote/Aux Three-Stage Activation
+
+`scripts/usdb/run_usdb_economic_activation_upgrade_e2e.sh`
+
+- Builds default, `usdb_economic_conformance_v2`, and
+  `usdb_economic_conformance_v3` geth binaries.
+- Adds test-only quote/aux checkpoints using reserved IDs `65534` and `65535`.
+- Requires the default binary to stop at fake v2 and the v2 binary to stop at
+  fake v3 while reusing the same datadir.
+- Uses fake quote v2 to model stale Leader inputs (`raw` difficulty, `CE=0`) and
+  fake quote v3 to model active Leader inputs (`effective` difficulty, nominal
+  CE).
+- Uses distinct 10%/20% test-only aux splits and sentinel recipients so reward
+  dispatch is observable without defining a production UIP-0015 policy.
+- Independently recomputes quote policy storage, price ranges, K, issued supply,
+  miner reward, both aux balances, and starts a fresh v3 validator from genesis.
+
 ### Indexer Outage and Selector Tampering
 
 `scripts/usdb/run_usdb_profile_failure_matrix_e2e.sh`
@@ -162,13 +188,17 @@ and fresh-validator sync across the test-only activation boundary. Offline
 running node; a failed `import --nocompaction` returns a nonzero status so the
 matrix cannot mistake a logged consensus error for success.
 
-Production still has only policy v1. The reserved policy `65535` is compiled only
-with `usdb_activation_conformance`; normal binaries reject it. This proves the
-activation machinery without defining or accidentally shipping a mock production v2.
+Production difficulty still has only policy v1. The reserved difficulty policy
+`65535` is compiled only with `usdb_activation_conformance`.
+Production quote/aux remain policy `0`; reserved `65534`/`65535` are compiled
+only with the economic conformance tags. Normal binaries reject every reserved
+policy. These tests prove activation machinery without defining or accidentally
+shipping mock production policies.
 
-## Latest Execution
+## Historical Execution
 
-On 2026-07-23 the current-source geth binary and BTC-side services completed:
+On 2026-07-23, before UIP-0011 through UIP-0013 activation, the then-current
+geth binary and BTC-side services completed:
 
 - `run_usdb_profile_e2e.sh`: 10 mined USDB blocks, with every profile matching
   the regtest registry/set golden and every difficulty/reward recomputation.
@@ -195,12 +225,29 @@ On 2026-07-23 the current-source geth binary and BTC-side services completed:
   `internal/usdb`, `consensus/ethash`, `miner`, `params`, `cmd/utils`,
   `cmd/geth`, and `scripts/usdb`.
 
+## Latest Economic Activation Execution
+
+On 2026-07-26 a clean regtest workspace completed the three-stage economic
+activation runner:
+
+- The default binary stopped before fake v2 block `3`.
+- The fake v2 binary replayed the same datadir and stopped before fake v3 block
+  `6`.
+- The fake v3 binary replayed both prior stages and mined through block `19`.
+- Per-block verification matched difficulty, quote policy slot, price range, K,
+  issued supply, miner credit, and aux credits.
+- Final issued supply was `12050238112406886121`; miner balance
+  `10084167546742082013`, fake-v2 aux balance `190274157602036399`, and fake-v3
+  aux balance `1775796408062767709` summed to the same value.
+- A fresh fake-v3 validator replayed from genesis and reached the identical
+  block-19 head.
+
 ## Deferred Policy Work
 
-- UIP-0011 defines reward recipient validation, CoinBase emission, fee split,
-  and issued-supply state transitions.
-- UIP-0014 defines quote activity and the candidate difficulty factor. Until it
-  activates, difficulty v1 uses the nominal UIP-0006 factor.
+- UIP-0014 future non-zero quote policy still needs canonical payload,
+  authorization, window parameters, and public activation.
+- UIP-0015 still needs proof encoding, historical BTC validation, pass binding,
+  recipient/verifier identity, and final distribution rules.
 - A production-version cross-activation scenario remains deferred until a real
-  second formula or policy is specified. The test-only tagged scenario remains a
-  permanent activation/restart conformance gate.
+  second policy is finalized. Test-only tagged scenarios remain permanent
+  activation/restart/replay conformance gates.

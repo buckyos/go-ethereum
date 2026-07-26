@@ -19,10 +19,14 @@ type usdbSlotWrite struct {
 	value common.Hash
 }
 
-type usdbRewardTransition struct {
+type usdbBalanceCredit struct {
 	recipient common.Address
-	emission  *big.Int
-	writes    []usdbSlotWrite
+	amount    *big.Int
+}
+
+type usdbRewardTransition struct {
+	credits []usdbBalanceCredit
+	writes  []usdbSlotWrite
 }
 
 func validateUSDBRewardPolicies(policy *params.USDBConsensusVersions) error {
@@ -76,7 +80,8 @@ func validateUSDBRewardPolicies(policy *params.USDBConsensusVersions) error {
 			policy.PricePolicyVersion,
 		)
 	}
-	if policy.AuxPoolPolicyVersion != 0 {
+	if policy.AuxPoolPolicyVersion != 0 &&
+		!usdb.SupportsActivationConformanceAuxPoolPolicy(policy.AuxPoolPolicyVersion) {
 		return fmt.Errorf(
 			"unsupported USDB auxiliary pool policy version %d",
 			policy.AuxPoolPolicyVersion,
@@ -123,10 +128,20 @@ func prepareUSDBRewardTransition(
 	if err != nil {
 		return nil, err
 	}
+	collaborationEnergy, quoteWrites, err := prepareQuotePolicyTransition(
+		config,
+		activation,
+		statedb,
+		header.Number.Uint64(),
+		profile,
+	)
+	if err != nil {
+		return nil, err
+	}
 	kBps, kWrites, err := prepareKTransition(
 		activation.Versions.CollaborationEfficiencyPolicyVersion,
 		statedb,
-		profile.CollabContribution,
+		collaborationEnergy,
 	)
 	if err != nil {
 		return nil, err
@@ -151,14 +166,22 @@ func prepareUSDBRewardTransition(
 	if err != nil {
 		return nil, fmt.Errorf("encode issued USDB state: %w", err)
 	}
-	writes := make([]usdbSlotWrite, 0, 1+len(priceWrites)+len(kWrites))
+	credits, err := prepareUSDBRewardCredits(
+		activation.Versions.AuxPoolPolicyVersion,
+		profile.RewardRecipient,
+		emission.CoinbaseEmissionAtoms,
+	)
+	if err != nil {
+		return nil, err
+	}
+	writes := make([]usdbSlotWrite, 0, 1+len(priceWrites)+len(quoteWrites)+len(kWrites))
 	writes = append(writes, issuedWrite)
 	writes = append(writes, priceWrites...)
+	writes = append(writes, quoteWrites...)
 	writes = append(writes, kWrites...)
 	return &usdbRewardTransition{
-		recipient: profile.RewardRecipient,
-		emission:  emission.CoinbaseEmissionAtoms,
-		writes:    writes,
+		credits: credits,
+		writes:  writes,
 	}, nil
 }
 
@@ -166,7 +189,112 @@ func applyUSDBRewardTransition(statedb *state.StateDB, transition *usdbRewardTra
 	for _, write := range transition.writes {
 		statedb.SetState(usdbstate.SystemStateAddress, write.slot, write.value)
 	}
-	statedb.AddBalance(transition.recipient, transition.emission)
+	for _, credit := range transition.credits {
+		statedb.AddBalance(credit.recipient, credit.amount)
+	}
+}
+
+func prepareQuotePolicyTransition(
+	config *params.ChainConfig,
+	activation *params.USDBConsensusActivation,
+	statedb *state.StateDB,
+	blockNumber uint64,
+	profile *usdb.ResolvedConsensusProfile,
+) (*big.Int, []usdbSlotWrite, error) {
+	if blockNumber == 0 {
+		return nil, nil, errors.New("USDB quote transition cannot execute at genesis")
+	}
+	parentActivation, err := config.USDBActivationAt(blockNumber - 1)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve parent USDB quote activation: %w", err)
+	}
+	if parentActivation == nil {
+		return nil, nil, errors.New("parent USDB state has no quote policy")
+	}
+	parentPolicy, err := usdbstate.ReadUint256(statedb, usdbstate.QuotePolicyVersionSlot)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read parent USDB quote policy: %w", err)
+	}
+	expectedParentPolicy := new(big.Int).SetUint64(uint64(parentActivation.Versions.QuotePolicyVersion))
+	if parentPolicy.Cmp(expectedParentPolicy) != 0 {
+		return nil, nil, fmt.Errorf(
+			"parent USDB quote policy mismatch: have %s want %s",
+			parentPolicy,
+			expectedParentPolicy,
+		)
+	}
+
+	currentEnergy := profile.CollabContribution
+	if activation.Versions.QuotePolicyVersion != 0 {
+		quote, handled, err := usdb.ResolveActivationConformanceQuotePolicy(
+			activation.Versions.QuotePolicyVersion,
+			profile,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !handled {
+			return nil, nil, fmt.Errorf(
+				"unsupported usdb quote policy version %d",
+				activation.Versions.QuotePolicyVersion,
+			)
+		}
+		currentEnergy = quote.CollaborationEnergy
+	}
+	if currentEnergy == nil {
+		return nil, nil, errors.New("USDB collaboration energy is nil")
+	}
+	policyWrite, err := encodeUSDBSlotWrite(
+		usdbstate.QuotePolicyVersionSlot,
+		new(big.Int).SetUint64(uint64(activation.Versions.QuotePolicyVersion)),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode USDB quote policy state: %w", err)
+	}
+	return new(big.Int).Set(currentEnergy), []usdbSlotWrite{policyWrite}, nil
+}
+
+func prepareUSDBRewardCredits(
+	policyVersion uint16,
+	minerRecipient common.Address,
+	emission *big.Int,
+) ([]usdbBalanceCredit, error) {
+	if minerRecipient == (common.Address{}) {
+		return nil, errors.New("USDB miner reward recipient is zero")
+	}
+	if emission == nil || emission.Sign() < 0 {
+		return nil, errors.New("USDB CoinBase emission is nil or negative")
+	}
+	if policyVersion == 0 {
+		return []usdbBalanceCredit{{
+			recipient: minerRecipient,
+			amount:    new(big.Int).Set(emission),
+		}}, nil
+	}
+	split, handled, err := usdb.ResolveActivationConformanceAuxPoolPolicy(policyVersion, emission)
+	if err != nil {
+		return nil, err
+	}
+	if !handled {
+		return nil, fmt.Errorf("unsupported USDB auxiliary pool policy version %d", policyVersion)
+	}
+	if split == nil ||
+		split.MinerReward == nil ||
+		split.AuxReward == nil ||
+		split.MinerReward.Sign() < 0 ||
+		split.AuxReward.Sign() < 0 ||
+		split.AuxRecipient == (common.Address{}) ||
+		split.AuxRecipient == minerRecipient {
+		return nil, errors.New("invalid activation conformance auxiliary reward split")
+	}
+	total := new(big.Int).Add(split.MinerReward, split.AuxReward)
+	if total.Cmp(emission) != 0 {
+		return nil, errors.New("activation conformance auxiliary reward split changes emission")
+	}
+	return []usdbBalanceCredit{
+		{recipient: minerRecipient, amount: new(big.Int).Set(split.MinerReward)},
+		{recipient: split.AuxRecipient, amount: new(big.Int).Set(split.AuxReward)},
+	}, nil
 }
 
 func prepareFixedPriceTransition(

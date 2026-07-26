@@ -729,17 +729,28 @@ func applyUSDBDifficultyPolicy(policy *params.USDBConsensusVersions, baseDifficu
 	if profile == nil {
 		return nil, errors.New("missing resolved usdb profile")
 	}
+	difficultyFactorBps := profile.DifficultyFactorBps
 	if policy.QuotePolicyVersion != 0 {
-		return nil, fmt.Errorf("unsupported usdb quote policy version %d", policy.QuotePolicyVersion)
+		quote, handled, err := usdb.ResolveActivationConformanceQuotePolicy(
+			policy.QuotePolicyVersion,
+			profile,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if !handled {
+			return nil, fmt.Errorf("unsupported usdb quote policy version %d", policy.QuotePolicyVersion)
+		}
+		difficultyFactorBps = quote.DifficultyFactorBps
 	}
 	switch policy.DifficultyPolicyVersion {
 	case usdb.DifficultyPolicyVersionV1:
-		return usdb.RealDifficultyV1(baseDifficulty, profile.DifficultyFactorBps)
+		return usdb.RealDifficultyV1(baseDifficulty, difficultyFactorBps)
 	default:
 		if difficulty, handled, err := usdb.ApplyActivationConformanceDifficultyPolicy(
 			policy.DifficultyPolicyVersion,
 			baseDifficulty,
-			profile.DifficultyFactorBps,
+			difficultyFactorBps,
 		); handled {
 			return difficulty, err
 		}

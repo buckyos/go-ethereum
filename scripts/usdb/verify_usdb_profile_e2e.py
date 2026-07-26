@@ -36,6 +36,16 @@ K_BPS_MIN = 8_001
 K_BPS_MAX = 20_000
 K_WINDOW_BLOCKS = 50_400
 FIXED_PRICE_ATOMS_PER_BTC = 100_000_000_000_000_000_000_000
+ECONOMIC_CONFORMANCE_V2 = 65_534
+ECONOMIC_CONFORMANCE_V3 = 65_535
+ECONOMIC_CONFORMANCE_AUX_BPS_V2 = 1_000
+ECONOMIC_CONFORMANCE_AUX_BPS_V3 = 2_000
+ECONOMIC_CONFORMANCE_AUX_RECIPIENT_V2 = (
+    "0x000000000000000000000000000000000000fa02"
+)
+ECONOMIC_CONFORMANCE_AUX_RECIPIENT_V3 = (
+    "0x000000000000000000000000000000000000fa03"
+)
 UINT128_MAX = 2**128 - 1
 UINT64_MAX = 2**64 - 1
 USDB_SYSTEM_STATE_ADDRESS = "0x0000000000000000000000000000000000001000"
@@ -55,6 +65,7 @@ SYSTEM_STATE_SLOTS = {
     "k_last_ce": "0x1d2465ef2bfb872650e27eeb6a1327cb569d58e4fd2c4867eb4b8f38b922905c",
     "k_last_ae": "0xb4d89df049af3068c7073e80bf4918d5606bffb9df517e96c1f996f942c38f58",
     "k_last_bps": "0x53264b8f3aab69de54c5a4ecadabdbff09c07064034e8fcfdb79056a55dd9954",
+    "quote_policy": "0x06ed1ff69c0a83234a648936403718a01fd0c0e6caabe4eea61d7735f63db832",
 }
 LEVEL_THRESHOLDS = (
     0,
@@ -417,6 +428,8 @@ def main():
         default=BTC_V1_ACTIVE_VERSION_SET_ID,
     )
     parser.add_argument("--activation-conformance-block", type=int)
+    parser.add_argument("--economic-conformance-v2-block", type=int)
+    parser.add_argument("--economic-conformance-v3-block", type=int)
     parser.add_argument(
         "--post-activation-registry-id",
         default=BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID,
@@ -426,6 +439,28 @@ def main():
     parser.add_argument("--initial-raw-energy", type=int)
     parser.add_argument("--boosted-raw-energy", type=int)
     args = parser.parse_args()
+    economic_conformance = (
+        args.economic_conformance_v2_block is not None
+        or args.economic_conformance_v3_block is not None
+    )
+    if economic_conformance:
+        if (
+            args.economic_conformance_v2_block is None
+            or args.economic_conformance_v3_block is None
+        ):
+            raise SystemExit(
+                "economic conformance v2 and v3 blocks must be supplied together"
+            )
+        if (
+            args.economic_conformance_v2_block < 2
+            or args.economic_conformance_v3_block
+            <= args.economic_conformance_v2_block
+        ):
+            raise SystemExit("invalid economic conformance activation order")
+        if args.activation_conformance_block is not None:
+            raise SystemExit(
+                "difficulty and economic activation conformance cannot be combined"
+            )
 
     with open(args.blocks, "r", encoding="utf-8") as stream:
         blocks = json.load(stream)
@@ -462,10 +497,38 @@ def main():
         SYSTEM_STATE_SLOTS["k_cursor"],
         0,
     )
+    expected_aux_balances = {
+        ECONOMIC_CONFORMANCE_AUX_RECIPIENT_V2: int(
+            rpc_call(
+                args.usdb_chain_rpc_url,
+                "eth_getBalance",
+                [ECONOMIC_CONFORMANCE_AUX_RECIPIENT_V2, "0x0"],
+            ),
+            16,
+        ),
+        ECONOMIC_CONFORMANCE_AUX_RECIPIENT_V3: int(
+            rpc_call(
+                args.usdb_chain_rpc_url,
+                "eth_getBalance",
+                [ECONOMIC_CONFORMANCE_AUX_RECIPIENT_V3, "0x0"],
+            ),
+            16,
+        ),
+    }
     require_equal(
         "system schema",
         storage_uint(args.usdb_chain_rpc_url, SYSTEM_STATE_SLOTS["schema"], 0),
         1,
+        0,
+    )
+    require_equal(
+        "quote policy",
+        storage_uint(
+            args.usdb_chain_rpc_url,
+            SYSTEM_STATE_SLOTS["quote_policy"],
+            0,
+        ),
+        0,
         0,
     )
     for label, slot, expected in (
@@ -550,6 +613,27 @@ def main():
         effective = profile["effective"]
         level = profile["level"]
         factor = profile["factor"]
+        quote_policy_version = 0
+        aux_pool_policy_version = 0
+        candidate_factor = factor
+        collaboration_energy = contribution
+        aux_bps = 0
+        aux_recipient = None
+        if economic_conformance:
+            if number >= args.economic_conformance_v3_block:
+                quote_policy_version = ECONOMIC_CONFORMANCE_V3
+                aux_pool_policy_version = ECONOMIC_CONFORMANCE_V3
+                candidate_factor = difficulty_factor_bps(level_for_energy(effective))
+                collaboration_energy = contribution
+                aux_bps = ECONOMIC_CONFORMANCE_AUX_BPS_V3
+                aux_recipient = ECONOMIC_CONFORMANCE_AUX_RECIPIENT_V3
+            elif number >= args.economic_conformance_v2_block:
+                quote_policy_version = ECONOMIC_CONFORMANCE_V2
+                aux_pool_policy_version = ECONOMIC_CONFORMANCE_V2
+                candidate_factor = difficulty_factor_bps(level_for_energy(raw))
+                collaboration_energy = 0
+                aux_bps = ECONOMIC_CONFORMANCE_AUX_BPS_V2
+                aux_recipient = ECONOMIC_CONFORMANCE_AUX_RECIPIENT_V2
         all_raw.append(raw)
         block_coinbase = (block.get("miner") or block.get("author") or "").lower()
         require_equal("block coinbase", block_coinbase, args.coinbase.lower(), number)
@@ -562,7 +646,7 @@ def main():
         expected_difficulty = expected_policy_difficulty(
             parent,
             block,
-            factor,
+            candidate_factor,
             expected_policy_version,
         )
         actual_difficulty = int(block["difficulty"], 16)
@@ -641,7 +725,7 @@ def main():
             else 0
         )
         k_bps = (
-            calculate_k_bps(contribution, average_energy)
+            calculate_k_bps(collaboration_energy, average_energy)
             if expected_k_count == K_WINDOW_BLOCKS
             else K_BPS_BASE
         )
@@ -671,8 +755,12 @@ def main():
             k_bps,
         )
         expected_issued += emission
-        expected_balance += emission
-        expected_k_sum = expected_k_sum - old_sample + contribution
+        aux_reward = emission * aux_bps // BPS_DENOMINATOR
+        miner_reward = emission - aux_reward
+        expected_balance += miner_reward
+        if aux_recipient is not None:
+            expected_aux_balances[aux_recipient] += aux_reward
+        expected_k_sum = expected_k_sum - old_sample + collaboration_energy
         expected_k_count = min(expected_k_count + 1, K_WINDOW_BLOCKS)
         expected_k_cursor = (expected_k_cursor + 1) % K_WINDOW_BLOCKS
 
@@ -689,20 +777,21 @@ def main():
         require_equal(
             "K ring sample",
             storage_uint(args.usdb_chain_rpc_url, ring_slot, number),
-            contribution,
+            collaboration_energy,
             number,
         )
         for label, slot, expected in (
             ("K sum", "k_sum", expected_k_sum),
             ("K count", "k_count", expected_k_count),
             ("K cursor", "k_cursor", expected_k_cursor),
-            ("K last CE", "k_last_ce", contribution),
+            ("K last CE", "k_last_ce", collaboration_energy),
             ("K last AE", "k_last_ae", average_energy),
             ("K last bps", "k_last_bps", k_bps),
             ("price", "price", FIXED_PRICE_ATOMS_PER_BTC),
             ("real price", "real_price", FIXED_PRICE_ATOMS_PER_BTC),
             ("price policy", "price_policy", 1),
             ("price source", "price_source", 1),
+            ("quote policy", "quote_policy", quote_policy_version),
         ):
             require_equal(
                 label,
@@ -714,12 +803,17 @@ def main():
                 expected,
                 number,
             )
-        active_price_start = (
-            args.activation_conformance_block
-            if args.activation_conformance_block is not None
+        active_price_start = 0
+        if (
+            args.activation_conformance_block is not None
             and number >= args.activation_conformance_block
-            else 0
-        )
+        ):
+            active_price_start = args.activation_conformance_block
+        elif economic_conformance:
+            if number >= args.economic_conformance_v3_block:
+                active_price_start = args.economic_conformance_v3_block
+            elif number >= args.economic_conformance_v2_block:
+                active_price_start = args.economic_conformance_v2_block
         expected_price_range = fixed_price_range_id(
             args.usdb_chain_rpc_url,
             chain_id,
@@ -748,7 +842,10 @@ def main():
                     "effective_energy": effective,
                     "level": level,
                     "difficulty_factor_bps": factor,
+                    "candidate_difficulty_factor_bps": candidate_factor,
                     "difficulty_policy_version": expected_policy_version,
+                    "quote_policy_version": quote_policy_version,
+                    "aux_pool_policy_version": aux_pool_policy_version,
                     "activation_registry_id": expected_registry_id,
                     "difficulty": actual_difficulty,
                     "reward_recipient": profile["reward_recipient"],
@@ -758,6 +855,9 @@ def main():
                     ],
                     "k_bps": k_bps,
                     "reward": emission,
+                    "miner_reward": miner_reward,
+                    "aux_reward": aux_reward,
+                    "aux_recipient": aux_recipient,
                     "issued_usdb_atoms": expected_issued,
                 },
                 sort_keys=True,
@@ -769,6 +869,21 @@ def main():
         raise SystemExit(
             f"unexpected coinbase balance: have {actual_balance} want {expected_balance}"
         )
+    if economic_conformance:
+        for recipient, expected in expected_aux_balances.items():
+            actual = int(
+                rpc_call(
+                    args.usdb_chain_rpc_url,
+                    "eth_getBalance",
+                    [recipient, "latest"],
+                ),
+                16,
+            )
+            if actual != expected:
+                raise SystemExit(
+                    f"unexpected aux balance for {recipient}: "
+                    f"have {actual} want {expected}"
+                )
     if args.stage1_end is not None and (not stage1_raw or not stage2_raw):
         raise SystemExit("missing stage-1 or stage-2 profile samples")
     if args.initial_raw_energy is not None and args.boosted_raw_energy is not None:
@@ -801,6 +916,7 @@ def main():
                 "blocks": len(blocks),
                 "expected_balance": expected_balance,
                 "actual_balance": actual_balance,
+                "aux_balances": expected_aux_balances,
                 "issued_usdb_atoms": expected_issued,
                 "k_window_sum": expected_k_sum,
                 "k_window_count": expected_k_count,
