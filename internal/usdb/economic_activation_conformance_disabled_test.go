@@ -5,6 +5,7 @@ package usdb
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -18,8 +19,10 @@ func TestEconomicActivationConformancePoliciesAreDisabledByDefault(t *testing.T)
 		QuotePolicyVersionActivationConformanceV2,
 		QuotePolicyVersionActivationConformanceV3,
 	} {
-		if result, handled, err := ResolveActivationConformanceQuotePolicy(version, profile); err != nil || handled || result != nil {
-			t.Fatalf("default build claimed quote version %d: result=%v handled=%t err=%v", version, result, handled, err)
+		if result, err := ResolveQuotePolicy(version, QuotePolicyContext{Profile: profile}); err == nil ||
+			result != nil ||
+			!strings.Contains(err.Error(), "unsupported usdb quote policy version") {
+			t.Fatalf("default build claimed quote version %d: result=%v err=%v", version, result, err)
 		}
 		if result, handled, err := ResolveActivationConformanceAuxPoolPolicy(version, big.NewInt(100)); err != nil || handled || result != nil {
 			t.Fatalf("default build claimed aux version %d: result=%v handled=%t err=%v", version, result, handled, err)

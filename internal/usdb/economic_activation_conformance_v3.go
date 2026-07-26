@@ -5,9 +5,7 @@ package usdb
 
 import "math/big"
 
-// SupportsActivationConformanceQuotePolicy allows fake-v3 binaries to replay
-// v2 history and activate v3.
-func SupportsActivationConformanceQuotePolicy(version uint16) bool {
+func supportsActivationConformanceQuotePolicy(version uint16) bool {
 	return version == QuotePolicyVersionActivationConformanceV2 ||
 		version == QuotePolicyVersionActivationConformanceV3
 }
@@ -17,15 +15,6 @@ func SupportsActivationConformanceQuotePolicy(version uint16) bool {
 func SupportsActivationConformanceAuxPoolPolicy(version uint16) bool {
 	return version == AuxPoolPolicyVersionActivationConformanceV2 ||
 		version == AuxPoolPolicyVersionActivationConformanceV3
-}
-
-// ResolveActivationConformanceQuotePolicy dispatches fake v2 and v3.
-func ResolveActivationConformanceQuotePolicy(version uint16, profile *ResolvedConsensusProfile) (*ActivationConformanceQuoteResult, bool, error) {
-	if !SupportsActivationConformanceQuotePolicy(version) {
-		return nil, false, nil
-	}
-	result, err := resolveActivationConformanceQuotePolicy(version, profile)
-	return result, true, err
 }
 
 // ResolveActivationConformanceAuxPoolPolicy dispatches fake v2 and v3.

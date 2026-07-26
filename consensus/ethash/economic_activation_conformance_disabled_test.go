@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -23,7 +24,11 @@ func TestDefaultBuildRejectsEconomicActivationConformancePolicies(t *testing.T) 
 		DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
 		QuotePolicyVersion:      usdb.QuotePolicyVersionActivationConformanceV2,
 	}
-	if _, err := applyUSDBDifficultyPolicy(quotePolicy, big.NewInt(100), profile); err == nil ||
+	if _, err := resolveUSDBQuotePolicy(
+		quotePolicy,
+		&types.Header{Number: big.NewInt(1)},
+		profile,
+	); err == nil ||
 		!strings.Contains(err.Error(), "unsupported usdb quote policy version 65534") {
 		t.Fatalf("default build accepted fake quote policy: %v", err)
 	}

@@ -5,6 +5,7 @@ package usdb
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -15,23 +16,27 @@ func TestEconomicActivationConformanceV2Only(t *testing.T) {
 		RawEnergy:          big.NewInt(1_000_000),
 		CollabContribution: big.NewInt(20_000_000),
 		EffectiveEnergy:    big.NewInt(21_000_000),
+		RewardRecipient:    common.HexToAddress("0x1001"),
 	}
-	result, handled, err := ResolveActivationConformanceQuotePolicy(
+	result, err := ResolveQuotePolicy(
 		QuotePolicyVersionActivationConformanceV2,
-		profile,
+		QuotePolicyContext{Profile: profile},
 	)
-	if err != nil || !handled {
-		t.Fatalf("fake v2 quote was not handled: result=%v handled=%t err=%v", result, handled, err)
+	if err != nil {
+		t.Fatalf("fake v2 quote was not handled: result=%v err=%v", result, err)
 	}
 	wantFactor := DifficultyFactorBpsForLevel(LevelForEffectiveEnergy(profile.RawEnergy))
-	if result.DifficultyFactorBps != wantFactor || result.CollaborationEnergy.Sign() != 0 {
+	if result.DifficultyFactorBps != wantFactor ||
+		result.CollaborationEnergy.Sign() != 0 ||
+		result.CurrentBlockQuoteAccepted {
 		t.Fatalf("unexpected fake v2 quote result: %+v", result)
 	}
-	if result, handled, err := ResolveActivationConformanceQuotePolicy(
+	if result, err := ResolveQuotePolicy(
 		QuotePolicyVersionActivationConformanceV3,
-		profile,
-	); err != nil || handled || result != nil {
-		t.Fatalf("v2 build claimed fake v3 quote: result=%v handled=%t err=%v", result, handled, err)
+		QuotePolicyContext{Profile: profile},
+	); err == nil || result != nil ||
+		!strings.Contains(err.Error(), "unsupported usdb quote policy version 65535") {
+		t.Fatalf("v2 build claimed fake v3 quote: result=%v err=%v", result, err)
 	}
 
 	split, handled, err := ResolveActivationConformanceAuxPoolPolicy(

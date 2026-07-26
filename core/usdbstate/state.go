@@ -81,9 +81,11 @@ var (
 
 	// QuotePolicyVersionSlot records the active UIP-0014 quote policy.
 	QuotePolicyVersionSlot = slotForDomain(quotePolicyVersionDomain)
-	// LeaderQuoteWindowBlocksSlot records the active quote window length.
+	// LeaderQuoteWindowBlocksSlot is reserved for a future formal UIP-0014
+	// quote window. Policy zero and activation conformance do not write it.
 	LeaderQuoteWindowBlocksSlot = slotForDomain(quoteWindowBlocksDomain)
-	// LeaderLastValidQuoteBlockMapBase is the mapping base for per-pass quote state.
+	// LeaderLastValidQuoteBlockMapBase is reserved for future per-pass quote
+	// state. Its slot identity does not activate or freeze mapping semantics.
 	LeaderLastValidQuoteBlockMapBase = slotForDomain(leaderLastQuoteMapBaseDomain)
 
 	// DividendBootstrapFinalizedSlot is the SourceDAO Dividend unstructured

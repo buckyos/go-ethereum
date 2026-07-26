@@ -149,9 +149,11 @@ For every mined block the common validator checks:
 - Adds test-only quote/aux checkpoints using reserved IDs `65534` and `65535`.
 - Requires the default binary to stop at fake v2 and the v2 binary to stop at
   fake v3 while reusing the same datadir.
-- Uses fake quote v2 to model stale Leader inputs (`raw` difficulty, `CE=0`) and
-  fake quote v3 to model active Leader inputs (`effective` difficulty, nominal
-  CE).
+- Uses fake quote v2 to model no accepted quote (`raw` difficulty, `CE=0`).
+- Uses fake quote v3 to model a current-block implicit FixedPriceHeartbeat:
+  active FixedPrice v1 plus a selector-bound matching reward recipient produces
+  `effective` difficulty and nominal CE before the block is sealed. It writes no
+  per-Leader activity state and is not a production quote policy.
 - Uses distinct 10%/20% test-only aux splits and sentinel recipients so reward
   dispatch is observable without defining a production UIP-0015 policy.
 - Independently recomputes quote policy storage, price ranges, K, issued supply,
@@ -190,10 +192,11 @@ matrix cannot mistake a logged consensus error for success.
 
 Production difficulty still has only policy v1. The reserved difficulty policy
 `65535` is compiled only with `usdb_activation_conformance`.
-Production quote/aux remain policy `0`; reserved `65534`/`65535` are compiled
-only with the economic conformance tags. Normal binaries reject every reserved
-policy. These tests prove activation machinery without defining or accidentally
-shipping mock production policies.
+Production quote/aux remain policy `0`; formal quote policy `1` is reserved but
+unimplemented. Reserved `65534`/`65535` are compiled only with the economic
+conformance tags. Normal binaries reject formal v1 and every reserved policy.
+These tests prove the shared quote context/decision and activation machinery
+without defining or accidentally shipping mock production policies.
 
 ## Historical Execution
 
@@ -227,25 +230,31 @@ geth binary and BTC-side services completed:
 
 ## Latest Economic Activation Execution
 
-On 2026-07-26 a clean regtest workspace completed the three-stage economic
-activation runner:
+On 2026-07-26, after the shared quote decision and current-block implicit
+heartbeat refactor, a clean regtest workspace completed the three-stage
+economic activation runner:
 
 - The default binary stopped before fake v2 block `3`.
 - The fake v2 binary replayed the same datadir and stopped before fake v3 block
   `6`.
-- The fake v3 binary replayed both prior stages and mined through block `19`.
+- The fake v3 binary replayed both prior stages and mined through block `15`.
 - Per-block verification matched difficulty, quote policy slot, price range, K,
   issued supply, miner credit, and aux credits.
-- Final issued supply was `12050238112406886121`; miner balance
-  `10084167546742082013`, fake-v2 aux balance `190274157602036399`, and fake-v3
-  aux balance `1775796408062767709` summed to the same value.
+- Final issued supply was `9513466543683129189`; miner balance
+  `8054750291763076466`, fake-v2 aux balance `190274157602036399`, and fake-v3
+  aux balance `1268442094318016324` summed to the same value.
 - A fresh fake-v3 validator replayed from genesis and reached the identical
-  block-19 head.
+  block-15 head.
+- The live profile had zero collaboration contribution, so non-zero
+  raw/effective differentiation is cross-checked by the tagged resolver and
+  miner/validator engine tests using `raw=1,000,000`, `collab=20,000,000`.
 
 ## Deferred Policy Work
 
-- UIP-0014 future non-zero quote policy still needs canonical payload,
-  authorization, window parameters, and public activation.
+- UIP-0014 formal quote v1 still needs a quote source with real per-Leader
+  economic meaning, canonical header-visible evidence, authorization, state
+  bounds, bootstrap/recovery rules, and public activation. Public activation
+  does not need to pass through the test-only FixedPriceHeartbeat.
 - UIP-0015 still needs proof encoding, historical BTC validation, pass binding,
   recipient/verifier identity, and final distribution rules.
 - A production-version cross-activation scenario remains deferred until a real

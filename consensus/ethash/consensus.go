@@ -321,7 +321,11 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 		if err != nil {
 			return fmt.Errorf("failed to resolve usdb difficulty profile: %w", err)
 		}
-		expected, err = applyUSDBDifficultyPolicy(policy, expected, profile)
+		quoteDecision, err := resolveUSDBQuotePolicy(policy, header, profile)
+		if err != nil {
+			return fmt.Errorf("failed to resolve usdb quote policy: %w", err)
+		}
+		expected, err = applyUSDBDifficultyPolicy(policy, expected, quoteDecision)
 		if err != nil {
 			return fmt.Errorf("failed to apply usdb difficulty policy: %w", err)
 		}
@@ -705,7 +709,11 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 	if err != nil {
 		return fmt.Errorf("failed to resolve usdb difficulty profile: %w", err)
 	}
-	header.Difficulty, err = applyUSDBDifficultyPolicy(policy, baseDifficulty, profile)
+	quoteDecision, err := resolveUSDBQuotePolicy(policy, header, profile)
+	if err != nil {
+		return fmt.Errorf("failed to resolve usdb quote policy: %w", err)
+	}
+	header.Difficulty, err = applyUSDBDifficultyPolicy(policy, baseDifficulty, quoteDecision)
 	if err != nil {
 		return fmt.Errorf("failed to apply usdb difficulty policy: %w", err)
 	}
@@ -722,35 +730,52 @@ func (ethash *Ethash) resolveUSDBProfile(btcActivationRegistryID string, headerE
 	return ethash.usdbProfileResolver.ResolveProfile(context.Background(), btcActivationRegistryID, headerExtra)
 }
 
-func applyUSDBDifficultyPolicy(policy *params.USDBConsensusVersions, baseDifficulty *big.Int, profile *usdb.ResolvedConsensusProfile) (*big.Int, error) {
+func resolveUSDBQuotePolicy(
+	policy *params.USDBConsensusVersions,
+	header *types.Header,
+	profile *usdb.ResolvedConsensusProfile,
+) (*usdb.QuotePolicyDecision, error) {
 	if policy == nil {
-		return nil, errors.New("missing usdb difficulty policy")
+		return nil, errors.New("missing usdb quote policy")
+	}
+	if header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return nil, consensus.ErrInvalidNumber
 	}
 	if profile == nil {
 		return nil, errors.New("missing resolved usdb profile")
 	}
-	difficultyFactorBps := profile.DifficultyFactorBps
-	if policy.QuotePolicyVersion != 0 {
-		quote, handled, err := usdb.ResolveActivationConformanceQuotePolicy(
-			policy.QuotePolicyVersion,
-			profile,
-		)
-		if err != nil {
-			return nil, err
-		}
-		if !handled {
-			return nil, fmt.Errorf("unsupported usdb quote policy version %d", policy.QuotePolicyVersion)
-		}
-		difficultyFactorBps = quote.DifficultyFactorBps
+	return usdb.ResolveQuotePolicy(policy.QuotePolicyVersion, usdb.QuotePolicyContext{
+		Profile: profile,
+		Block: usdb.QuoteBlockContext{
+			Number:             header.Number.Uint64(),
+			RewardRecipient:    header.Coinbase,
+			PricePolicyVersion: policy.PricePolicyVersion,
+		},
+	})
+}
+
+func applyUSDBDifficultyPolicy(
+	policy *params.USDBConsensusVersions,
+	baseDifficulty *big.Int,
+	quoteDecision *usdb.QuotePolicyDecision,
+) (*big.Int, error) {
+	if policy == nil {
+		return nil, errors.New("missing usdb difficulty policy")
+	}
+	if quoteDecision == nil {
+		return nil, errors.New("missing usdb quote decision")
+	}
+	if quoteDecision.PolicyVersion != policy.QuotePolicyVersion {
+		return nil, errors.New("usdb quote decision policy mismatch")
 	}
 	switch policy.DifficultyPolicyVersion {
 	case usdb.DifficultyPolicyVersionV1:
-		return usdb.RealDifficultyV1(baseDifficulty, difficultyFactorBps)
+		return usdb.RealDifficultyV1(baseDifficulty, quoteDecision.DifficultyFactorBps)
 	default:
 		if difficulty, handled, err := usdb.ApplyActivationConformanceDifficultyPolicy(
 			policy.DifficultyPolicyVersion,
 			baseDifficulty,
-			difficultyFactorBps,
+			quoteDecision.DifficultyFactorBps,
 		); handled {
 			return difficulty, err
 		}

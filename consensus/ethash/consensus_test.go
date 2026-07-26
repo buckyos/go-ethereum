@@ -421,7 +421,7 @@ func TestVerifyHeaderValidatesUsdbProfileSelectorBeforeResolution(t *testing.T) 
 			Extra:      append([]byte(nil), extra...),
 		}
 	}
-	resolver := &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{DifficultyFactorBps: usdb.BasisPointDenominator}}
+	resolver := &stubProfileResolver{resolved: newTestUSDBDifficultyProfile(0)}
 	engine := &Ethash{usdbProfileResolver: resolver}
 	if err := engine.verifyHeader(chain, newHeader(validExtra), parent, false, false, 2_000); err != nil {
 		t.Fatalf("valid selector header rejected: %v", err)
@@ -479,7 +479,7 @@ func TestVerifyHeaderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 		GasLimit:   parent.GasLimit,
 		Extra:      newTestPayloadBytes(t),
 	}
-	resolver := &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{DifficultyFactorBps: usdb.BasisPointDenominator}}
+	resolver := &stubProfileResolver{resolved: newTestUSDBDifficultyProfile(0)}
 	engine := &Ethash{usdbProfileResolver: resolver}
 	err := engine.verifyHeader(&stubChainHeaderReader{config: config}, header, parent, false, false, 2_000)
 	if !errors.Is(err, usdb.ErrDifficultyPolicyVersionMismatch) {
@@ -499,7 +499,7 @@ func TestPrepareAndVerifyHeaderApplySameUsdbDifficultyProfile(t *testing.T) {
 		GasLimit:   30_000_000,
 	}
 	chain := &stubChainHeaderReader{config: config, header: parent}
-	resolver := &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{DifficultyFactorBps: 9_900}}
+	resolver := &stubProfileResolver{resolved: newTestUSDBDifficultyProfile(1_000_000)}
 	engine := &Ethash{
 		config:              Config{Log: log.Root()},
 		usdbProfileResolver: resolver,
@@ -570,14 +570,25 @@ func TestPrepareAndVerifyHeaderFailWhenProfileServiceIsUnavailable(t *testing.T)
 }
 
 func TestApplyUSDBDifficultyPolicyRejectsUnimplementedVersions(t *testing.T) {
-	profile := &usdb.ResolvedConsensusProfile{DifficultyFactorBps: usdb.BasisPointDenominator}
-	for _, policy := range []*params.USDBConsensusVersions{
-		{DifficultyPolicyVersion: 2},
-		{DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1, QuotePolicyVersion: 1},
-	} {
-		if _, err := applyUSDBDifficultyPolicy(policy, big.NewInt(100), profile); err == nil {
-			t.Fatalf("unimplemented policy unexpectedly accepted: %+v", policy)
-		}
+	difficultyPolicy := &params.USDBConsensusVersions{DifficultyPolicyVersion: 2}
+	if _, err := applyUSDBDifficultyPolicy(
+		difficultyPolicy,
+		big.NewInt(100),
+		newTestUSDBQuoteDecision(usdb.QuotePolicyVersionDisabled, usdb.BasisPointDenominator),
+	); err == nil {
+		t.Fatalf("unimplemented difficulty policy unexpectedly accepted: %+v", difficultyPolicy)
+	}
+
+	quotePolicy := &params.USDBConsensusVersions{
+		DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+		QuotePolicyVersion:      usdb.QuotePolicyVersionV1,
+	}
+	if _, err := resolveUSDBQuotePolicy(
+		quotePolicy,
+		&types.Header{Number: big.NewInt(1)},
+		newTestUSDBDifficultyProfile(0),
+	); err == nil {
+		t.Fatalf("unimplemented quote policy unexpectedly accepted: %+v", quotePolicy)
 	}
 }
 
@@ -649,7 +660,9 @@ func TestFinalizeAndAssembleAppliesUSDBRewardV1(t *testing.T) {
 	profile := &usdb.ResolvedConsensusProfile{
 		RewardRecipient:    coinbase,
 		TotalMinerBTCSats:  big.NewInt(100_000_000),
+		RawEnergy:          new(big.Int),
 		CollabContribution: big.NewInt(100),
+		EffectiveEnergy:    big.NewInt(100),
 	}
 	engine := &Ethash{
 		config:              Config{Log: log.Root()},
@@ -723,7 +736,9 @@ func TestUSDBRewardStateRevertsWithParentRoot(t *testing.T) {
 		usdbProfileResolver: &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{
 			RewardRecipient:    coinbase,
 			TotalMinerBTCSats:  big.NewInt(100_000_000),
+			RawEnergy:          new(big.Int),
 			CollabContribution: big.NewInt(250),
+			EffectiveEnergy:    big.NewInt(250),
 		}},
 	}
 	header := &types.Header{

@@ -43,3 +43,22 @@ func newActivationConformanceTestHeader(t *testing.T, parent *types.Header, numb
 		Extra:      newTestPayloadBytesForDifficultyVersion(t, difficultyPolicyVersion),
 	}
 }
+
+func newTestUSDBDifficultyProfile(energy int64) *usdb.ResolvedConsensusProfile {
+	value := big.NewInt(energy)
+	level := usdb.LevelForEffectiveEnergy(value)
+	return &usdb.ResolvedConsensusProfile{
+		RawEnergy:           new(big.Int).Set(value),
+		CollabContribution:  new(big.Int),
+		EffectiveEnergy:     new(big.Int).Set(value),
+		Level:               level,
+		DifficultyFactorBps: usdb.DifficultyFactorBpsForLevel(level),
+	}
+}
+
+func newTestUSDBQuoteDecision(version uint16, factor uint64) *usdb.QuotePolicyDecision {
+	return &usdb.QuotePolicyDecision{
+		PolicyVersion:       version,
+		DifficultyFactorBps: factor,
+	}
+}

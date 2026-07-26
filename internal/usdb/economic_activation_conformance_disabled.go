@@ -5,21 +5,13 @@ package usdb
 
 import "math/big"
 
-// SupportsActivationConformanceQuotePolicy always rejects reserved policies in
-// production builds.
-func SupportsActivationConformanceQuotePolicy(version uint16) bool {
-	return false
-}
-
 // SupportsActivationConformanceAuxPoolPolicy always rejects reserved policies
 // in production builds.
 func SupportsActivationConformanceAuxPoolPolicy(version uint16) bool {
 	return false
 }
 
-// ResolveActivationConformanceQuotePolicy leaves fake quote behavior absent
-// from production builds.
-func ResolveActivationConformanceQuotePolicy(version uint16, profile *ResolvedConsensusProfile) (*ActivationConformanceQuoteResult, bool, error) {
+func resolveActivationConformanceQuotePolicy(version uint16, context *QuotePolicyContext) (*QuotePolicyDecision, bool, error) {
 	return nil, false, nil
 }
 

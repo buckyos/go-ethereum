@@ -15,16 +15,16 @@ import (
 
 func TestApplyUSDBDifficultyPolicyDispatchesActivationConformanceVersion(t *testing.T) {
 	base := big.NewInt(131_072)
-	profile := &usdb.ResolvedConsensusProfile{DifficultyFactorBps: 9_500}
+	quoteDecision := newTestUSDBQuoteDecision(usdb.QuotePolicyVersionDisabled, 9_500)
 	got, err := applyUSDBDifficultyPolicy(
 		&params.USDBConsensusVersions{DifficultyPolicyVersion: usdb.DifficultyPolicyVersionActivationConformance},
 		base,
-		profile,
+		quoteDecision,
 	)
 	if err != nil {
 		t.Fatalf("test-only policy failed: %v", err)
 	}
-	v1, err := usdb.RealDifficultyV1(base, profile.DifficultyFactorBps)
+	v1, err := usdb.RealDifficultyV1(base, quoteDecision.DifficultyFactorBps)
 	if err != nil {
 		t.Fatalf("v1 policy failed: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestApplyUSDBDifficultyPolicyDispatchesActivationConformanceVersion(t *test
 func TestActivationConformanceUpgradeBoundaryRestartAndReorg(t *testing.T) {
 	const activationBlock = uint64(3)
 	config := newActivationConformanceTestChainConfig(activationBlock)
-	profile := &usdb.ResolvedConsensusProfile{DifficultyFactorBps: 9_500}
+	profile := newTestUSDBDifficultyProfile(7_154_210)
 	resolver := &stubProfileResolver{resolved: profile}
 	engine := &Ethash{config: Config{Log: log.Root()}, usdbProfileResolver: resolver}
 	genesis := &types.Header{

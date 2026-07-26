@@ -128,12 +128,16 @@ func prepareUSDBRewardTransition(
 	if err != nil {
 		return nil, err
 	}
+	quoteDecision, err := resolveUSDBQuotePolicy(&activation.Versions, header, profile)
+	if err != nil {
+		return nil, fmt.Errorf("resolve USDB quote policy: %w", err)
+	}
 	collaborationEnergy, quoteWrites, err := prepareQuotePolicyTransition(
 		config,
 		activation,
 		statedb,
 		header.Number.Uint64(),
-		profile,
+		quoteDecision,
 	)
 	if err != nil {
 		return nil, err
@@ -199,7 +203,7 @@ func prepareQuotePolicyTransition(
 	activation *params.USDBConsensusActivation,
 	statedb *state.StateDB,
 	blockNumber uint64,
-	profile *usdb.ResolvedConsensusProfile,
+	decision *usdb.QuotePolicyDecision,
 ) (*big.Int, []usdbSlotWrite, error) {
 	if blockNumber == 0 {
 		return nil, nil, errors.New("USDB quote transition cannot execute at genesis")
@@ -223,26 +227,10 @@ func prepareQuotePolicyTransition(
 			expectedParentPolicy,
 		)
 	}
-
-	currentEnergy := profile.CollabContribution
-	if activation.Versions.QuotePolicyVersion != 0 {
-		quote, handled, err := usdb.ResolveActivationConformanceQuotePolicy(
-			activation.Versions.QuotePolicyVersion,
-			profile,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		if !handled {
-			return nil, nil, fmt.Errorf(
-				"unsupported usdb quote policy version %d",
-				activation.Versions.QuotePolicyVersion,
-			)
-		}
-		currentEnergy = quote.CollaborationEnergy
-	}
-	if currentEnergy == nil {
-		return nil, nil, errors.New("USDB collaboration energy is nil")
+	if decision == nil ||
+		decision.PolicyVersion != activation.Versions.QuotePolicyVersion ||
+		decision.CollaborationEnergy == nil {
+		return nil, nil, errors.New("USDB quote decision does not match active policy")
 	}
 	policyWrite, err := encodeUSDBSlotWrite(
 		usdbstate.QuotePolicyVersionSlot,
@@ -251,7 +239,7 @@ func prepareQuotePolicyTransition(
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode USDB quote policy state: %w", err)
 	}
-	return new(big.Int).Set(currentEnergy), []usdbSlotWrite{policyWrite}, nil
+	return new(big.Int).Set(decision.CollaborationEnergy), []usdbSlotWrite{policyWrite}, nil
 }
 
 func prepareUSDBRewardCredits(

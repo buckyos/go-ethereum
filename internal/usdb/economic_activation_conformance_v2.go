@@ -5,23 +5,13 @@ package usdb
 
 import "math/big"
 
-// SupportsActivationConformanceQuotePolicy limits fake-v2 binaries to v2.
-func SupportsActivationConformanceQuotePolicy(version uint16) bool {
+func supportsActivationConformanceQuotePolicy(version uint16) bool {
 	return version == QuotePolicyVersionActivationConformanceV2
 }
 
 // SupportsActivationConformanceAuxPoolPolicy limits fake-v2 binaries to v2.
 func SupportsActivationConformanceAuxPoolPolicy(version uint16) bool {
 	return version == AuxPoolPolicyVersionActivationConformanceV2
-}
-
-// ResolveActivationConformanceQuotePolicy dispatches fake v2 only.
-func ResolveActivationConformanceQuotePolicy(version uint16, profile *ResolvedConsensusProfile) (*ActivationConformanceQuoteResult, bool, error) {
-	if !SupportsActivationConformanceQuotePolicy(version) {
-		return nil, false, nil
-	}
-	result, err := resolveActivationConformanceQuotePolicy(version, profile)
-	return result, true, err
 }
 
 // ResolveActivationConformanceAuxPoolPolicy dispatches fake v2 only.

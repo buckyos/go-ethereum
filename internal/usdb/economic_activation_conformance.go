@@ -7,9 +7,11 @@ import (
 )
 
 const (
-	// QuotePolicyVersionActivationConformanceV2 and V3 are reserved for
-	// build-tagged activation tests. They have no production policy meaning.
+	// QuotePolicyVersionActivationConformanceV2 models no accepted quote.
 	QuotePolicyVersionActivationConformanceV2 uint16 = 0xfffe
+	// QuotePolicyVersionActivationConformanceV3 models a current-block implicit
+	// FixedPriceHeartbeat. Both IDs are build-tagged and have no production
+	// policy meaning.
 	QuotePolicyVersionActivationConformanceV3 uint16 = 0xffff
 
 	// AuxPoolPolicyVersionActivationConformanceV2 and V3 are reserved for
@@ -27,13 +29,6 @@ const (
 	ActivationConformanceAuxPoolRecipientV2Hex = "0x000000000000000000000000000000000000fa02"
 	ActivationConformanceAuxPoolRecipientV3Hex = "0x000000000000000000000000000000000000fa03"
 )
-
-// ActivationConformanceQuoteResult contains the two consensus inputs affected
-// by the test-only quote policy.
-type ActivationConformanceQuoteResult struct {
-	DifficultyFactorBps uint64
-	CollaborationEnergy *big.Int
-}
 
 // ActivationConformanceAuxReward contains a deterministic test-only split.
 type ActivationConformanceAuxReward struct {

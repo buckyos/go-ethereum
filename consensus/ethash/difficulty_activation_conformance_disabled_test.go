@@ -15,18 +15,18 @@ import (
 )
 
 func TestApplyUSDBDifficultyPolicyRejectsActivationConformanceVersionByDefault(t *testing.T) {
-	profile := &usdb.ResolvedConsensusProfile{DifficultyFactorBps: usdb.BasisPointDenominator}
 	policy := &params.USDBConsensusVersions{
 		DifficultyPolicyVersion: usdb.DifficultyPolicyVersionActivationConformance,
 	}
-	if _, err := applyUSDBDifficultyPolicy(policy, big.NewInt(100), profile); err == nil {
+	decision := newTestUSDBQuoteDecision(usdb.QuotePolicyVersionDisabled, usdb.BasisPointDenominator)
+	if _, err := applyUSDBDifficultyPolicy(policy, big.NewInt(100), decision); err == nil {
 		t.Fatal("test-only activation policy unexpectedly accepted by default build")
 	}
 }
 
 func TestDefaultBinaryStopsAtActivationConformanceBoundary(t *testing.T) {
 	config := newActivationConformanceTestChainConfig(3)
-	profile := &usdb.ResolvedConsensusProfile{DifficultyFactorBps: 9_500}
+	profile := newTestUSDBDifficultyProfile(7_154_210)
 	engine := &Ethash{
 		config:              Config{Log: log.Root()},
 		usdbProfileResolver: &stubProfileResolver{resolved: profile},

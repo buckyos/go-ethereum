@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -22,8 +23,14 @@ func TestEconomicActivationConformanceV2DispatchAndV3Boundary(t *testing.T) {
 	policy := &params.USDBConsensusVersions{
 		DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
 		QuotePolicyVersion:      usdb.QuotePolicyVersionActivationConformanceV2,
+		PricePolicyVersion:      usdb.PricePolicyVersionV1,
 	}
-	got, err := applyUSDBDifficultyPolicy(policy, big.NewInt(100_000), profile)
+	header := &types.Header{Number: big.NewInt(1)}
+	decision, err := resolveUSDBQuotePolicy(policy, header, profile)
+	if err != nil {
+		t.Fatalf("fake v2 quote resolution failed: %v", err)
+	}
+	got, err := applyUSDBDifficultyPolicy(policy, big.NewInt(100_000), decision)
 	if err != nil {
 		t.Fatalf("fake v2 quote difficulty failed: %v", err)
 	}
@@ -37,7 +44,7 @@ func TestEconomicActivationConformanceV2DispatchAndV3Boundary(t *testing.T) {
 	}
 
 	policy.QuotePolicyVersion = usdb.QuotePolicyVersionActivationConformanceV3
-	if _, err := applyUSDBDifficultyPolicy(policy, big.NewInt(100_000), profile); err == nil ||
+	if _, err := resolveUSDBQuotePolicy(policy, header, profile); err == nil ||
 		!strings.Contains(err.Error(), "unsupported usdb quote policy version 65535") {
 		t.Fatalf("fake v2 build crossed fake v3 boundary: %v", err)
 	}

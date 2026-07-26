@@ -11,39 +11,38 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func resolveActivationConformanceQuotePolicy(version uint16, profile *ResolvedConsensusProfile) (*ActivationConformanceQuoteResult, error) {
-	if profile == nil {
-		return nil, errors.New("activation conformance quote profile is nil")
+func resolveActivationConformanceQuotePolicy(version uint16, context *QuotePolicyContext) (*QuotePolicyDecision, bool, error) {
+	if !supportsActivationConformanceQuotePolicy(version) {
+		return nil, false, nil
 	}
-	if err := validateActivationConformanceEnergy("raw energy", profile.RawEnergy); err != nil {
-		return nil, err
-	}
-	if err := validateActivationConformanceEnergy("collaboration energy", profile.CollabContribution); err != nil {
-		return nil, err
-	}
-	if err := validateActivationConformanceEnergy("effective energy", profile.EffectiveEnergy); err != nil {
-		return nil, err
-	}
-	expectedEffective := saturatingAddEnergy(profile.RawEnergy, profile.CollabContribution)
-	if profile.EffectiveEnergy.Cmp(expectedEffective) != 0 {
-		return nil, errors.New("activation conformance effective energy mismatch")
-	}
-
 	switch version {
 	case QuotePolicyVersionActivationConformanceV2:
-		level := LevelForEffectiveEnergy(profile.RawEnergy)
-		return &ActivationConformanceQuoteResult{
-			DifficultyFactorBps: DifficultyFactorBpsForLevel(level),
-			CollaborationEnergy: new(big.Int),
-		}, nil
+		decision, err := newQuotePolicyDecision(
+			version,
+			context.Profile.RawEnergy,
+			new(big.Int),
+			false,
+		)
+		return decision, true, err
 	case QuotePolicyVersionActivationConformanceV3:
-		level := LevelForEffectiveEnergy(profile.EffectiveEnergy)
-		return &ActivationConformanceQuoteResult{
-			DifficultyFactorBps: DifficultyFactorBpsForLevel(level),
-			CollaborationEnergy: new(big.Int).Set(profile.CollabContribution),
-		}, nil
+		if context.Block.PricePolicyVersion != PricePolicyVersionV1 {
+			return nil, true, errors.New("activation conformance FixedPriceHeartbeat requires price policy v1")
+		}
+		if len(context.Block.Evidence) != 0 {
+			return nil, true, errors.New("activation conformance FixedPriceHeartbeat must be implicit")
+		}
+		if context.Block.RewardRecipient != context.Profile.RewardRecipient {
+			return nil, true, errors.New("activation conformance FixedPriceHeartbeat reward recipient mismatch")
+		}
+		decision, err := newQuotePolicyDecision(
+			version,
+			context.Profile.EffectiveEnergy,
+			context.Profile.CollabContribution,
+			true,
+		)
+		return decision, true, err
 	default:
-		return nil, fmt.Errorf("unsupported activation conformance quote policy %d", version)
+		return nil, false, nil
 	}
 }
 
@@ -73,11 +72,4 @@ func resolveActivationConformanceAuxPoolPolicy(version uint16, emission *big.Int
 		AuxReward:    auxReward,
 		AuxRecipient: auxRecipient,
 	}, nil
-}
-
-func validateActivationConformanceEnergy(name string, value *big.Int) error {
-	if value == nil || value.Sign() < 0 || value.Cmp(maximumEnergyValue) > 0 {
-		return fmt.Errorf("activation conformance %s is outside uint128", name)
-	}
-	return nil
 }

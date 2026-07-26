@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/usdbstate"
 	"github.com/ethereum/go-ethereum/internal/usdb"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -124,6 +125,104 @@ func TestEconomicActivationConformanceThreeStageReplay(t *testing.T) {
 	)
 	if freshReplayRoot != finalRoot {
 		t.Fatalf("fresh replay root mismatch: have %s want %s", freshReplayRoot, finalRoot)
+	}
+}
+
+func TestEconomicActivationConformanceImplicitHeartbeatAppliesToCurrentBlock(t *testing.T) {
+	miner := common.HexToAddress("0x1008")
+	profile := &usdb.ResolvedConsensusProfile{
+		RawEnergy:           big.NewInt(1_000_000),
+		CollabContribution:  big.NewInt(20_000_000),
+		EffectiveEnergy:     big.NewInt(21_000_000),
+		DifficultyFactorBps: usdb.DifficultyFactorBpsForLevel(usdb.LevelForEffectiveEnergy(big.NewInt(21_000_000))),
+		RewardRecipient:     miner,
+	}
+	policy := &params.USDBConsensusVersions{
+		DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+		PricePolicyVersion:      usdb.PricePolicyVersionV1,
+		QuotePolicyVersion:      usdb.QuotePolicyVersionActivationConformanceV3,
+	}
+	header := &types.Header{
+		Number:   big.NewInt(10),
+		Coinbase: miner,
+	}
+	decision, err := resolveUSDBQuotePolicy(policy, header, profile)
+	if err != nil {
+		t.Fatalf("resolve current-block implicit heartbeat: %v", err)
+	}
+	if !decision.CurrentBlockQuoteAccepted ||
+		decision.CandidateEnergy.Cmp(profile.EffectiveEnergy) != 0 ||
+		decision.CollaborationEnergy.Cmp(profile.CollabContribution) != 0 {
+		t.Fatalf("implicit heartbeat did not affect current block: %+v", decision)
+	}
+	got, err := applyUSDBDifficultyPolicy(policy, big.NewInt(100_000), decision)
+	if err != nil {
+		t.Fatalf("apply current-block heartbeat difficulty: %v", err)
+	}
+	want, err := usdb.RealDifficultyV1(big.NewInt(100_000), decision.DifficultyFactorBps)
+	if err != nil {
+		t.Fatalf("calculate current-block heartbeat difficulty: %v", err)
+	}
+	if got.Cmp(want) != 0 {
+		t.Fatalf("unexpected current-block heartbeat difficulty: have %s want %s", got, want)
+	}
+
+	header.Coinbase = common.HexToAddress("0x2008")
+	if decision, err := resolveUSDBQuotePolicy(policy, header, profile); err == nil || decision != nil {
+		t.Fatalf("recipient-mismatched implicit heartbeat was accepted: decision=%v err=%v", decision, err)
+	}
+}
+
+func TestEconomicActivationConformanceImplicitHeartbeatMinerValidatorAgreement(t *testing.T) {
+	config := newTestUSDBRewardChainConfig()
+	config.USDB.Activations[0].Versions.QuotePolicyVersion =
+		usdb.QuotePolicyVersionActivationConformanceV3
+	miner := common.HexToAddress("0x1009")
+	profile := &usdb.ResolvedConsensusProfile{
+		RawEnergy:           big.NewInt(1_000_000),
+		CollabContribution:  big.NewInt(20_000_000),
+		EffectiveEnergy:     big.NewInt(21_000_000),
+		DifficultyFactorBps: usdb.DifficultyFactorBpsForLevel(usdb.LevelForEffectiveEnergy(big.NewInt(21_000_000))),
+		RewardRecipient:     miner,
+	}
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+	}
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(1),
+		Time:       1_001,
+		GasLimit:   parent.GasLimit,
+		Coinbase:   miner,
+		Extra:      newTestPayloadBytes(t),
+		UncleHash:  types.EmptyUncleHash,
+	}
+	chain := &stubChainHeaderReader{config: config, header: parent}
+	engine := &Ethash{
+		config:              Config{Log: log.Root()},
+		usdbProfileResolver: &stubProfileResolver{resolved: profile},
+	}
+	baseDifficulty := CalcDifficulty(config, header.Time, parent)
+	want, err := usdb.RealDifficultyV1(baseDifficulty, profile.DifficultyFactorBps)
+	if err != nil {
+		t.Fatalf("calculate expected implicit-heartbeat difficulty: %v", err)
+	}
+	if err := engine.Prepare(chain, header); err != nil {
+		t.Fatalf("miner rejected implicit FixedPriceHeartbeat: %v", err)
+	}
+	if header.Difficulty.Cmp(want) != 0 {
+		t.Fatalf("miner difficulty mismatch: have %s want %s", header.Difficulty, want)
+	}
+	if err := engine.verifyHeader(chain, header, parent, false, false, 2_000); err != nil {
+		t.Fatalf("validator disagreed with miner implicit heartbeat: %v", err)
+	}
+
+	header.Coinbase = common.HexToAddress("0x2009")
+	if err := engine.Prepare(chain, header); err == nil {
+		t.Fatal("miner accepted recipient-mismatched implicit heartbeat")
 	}
 }
 
