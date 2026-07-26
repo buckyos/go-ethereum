@@ -109,6 +109,7 @@ func newTestProfileView(t *testing.T, selector ProfileSelectorPayload, rawEnergy
 	if err != nil {
 		t.Fatalf("failed to identify test active version set: %v", err)
 	}
+	usdbMain := "0x1111111111111111111111111111111111111111"
 	return &PassEconomicProfileView{
 		ViewVersion: EconomicStateViewVersionV1,
 		ExternalState: EconomicExternalState{
@@ -128,12 +129,17 @@ func newTestProfileView(t *testing.T, selector ProfileSelectorPayload, rawEnergy
 			OwnerScriptHash:      repeatHex("66", 32),
 			State:                passStateActive,
 			PassKind:             passKindStandard,
+			USDBMain:             &usdbMain,
 			RawEnergy:            rawEnergy,
 			CollabContribution:   collabContribution,
 			EffectiveEnergy:      effective.String(),
 			Level:                level,
 			DifficultyFactorBps:  DifficultyFactorBpsForLevel(level),
 			CollabBreakdownCount: 1,
+		},
+		MinerAggregate: MinerEconomicAggregate{
+			TotalMinerBTCSats:     "2100000000000000",
+			ActiveMinerOwnerCount: 1,
 		},
 	}
 }

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -24,6 +26,8 @@ var (
 	ErrSelectedPassNotCandidate = errors.New("selected pass is not a usdb candidate")
 	// ErrProfileDerivedValueMismatch indicates invalid derived energy, level, or factor fields.
 	ErrProfileDerivedValueMismatch = errors.New("usdb economic profile derived value mismatch")
+	// ErrProfileRewardInputMismatch indicates an invalid reward recipient or miner aggregate.
+	ErrProfileRewardInputMismatch = errors.New("usdb economic profile reward input mismatch")
 )
 
 // ResolvedConsensusProfile is a selector-bound and locally verified UIP-0006 profile.
@@ -35,6 +39,9 @@ type ResolvedConsensusProfile struct {
 	EffectiveEnergy     *big.Int
 	Level               uint8
 	DifficultyFactorBps uint64
+	RewardRecipient     common.Address
+	TotalMinerBTCSats   *big.Int
+	ActiveMinerOwners   uint64
 }
 
 // Verifier resolves historical consensus profiles from the usdb-indexer RPC surface.
@@ -144,6 +151,10 @@ func resolveConsensusProfile(ctx context.Context, client Client, btcRegistry *bt
 	if err != nil {
 		return nil, err
 	}
+	rewardRecipient, totalMinerBTCSats, activeMinerOwners, err := resolveProfileRewardInputs(view)
+	if err != nil {
+		return nil, err
+	}
 
 	return &ResolvedConsensusProfile{
 		Selector:            selector,
@@ -153,7 +164,55 @@ func resolveConsensusProfile(ctx context.Context, client Client, btcRegistry *bt
 		EffectiveEnergy:     effectiveEnergy,
 		Level:               level,
 		DifficultyFactorBps: difficultyFactorBps,
+		RewardRecipient:     rewardRecipient,
+		TotalMinerBTCSats:   totalMinerBTCSats,
+		ActiveMinerOwners:   activeMinerOwners,
 	}, nil
+}
+
+func resolveProfileRewardInputs(view *PassEconomicProfileView) (common.Address, *big.Int, uint64, error) {
+	if view.Pass.USDBMain == nil ||
+		len(*view.Pass.USDBMain) != 2+2*common.AddressLength ||
+		!strings.HasPrefix(*view.Pass.USDBMain, "0x") ||
+		!common.IsHexAddress(*view.Pass.USDBMain) {
+		return common.Address{}, nil, 0, fmt.Errorf(
+			"%w: invalid or missing pass.usdb_main",
+			ErrProfileRewardInputMismatch,
+		)
+	}
+	totalMinerBTCSats, err := parseCanonicalUint64Decimal(
+		"miner_aggregate.total_miner_btc_sats",
+		view.MinerAggregate.TotalMinerBTCSats,
+	)
+	if err != nil {
+		return common.Address{}, nil, 0, err
+	}
+	if view.MinerAggregate.ActiveMinerOwnerCount == 0 {
+		return common.Address{}, nil, 0, fmt.Errorf(
+			"%w: active_miner_owner_count is zero for an active standard pass",
+			ErrProfileRewardInputMismatch,
+		)
+	}
+	return common.HexToAddress(*view.Pass.USDBMain),
+		totalMinerBTCSats,
+		view.MinerAggregate.ActiveMinerOwnerCount,
+		nil
+}
+
+func parseCanonicalUint64Decimal(field, value string) (*big.Int, error) {
+	if value == "" || (len(value) > 1 && value[0] == '0') {
+		return nil, fmt.Errorf("%w: %s is not canonical decimal", ErrProfileRewardInputMismatch, field)
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return nil, fmt.Errorf("%w: %s is not canonical decimal", ErrProfileRewardInputMismatch, field)
+		}
+	}
+	parsed, ok := new(big.Int).SetString(value, 10)
+	if !ok || !parsed.IsUint64() {
+		return nil, fmt.Errorf("%w: %s exceeds uint64", ErrProfileRewardInputMismatch, field)
+	}
+	return parsed, nil
 }
 
 func validateProfileIdentity(selector ProfileSelectorPayload, view *PassEconomicProfileView, btcRegistry *btcActivationRegistry) (*btcActivationPoint, error) {

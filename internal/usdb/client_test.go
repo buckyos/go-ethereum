@@ -74,12 +74,17 @@ func TestPassEconomicProfileViewDecodesCurrentRPCContract(t *testing.T) {
 			"owner_btc_addr":null,
 			"state":"active",
 			"pass_kind":"standard",
+			"usdb_main":"0x1111111111111111111111111111111111111111",
 			"raw_energy":"340282366920938463463374607431768211455",
 			"collab_contribution":"0",
 			"effective_energy":"340282366920938463463374607431768211455",
 			"level":50,
 			"difficulty_factor_bps":5000,
 			"collab_breakdown_count":2
+		},
+		"miner_aggregate":{
+			"total_miner_btc_sats":"2100000000000000",
+			"active_miner_owner_count":42
 		}
 	}`
 	var view PassEconomicProfileView
@@ -91,6 +96,12 @@ func TestPassEconomicProfileViewDecodesCurrentRPCContract(t *testing.T) {
 	}
 	if view.Pass.RawEnergy != maximumEnergyValue.String() || view.Pass.Level != MaximumLevel || view.Pass.DifficultyFactorBps != 5_000 {
 		t.Fatalf("unexpected profile values: %+v", view.Pass)
+	}
+	if view.Pass.USDBMain == nil || *view.Pass.USDBMain != "0x1111111111111111111111111111111111111111" {
+		t.Fatalf("unexpected reward recipient: %+v", view.Pass.USDBMain)
+	}
+	if view.MinerAggregate.TotalMinerBTCSats != "2100000000000000" || view.MinerAggregate.ActiveMinerOwnerCount != 42 {
+		t.Fatalf("unexpected miner aggregate: %+v", view.MinerAggregate)
 	}
 }
 

@@ -32,6 +32,16 @@ func TestVerifierResolveProfileValidatesUIP0006View(t *testing.T) {
 	if resolved.Level != 1 || resolved.DifficultyFactorBps != 9_900 {
 		t.Fatalf("unexpected level/factor: level=%d factor=%d", resolved.Level, resolved.DifficultyFactorBps)
 	}
+	if resolved.RewardRecipient != common.HexToAddress("0x1111111111111111111111111111111111111111") ||
+		resolved.TotalMinerBTCSats.String() != "2100000000000000" ||
+		resolved.ActiveMinerOwners != 1 {
+		t.Fatalf(
+			"unexpected reward inputs: recipient=%s total_sats=%s active_owners=%d",
+			resolved.RewardRecipient,
+			resolved.TotalMinerBTCSats,
+			resolved.ActiveMinerOwners,
+		)
+	}
 	if client.lastQuery.RequestedHeight != selector.BTCHeight ||
 		client.lastQuery.ExpectedState.SnapshotID != selector.SnapshotIDHex() ||
 		client.lastQuery.ExpectedState.ActivationRegistryID != BTCRegtestActivationRegistryIDV1 ||
@@ -165,6 +175,40 @@ func TestVerifierResolveProfileRejectsInvalidEnergyEncoding(t *testing.T) {
 			}
 			if _, err := verifier.ResolveProfile(context.Background(), BTCRegtestActivationRegistryIDV1, marshalTestSelector(t, selector)); !errors.Is(err, ErrInvalidProfileEnergy) {
 				t.Fatalf("expected invalid energy error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifierResolveProfileRejectsInvalidRewardInputs(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	tests := []struct {
+		name   string
+		mutate func(*PassEconomicProfileView)
+	}{
+		{name: "missing usdb_main", mutate: func(view *PassEconomicProfileView) { view.Pass.USDBMain = nil }},
+		{name: "non-prefixed usdb_main", mutate: func(view *PassEconomicProfileView) {
+			value := "1111111111111111111111111111111111111111"
+			view.Pass.USDBMain = &value
+		}},
+		{name: "empty total", mutate: func(view *PassEconomicProfileView) { view.MinerAggregate.TotalMinerBTCSats = "" }},
+		{name: "leading-zero total", mutate: func(view *PassEconomicProfileView) { view.MinerAggregate.TotalMinerBTCSats = "01" }},
+		{name: "negative total", mutate: func(view *PassEconomicProfileView) { view.MinerAggregate.TotalMinerBTCSats = "-1" }},
+		{name: "overflow total", mutate: func(view *PassEconomicProfileView) {
+			view.MinerAggregate.TotalMinerBTCSats = new(big.Int).Lsh(big.NewInt(1), 64).String()
+		}},
+		{name: "zero owner count", mutate: func(view *PassEconomicProfileView) { view.MinerAggregate.ActiveMinerOwnerCount = 0 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile := newTestProfileView(t, selector, "1000000", "500000")
+			test.mutate(profile)
+			verifier, err := NewVerifier(&stubProfileClient{profile: profile}, 0)
+			if err != nil {
+				t.Fatalf("failed to build verifier: %v", err)
+			}
+			if _, err := verifier.ResolveProfile(context.Background(), BTCRegtestActivationRegistryIDV1, marshalTestSelector(t, selector)); !errors.Is(err, ErrProfileRewardInputMismatch) {
+				t.Fatalf("expected reward input mismatch, got %v", err)
 			}
 		})
 	}

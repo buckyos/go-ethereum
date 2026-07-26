@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/usdbstate"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -519,13 +520,17 @@ func DefaultKilnGenesisBlock() *Genesis {
 
 // DefaultUSDBGenesisBlock returns the standalone USDB network genesis block.
 func DefaultUSDBGenesisBlock() *Genesis {
-	return &Genesis{
+	genesis := &Genesis{
 		Config:     params.USDBChainConfig,
 		ExtraData:  []byte("USDB genesis"),
 		GasLimit:   30_000_000,
 		Difficulty: new(big.Int).Set(params.USDBGenesisDifficulty),
 		Alloc:      GenesisAlloc{},
 	}
+	if err := initializeUSDBGenesisSystemState(genesis.Alloc); err != nil {
+		panic(fmt.Sprintf("invalid built-in USDB genesis system state: %v", err))
+	}
+	return genesis
 }
 
 // USDBBootstrapGenesisConfig customizes the built-in USDB genesis with the
@@ -573,6 +578,9 @@ func buildUSDBGenesisBlockWithBootstrap(base *Genesis, opts USDBBootstrapGenesis
 	genesis.Alloc[opts.BootstrapAdmin] = GenesisAccount{
 		Balance: new(big.Int).Set(opts.BootstrapAdminBalance),
 	}
+	if err := initializeUSDBGenesisSystemState(genesis.Alloc); err != nil {
+		return nil, fmt.Errorf("initialize USDB bootstrap system state: %w", err)
+	}
 	if opts.GenesisDifficulty != nil {
 		genesis.Difficulty = new(big.Int).Set(opts.GenesisDifficulty)
 	}
@@ -585,6 +593,61 @@ func buildUSDBGenesisBlockWithBootstrap(base *Genesis, opts USDBBootstrapGenesis
 		return nil, fmt.Errorf("invalid USDB bootstrap chain config: %w", err)
 	}
 	return genesis, nil
+}
+
+func initializeUSDBGenesisSystemState(alloc GenesisAlloc) error {
+	genesisSupply, err := calculateUSDBGenesisSupply(alloc)
+	if err != nil {
+		return err
+	}
+	storage, err := usdbstate.GenesisStorage(genesisSupply)
+	if err != nil {
+		return fmt.Errorf("encode USDB genesis system storage: %w", err)
+	}
+	if account, exists := alloc[usdbstate.SystemStateAddress]; exists {
+		if account.Balance == nil || account.Balance.Sign() != 0 ||
+			len(account.Code) != 0 ||
+			account.Nonce != usdbstate.SystemStateNonce ||
+			len(account.PrivateKey) != 0 {
+			return errors.New("USDB system-state genesis account conflicts with reserved account")
+		}
+		if existingSchema, ok := account.Storage[usdbstate.SystemStateSchemaVersionSlot]; ok &&
+			existingSchema != (common.Hash{}) &&
+			existingSchema != storage[usdbstate.SystemStateSchemaVersionSlot] {
+			return errors.New("USDB system-state genesis account has incompatible schema version")
+		}
+		if account.Storage == nil {
+			account.Storage = make(map[common.Hash]common.Hash, len(storage))
+		}
+		for slot, value := range storage {
+			account.Storage[slot] = value
+		}
+		alloc[usdbstate.SystemStateAddress] = account
+		return nil
+	}
+	alloc[usdbstate.SystemStateAddress] = GenesisAccount{
+		Balance: big.NewInt(0),
+		Nonce:   usdbstate.SystemStateNonce,
+		Storage: storage,
+	}
+	return nil
+}
+
+func calculateUSDBGenesisSupply(alloc GenesisAlloc) (*big.Int, error) {
+	total := new(big.Int)
+	for address, account := range alloc {
+		if account.Balance == nil {
+			return nil, fmt.Errorf("USDB genesis account %s has nil balance", address)
+		}
+		if account.Balance.Sign() < 0 {
+			return nil, fmt.Errorf("USDB genesis account %s has negative balance", address)
+		}
+		total.Add(total, account.Balance)
+		if total.BitLen() > 256 {
+			return nil, errors.New("USDB genesis allocation supply overflows uint256")
+		}
+	}
+	return total, nil
 }
 
 func validateUSDBBootstrapGenesisConfig(base *Genesis, opts USDBBootstrapGenesisConfig) error {

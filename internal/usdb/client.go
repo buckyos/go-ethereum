@@ -128,6 +128,7 @@ type PassEconomicProfile struct {
 	OwnerBTCAddress      *string `json:"owner_btc_addr"`
 	State                string  `json:"state"`
 	PassKind             string  `json:"pass_kind"`
+	USDBMain             *string `json:"usdb_main"`
 	RawEnergy            string  `json:"raw_energy"`
 	CollabContribution   string  `json:"collab_contribution"`
 	EffectiveEnergy      string  `json:"effective_energy"`
@@ -136,11 +137,18 @@ type PassEconomicProfile struct {
 	CollabBreakdownCount uint64  `json:"collab_breakdown_count"`
 }
 
+// MinerEconomicAggregate is the selector-bound BTC asset input for UIP-0011.
+type MinerEconomicAggregate struct {
+	TotalMinerBTCSats     string `json:"total_miner_btc_sats"`
+	ActiveMinerOwnerCount uint64 `json:"active_miner_owner_count"`
+}
+
 // PassEconomicProfileView is the frozen UIP-0006 response consumed by USDB-chain consensus.
 type PassEconomicProfileView struct {
-	ViewVersion   string                `json:"view_version"`
-	ExternalState EconomicExternalState `json:"external_state"`
-	Pass          PassEconomicProfile   `json:"pass"`
+	ViewVersion    string                 `json:"view_version"`
+	ExternalState  EconomicExternalState  `json:"external_state"`
+	Pass           PassEconomicProfile    `json:"pass"`
+	MinerAggregate MinerEconomicAggregate `json:"miner_aggregate"`
 }
 
 type passEconomicProfileParams struct {

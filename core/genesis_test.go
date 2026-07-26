@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/usdbstate"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
@@ -217,6 +218,84 @@ func TestDefaultUSDBGenesisJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDefaultUSDBGenesisSystemState(t *testing.T) {
+	genesis := DefaultUSDBGenesisBlock()
+	account, ok := genesis.Alloc[usdbstate.SystemStateAddress]
+	if !ok {
+		t.Fatal("default USDB genesis is missing the reserved system-state account")
+	}
+	if account.Balance == nil || account.Balance.Sign() != 0 {
+		t.Fatalf("unexpected system-state balance: %v", account.Balance)
+	}
+	if account.Nonce != usdbstate.SystemStateNonce {
+		t.Fatalf("unexpected system-state nonce: have %d want %d", account.Nonce, usdbstate.SystemStateNonce)
+	}
+	if len(account.Code) != 0 {
+		t.Fatalf("system-state account must not contain EVM code: %x", account.Code)
+	}
+	if got := account.Storage[usdbstate.SystemStateSchemaVersionSlot]; got != common.BigToHash(big.NewInt(1)) {
+		t.Fatalf("unexpected system-state schema version: %s", got)
+	}
+	if got := account.Storage[usdbstate.IssuedUSDBAtomsSlot]; got != (common.Hash{}) {
+		t.Fatalf("empty built-in alloc must have zero issued supply: %s", got)
+	}
+}
+
+func TestInitializeUSDBGenesisSystemStateRejectsInvalidInputs(t *testing.T) {
+	fundedAddress := common.HexToAddress("0x0000000000000000000000000000000000002000")
+	tests := []struct {
+		name  string
+		alloc GenesisAlloc
+	}{
+		{
+			name: "nil allocation balance",
+			alloc: GenesisAlloc{
+				fundedAddress: {Balance: nil},
+			},
+		},
+		{
+			name: "negative allocation balance",
+			alloc: GenesisAlloc{
+				fundedAddress: {Balance: big.NewInt(-1)},
+			},
+		},
+		{
+			name: "issued supply overflow",
+			alloc: GenesisAlloc{
+				fundedAddress: {Balance: new(big.Int).Lsh(big.NewInt(1), 256)},
+			},
+		},
+		{
+			name: "reserved account conflict",
+			alloc: GenesisAlloc{
+				usdbstate.SystemStateAddress: {
+					Balance: big.NewInt(1),
+					Nonce:   usdbstate.SystemStateNonce,
+				},
+			},
+		},
+		{
+			name: "incompatible system-state schema",
+			alloc: GenesisAlloc{
+				usdbstate.SystemStateAddress: {
+					Balance: big.NewInt(0),
+					Nonce:   usdbstate.SystemStateNonce,
+					Storage: map[common.Hash]common.Hash{
+						usdbstate.SystemStateSchemaVersionSlot: common.BigToHash(big.NewInt(2)),
+					},
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := initializeUSDBGenesisSystemState(test.alloc); err == nil {
+				t.Fatal("invalid USDB genesis system state was accepted")
+			}
+		})
+	}
+}
+
 func TestGenesis_Commit(t *testing.T) {
 	genesis := &Genesis{
 		BaseFee: big.NewInt(params.InitialBaseFee),
@@ -290,6 +369,11 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 	if got := genesis.Config.EthPoWMinimumDifficulty(); got.Cmp(minimumDifficulty) != 0 {
 		t.Fatalf("unexpected minimum difficulty override: %v", got)
 	}
+	systemAccount := genesis.Alloc[usdbstate.SystemStateAddress]
+	issuedWord := systemAccount.Storage[usdbstate.IssuedUSDBAtomsSlot]
+	if got := new(big.Int).SetBytes(issuedWord[:]); got.Cmp(adminBalance) != 0 {
+		t.Fatalf("unexpected bootstrap issued supply: have %v want %v", got, adminBalance)
+	}
 	if DefaultUSDBGenesisBlock().ToBlock().Hash() == genesis.ToBlock().Hash() {
 		t.Fatalf("bootstrap overlay must produce a distinct development genesis hash")
 	}
@@ -316,6 +400,9 @@ func TestUSDBBootstrapGenesisPreservesAndClonesBaseState(t *testing.T) {
 		Balance: existingBalance,
 		Storage: map[common.Hash]common.Hash{existingStorageKey: existingStorageValue},
 	}
+	systemAccount := base.Alloc[usdbstate.SystemStateAddress]
+	systemAccount.Storage[usdbstate.PricePolicyVersionSlot] = common.BigToHash(big.NewInt(1))
+	base.Alloc[usdbstate.SystemStateAddress] = systemAccount
 	opts := validUSDBBootstrapGenesisConfig()
 
 	genesis, err := buildUSDBGenesisBlockWithBootstrap(base, opts)
@@ -331,6 +418,15 @@ func TestUSDBBootstrapGenesisPreservesAndClonesBaseState(t *testing.T) {
 	}
 	if existing.Storage[existingStorageKey] != existingStorageValue {
 		t.Fatalf("base alloc storage was not preserved: %v", existing.Storage)
+	}
+	systemAccount = genesis.Alloc[usdbstate.SystemStateAddress]
+	if got := systemAccount.Storage[usdbstate.PricePolicyVersionSlot]; got != common.BigToHash(big.NewInt(1)) {
+		t.Fatalf("system policy storage was not preserved: %s", got)
+	}
+	issuedWord := systemAccount.Storage[usdbstate.IssuedUSDBAtomsSlot]
+	wantIssued := new(big.Int).Add(big.NewInt(99), big.NewInt(123456789))
+	if got := new(big.Int).SetBytes(issuedWord[:]); got.Cmp(wantIssued) != 0 {
+		t.Fatalf("system issued supply was not recalculated: have %v want %v", got, wantIssued)
 	}
 
 	existingCode[0] = 0xff

@@ -36,7 +36,7 @@ var (
 	KilnGenesisHash    = common.HexToHash("0x51c7fe41be669f69c45c33a56982cbde405313342d9e2b00d7c91a7b284dd4f8")
 	// USDBGenesisHash identifies DefaultUSDBGenesisBlock. Development bootstrap
 	// overlays use their computed hash until a public network genesis is frozen.
-	USDBGenesisHash = common.HexToHash("0x4548fb39b8a73ab3f3d997a6d8c2869f83fadbc9e0d84ac198d6424fbbab90b4")
+	USDBGenesisHash = common.HexToHash("0x10f5f725ad744f6609d9eeec65fc9106afc558973517249fd474192e8a428b3b")
 )
 
 // USDBNetworkID is the provisional network and replay-protection identifier for

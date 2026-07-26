@@ -231,9 +231,17 @@ historical replay、validator 接线和幂等性，不作为真实 BTC-side stat
 
 后续接线原则：
 
-- `if cfg.IsDividendFeeSplit(blockNumber) { ... }`
+- `cfg.IsDividendFeeSplit(blockNumber)` 只提供 address/height 静态 gate，不能单独启用分账
+- 还必须由目标高度的 USDB activation checkpoint 解析出受支持的非零
+  `fee_split_policy_version`
+- 还必须满足 UIP-0010 冻结、可从 USDB chain state 确定性读取的 bootstrap
+  readiness predicate
 - 激活前仍走旧逻辑
 - 激活后再把目标金额记入 `cfg.DividendAddress`
+
+本地 `bootstrap_state` / `bootstrap_marker` 不参与共识。当前 SourceDAO 尚无冻结的
+on-chain readiness predicate，因此现阶段 checkpoint 必须保持
+`fee_split_policy_version = 0`；仅设置 `DividendFeeSplitBlock` 不会授权实际分账。
 
 ### 3.4 Bring-up / bootstrap
 
@@ -273,7 +281,8 @@ historical replay、validator 接线和幂等性，不作为真实 BTC-side stat
 
 - `DividendFeeSplitBlock = 16`
 
-这样可以稳定覆盖三种状态：
+该值当前只用于覆盖 chain-config gate 和 bootstrap timing，不代表非零 fee policy 已启用。
+冻结 on-chain readiness predicate 后，才可以稳定覆盖三种实际分账状态：
 
 - 链已启动但未初始化
 - 已初始化但未激活 fee split
@@ -327,7 +336,8 @@ historical replay、validator 接线和幂等性，不作为真实 BTC-side stat
 2. 到达激活块后发送普通交易
    - `Dividend` 余额增加
 
-这条测试应在手续费分账逻辑真正接入后补齐。
+这条测试应在 on-chain readiness predicate 和手续费分账逻辑都接入后补齐；测试必须同时
+证明本地 marker 不能改变 validator 结果。
 
 ## 6. 开发顺序
 
@@ -363,6 +373,7 @@ historical replay、validator 接线和幂等性，不作为真实 BTC-side stat
 
 - 先把链配置与 cold-start 结构准备好
 - 再把 bootstrap bring-up 流程跑通
+- 冻结 consensus-readable bootstrap readiness predicate
 - 最后接入手续费分账公式
 
 这能把配置正确性、系统合约冷启动、共识状态转换三个风险面分开验证。
