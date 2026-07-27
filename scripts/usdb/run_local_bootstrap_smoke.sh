@@ -182,6 +182,7 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
   echo "Running SourceDAO bootstrap smoke"
   (
     cd "$SOURCE_DAO_DIR"
+    # shellcheck source=/dev/null
     source "$HOME/.nvm/nvm.sh"
     nvm use 24 >/dev/null
     # SourceDAO owns this external env key; its value is the USDB-chain RPC endpoint.

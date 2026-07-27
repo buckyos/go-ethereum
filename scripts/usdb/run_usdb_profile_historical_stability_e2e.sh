@@ -239,9 +239,9 @@ print_failure_diagnostics() {
 
 cleanup() {
   local exit_code=$?
+  local pid
   set +e
-  for pid_var in NODE1_PID NODE2_PID; do
-    local pid=${!pid_var:-}
+  for pid in "${NODE1_PID:-}" "${NODE2_PID:-}"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       regtest_stop_process "$pid"
     fi

@@ -231,20 +231,22 @@ geth binary and BTC-side services completed:
 ## Latest Economic Activation Execution
 
 On 2026-07-26, after the shared quote decision and current-block implicit
-heartbeat refactor, a clean regtest workspace completed the three-stage
-economic activation runner:
+heartbeat refactor, clean regtest workspaces completed the three-stage economic
+activation runner. The first 15-block run established the transition baseline;
+a follow-up 30-block soak repeated the same default -> fake-v2 -> fake-v3
+restart path against BTC profile height `137`:
 
 - The default binary stopped before fake v2 block `3`.
 - The fake v2 binary replayed the same datadir and stopped before fake v3 block
   `6`.
-- The fake v3 binary replayed both prior stages and mined through block `15`.
+- The fake v3 binary replayed both prior stages and mined through block `30`.
 - Per-block verification matched difficulty, quote policy slot, price range, K,
   issued supply, miner credit, and aux credits.
-- Final issued supply was `9513466543683129189`; miner balance
-  `8054750291763076466`, fake-v2 aux balance `190274157602036399`, and fake-v3
-  aux balance `1268442094318016324` summed to the same value.
+- Final issued supply was `19026028117406476574`; miner balance
+  `15664799550741754380`, fake-v2 aux balance `190274157602036399`, and fake-v3
+  aux balance `3170954409062685795` summed to the same value.
 - A fresh fake-v3 validator replayed from genesis and reached the identical
-  block-15 head.
+  block-30 head.
 - The live profile had zero collaboration contribution, so non-zero
   raw/effective differentiation is cross-checked by the tagged resolver and
   miner/validator engine tests using `raw=1,000,000`, `collab=20,000,000`.

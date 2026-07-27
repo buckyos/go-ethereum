@@ -134,9 +134,16 @@ run_geth() {
   )
 }
 
+load_node_toolchain() {
+  # nvm is installed per-user and cannot be resolved statically by shellcheck.
+  # shellcheck source=/dev/null
+  source "$HOME/.nvm/nvm.sh"
+  nvm use 24 >/dev/null
+}
+
 cleanup() {
-  for pid_var in NODE1_PID NODE2_PID MOCK_INDEXER_PID; do
-    local pid=${!pid_var:-}
+  local pid
+  for pid in "${NODE1_PID:-}" "${NODE2_PID:-}" "${MOCK_INDEXER_PID:-}"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
@@ -400,8 +407,7 @@ run_source_dao_full_bootstrap() {
   local state_file=$2
   (
     cd "$SOURCE_DAO_DIR"
-    source "$HOME/.nvm/nvm.sh"
-    nvm use 24 >/dev/null
+    load_node_toolchain
     SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY="$SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY" \
       npx tsx scripts/usdb_bootstrap_full.ts \
         --config "$SOURCE_DAO_FULL_CONFIG" \
@@ -416,8 +422,7 @@ run_source_dao_validation() {
   local output_file=$3
   (
     cd "$SOURCE_DAO_DIR"
-    source "$HOME/.nvm/nvm.sh"
-    nvm use 24 >/dev/null
+    load_node_toolchain
     npm run validate:bootstrap -- \
       --config "$SOURCE_DAO_FULL_CONFIG" \
       --rpc-url "$rpc_url" \
@@ -443,8 +448,7 @@ run_source_dao_fee_probe() {
   fi
   (
     cd "$SOURCE_DAO_DIR"
-    source "$HOME/.nvm/nvm.sh"
-    nvm use 24 >/dev/null
+    load_node_toolchain
     SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY="$SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY" \
       npx tsx scripts/usdb_fee_split_probe.ts \
         --rpc-url "$rpc_url" \
@@ -617,8 +621,7 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
   echo "Running SourceDAO bootstrap smoke against node 1"
   (
     cd "$SOURCE_DAO_DIR"
-    source "$HOME/.nvm/nvm.sh"
-    nvm use 24 >/dev/null
+    load_node_toolchain
     # SourceDAO owns this external env key; its value is the USDB-chain RPC endpoint.
     SOURCE_DAO_USDB_CONFIG="$SOURCE_DAO_CONFIG" \
     SOURCE_DAO_USDB_RPC_URL="$NODE1_RPC" \
