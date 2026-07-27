@@ -16,9 +16,12 @@ from pathlib import Path
 from typing import Any
 
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 4
 DEFAULT_USDB_CHAIN_ID = 20260323
 HASH_PATTERN = re.compile(r"^0x[0-9a-fA-F]{64}$")
+TIMESTAMP_RESOLUTION_LIMIT_BPS = 2_500
+MIN_RELEASE_INTERVAL_COUNT = 256
+MIN_RELEASE_DAG_WARMUP_BLOCKS = 64
 
 
 class CalibrationError(ValueError):
@@ -32,6 +35,20 @@ class BlockHeader:
     parent_hash: str
     timestamp: int
     difficulty: int
+
+
+@dataclass(frozen=True)
+class MeasurementContext:
+    source_commit: str
+    source_dirty: bool
+    build_command: str
+    miner_hardware: str
+    miner_threads: int
+    dag_warmup_blocks: int
+    genesis_difficulty: int
+    minimum_difficulty: int
+    isolated_hardware: bool
+    environment_notes: str
 
 
 class JsonRpcClient:
@@ -198,11 +215,86 @@ def header_to_json(header: BlockHeader) -> dict[str, Any]:
     }
 
 
+def measurement_to_json(measurement: MeasurementContext) -> dict[str, Any]:
+    if not measurement.source_commit.strip():
+        raise CalibrationError("measurement source commit must not be empty")
+    if not measurement.build_command.strip():
+        raise CalibrationError("measurement build command must not be empty")
+    if not measurement.miner_hardware.strip():
+        raise CalibrationError("measurement miner hardware must not be empty")
+    if measurement.miner_threads <= 0:
+        raise CalibrationError("measurement miner threads must be positive")
+    if measurement.dag_warmup_blocks < 0:
+        raise CalibrationError("measurement DAG warm-up blocks must not be negative")
+    if measurement.genesis_difficulty <= 0:
+        raise CalibrationError("measurement genesis difficulty must be positive")
+    if measurement.minimum_difficulty <= 0:
+        raise CalibrationError("measurement minimum difficulty must be positive")
+    if measurement.genesis_difficulty < measurement.minimum_difficulty:
+        raise CalibrationError(
+            "measurement genesis difficulty must not be below minimum difficulty"
+        )
+    if not measurement.environment_notes.strip():
+        raise CalibrationError("measurement environment notes must not be empty")
+    return {
+        "sourceCommit": measurement.source_commit,
+        "sourceDirty": measurement.source_dirty,
+        "buildCommand": measurement.build_command,
+        "minerHardware": measurement.miner_hardware,
+        "minerThreads": measurement.miner_threads,
+        "dagWarmupBlocks": measurement.dag_warmup_blocks,
+        "genesisDifficulty": {
+            "decimal": str(measurement.genesis_difficulty),
+            "hex": hex(measurement.genesis_difficulty),
+        },
+        "minimumDifficulty": {
+            "decimal": str(measurement.minimum_difficulty),
+            "hex": hex(measurement.minimum_difficulty),
+        },
+        "isolatedHardware": measurement.isolated_hardware,
+        "environmentNotes": measurement.environment_notes,
+    }
+
+
+def parse_measurement(raw: Any) -> MeasurementContext:
+    if not isinstance(raw, dict):
+        raise CalibrationError("report measurement must be an object")
+    try:
+        genesis_difficulty = raw["genesisDifficulty"]
+        minimum_difficulty = raw["minimumDifficulty"]
+        if not isinstance(genesis_difficulty, dict) or not isinstance(
+            minimum_difficulty, dict
+        ):
+            raise TypeError("difficulty metadata must be objects")
+        measurement = MeasurementContext(
+            source_commit=str(raw["sourceCommit"]),
+            source_dirty=raw["sourceDirty"],
+            build_command=str(raw["buildCommand"]),
+            miner_hardware=str(raw["minerHardware"]),
+            miner_threads=int(raw["minerThreads"]),
+            dag_warmup_blocks=int(raw["dagWarmupBlocks"]),
+            genesis_difficulty=int(str(genesis_difficulty["decimal"]), 10),
+            minimum_difficulty=int(str(minimum_difficulty["decimal"]), 10),
+            isolated_hardware=raw["isolatedHardware"],
+            environment_notes=str(raw["environmentNotes"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise CalibrationError(f"invalid report measurement: {error}") from error
+    if not isinstance(measurement.source_dirty, bool):
+        raise CalibrationError("measurement sourceDirty must be a boolean")
+    if not isinstance(measurement.isolated_hardware, bool):
+        raise CalibrationError("measurement isolatedHardware must be a boolean")
+    if raw != measurement_to_json(measurement):
+        raise CalibrationError("report measurement is not canonically encoded")
+    return measurement
+
+
 def build_report(
     chain_id: int,
     profile: str,
     target_block_seconds: int,
     headers: list[BlockHeader],
+    measurement: MeasurementContext,
 ) -> dict[str, Any]:
     profile = profile.strip()
     if not profile:
@@ -213,11 +305,28 @@ def build_report(
     elapsed_seconds = sum(intervals)
     total_work = sum(header.difficulty for header in headers[1:])
     candidate_difficulty = round_ratio(total_work * target_block_seconds, elapsed_seconds)
+    one_second_intervals = sum(interval == 1 for interval in intervals)
+    one_second_ratio_bps = one_second_intervals * 10_000 // len(intervals)
+    timestamp_resolution_limited = (
+        one_second_ratio_bps >= TIMESTAMP_RESOLUTION_LIMIT_BPS
+    )
+    release_blockers = []
+    if measurement.source_dirty:
+        release_blockers.append("source_worktree_dirty")
+    if not measurement.isolated_hardware:
+        release_blockers.append("hardware_not_isolated")
+    if timestamp_resolution_limited:
+        release_blockers.append("timestamp_resolution_limited")
+    if len(intervals) < MIN_RELEASE_INTERVAL_COUNT:
+        release_blockers.append("sample_interval_count_below_release_minimum")
+    if measurement.dag_warmup_blocks < MIN_RELEASE_DAG_WARMUP_BLOCKS:
+        release_blockers.append("dag_warmup_below_release_minimum")
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "chainId": chain_id,
         "profile": profile,
         "targetBlockSeconds": target_block_seconds,
+        "measurement": measurement_to_json(measurement),
         "sample": {
             "startBlock": headers[0].number,
             "startHash": headers[0].block_hash,
@@ -241,6 +350,13 @@ def build_report(
                 "workNumerator": str(total_work),
                 "secondsDenominator": str(elapsed_seconds),
             },
+        },
+        "quality": {
+            "oneSecondIntervalCount": one_second_intervals,
+            "oneSecondIntervalRatioBps": one_second_ratio_bps,
+            "timestampResolutionLimited": timestamp_resolution_limited,
+            "releaseEligible": not release_blockers,
+            "releaseBlockers": release_blockers,
         },
         "candidateDifficulty": {
             "decimal": str(candidate_difficulty),
@@ -273,12 +389,15 @@ def load_and_verify_report(path: Path, expected_chain_id: int) -> dict[str, Any]
     if not isinstance(sample, dict) or not isinstance(sample.get("headers"), list):
         raise CalibrationError(f"report {path} has no sample headers")
     headers = [parse_report_header(header) for header in sample["headers"]]
+    measurement = parse_measurement(raw.get("measurement"))
     try:
         profile = str(raw["profile"])
         target_block_seconds = int(raw["targetBlockSeconds"])
     except (KeyError, TypeError, ValueError) as error:
         raise CalibrationError(f"report {path} has invalid calibration inputs") from error
-    calculated = build_report(expected_chain_id, profile, target_block_seconds, headers)
+    calculated = build_report(
+        expected_chain_id, profile, target_block_seconds, headers, measurement
+    )
     if raw != calculated:
         raise CalibrationError(f"report {path} does not match its embedded headers")
     return calculated
@@ -295,6 +414,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-chain-id", type=int, default=DEFAULT_USDB_CHAIN_ID)
     parser.add_argument("--timeout-seconds", type=int, default=10)
     parser.add_argument("--output", type=Path, help="write the canonical report to this path")
+    parser.add_argument("--source-commit", help="exact geth source commit used by the miner")
+    parser.add_argument(
+        "--source-dirty",
+        choices=("true", "false"),
+        help="whether the measured source worktree contained uncommitted changes",
+    )
+    parser.add_argument("--build-command", help="exact geth build command or artifact identity")
+    parser.add_argument("--miner-hardware", help="measured miner hardware and runtime class")
+    parser.add_argument("--miner-threads", type=int, help="number of Ethash mining threads")
+    parser.add_argument(
+        "--dag-warmup-blocks",
+        type=int,
+        help="blocks excluded before the sampled interval for DAG/cache warm-up",
+    )
+    parser.add_argument(
+        "--genesis-difficulty",
+        type=lambda value: int(value, 0),
+        help="genesis difficulty used by the measured chain",
+    )
+    parser.add_argument(
+        "--minimum-difficulty",
+        type=lambda value: int(value, 0),
+        help="minimum difficulty used by the measured chain",
+    )
+    parser.add_argument(
+        "--isolated-hardware",
+        choices=("true", "false"),
+        help="whether the measured hardware was isolated from unrelated load",
+    )
+    parser.add_argument(
+        "--environment-notes",
+        help="operator notes describing isolation, runtime, and relevant background load",
+    )
     return parser.parse_args()
 
 
@@ -302,9 +454,24 @@ def main() -> int:
     args = parse_args()
     try:
         if args.input_report is not None:
-            if args.rpc_url is not None or args.profile is not None or args.target_block_seconds is not None:
+            live_only_values = (
+                args.rpc_url,
+                args.profile,
+                args.target_block_seconds,
+                args.source_commit,
+                args.source_dirty,
+                args.build_command,
+                args.miner_hardware,
+                args.miner_threads,
+                args.dag_warmup_blocks,
+                args.genesis_difficulty,
+                args.minimum_difficulty,
+                args.isolated_hardware,
+                args.environment_notes,
+            )
+            if any(value is not None for value in live_only_values):
                 raise CalibrationError(
-                    "--input-report cannot be combined with --rpc-url, --profile, or --target-block-seconds"
+                    "--input-report cannot be combined with live sampling arguments"
                 )
             report = load_and_verify_report(args.input_report, args.expected_chain_id)
         else:
@@ -318,6 +485,35 @@ def main() -> int:
                 raise CalibrationError("--confirmations must not be negative")
             if args.timeout_seconds <= 0:
                 raise CalibrationError("--timeout-seconds must be positive")
+            required_measurement = {
+                "--source-commit": args.source_commit,
+                "--source-dirty": args.source_dirty,
+                "--build-command": args.build_command,
+                "--miner-hardware": args.miner_hardware,
+                "--miner-threads": args.miner_threads,
+                "--dag-warmup-blocks": args.dag_warmup_blocks,
+                "--genesis-difficulty": args.genesis_difficulty,
+                "--minimum-difficulty": args.minimum_difficulty,
+                "--isolated-hardware": args.isolated_hardware,
+                "--environment-notes": args.environment_notes,
+            }
+            missing = [name for name, value in required_measurement.items() if value is None]
+            if missing:
+                raise CalibrationError(
+                    "live sampling requires measurement metadata: " + ", ".join(missing)
+                )
+            measurement = MeasurementContext(
+                source_commit=args.source_commit,
+                source_dirty=args.source_dirty == "true",
+                build_command=args.build_command,
+                miner_hardware=args.miner_hardware,
+                miner_threads=args.miner_threads,
+                dag_warmup_blocks=args.dag_warmup_blocks,
+                genesis_difficulty=args.genesis_difficulty,
+                minimum_difficulty=args.minimum_difficulty,
+                isolated_hardware=args.isolated_hardware == "true",
+                environment_notes=args.environment_notes,
+            )
             rpc_url = args.rpc_url or os.environ.get("USDB_RPC_URL", "http://127.0.0.1:8545")
             client = JsonRpcClient(rpc_url, args.timeout_seconds)
             chain_id, headers = collect_headers(
@@ -326,7 +522,13 @@ def main() -> int:
                 args.confirmations,
                 args.expected_chain_id,
             )
-            report = build_report(chain_id, args.profile, args.target_block_seconds, headers)
+            report = build_report(
+                chain_id,
+                args.profile,
+                args.target_block_seconds,
+                headers,
+                measurement,
+            )
         encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
         if args.output is not None:
             args.output.write_text(encoded, encoding="utf-8")

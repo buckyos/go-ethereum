@@ -29,6 +29,22 @@ ACTIVATION_FRESH_VALIDATOR_CHECK=${ACTIVATION_FRESH_VALIDATOR_CHECK:-0}
 OUTAGE_OBSERVE_SECONDS=${OUTAGE_OBSERVE_SECONDS:-4}
 USDB_QUERY_TIMEOUT=${USDB_QUERY_TIMEOUT:-1s}
 USDB_CHAIN_GCMODE=${USDB_CHAIN_GCMODE:-archive}
+USDB_CHAIN_MINER_THREADS=${USDB_CHAIN_MINER_THREADS:-1}
+
+POW_CALIBRATION_PROFILE=${POW_CALIBRATION_PROFILE:-}
+POW_CALIBRATION_TARGET_BLOCK_SECONDS=${POW_CALIBRATION_TARGET_BLOCK_SECONDS:-13}
+POW_CALIBRATION_SAMPLE_BLOCKS=${POW_CALIBRATION_SAMPLE_BLOCKS:-256}
+POW_CALIBRATION_CONFIRMATIONS=${POW_CALIBRATION_CONFIRMATIONS:-6}
+POW_CALIBRATION_DAG_WARMUP_BLOCKS=${POW_CALIBRATION_DAG_WARMUP_BLOCKS:-64}
+POW_CALIBRATION_OUTPUT=${POW_CALIBRATION_OUTPUT:-"$USDB_CHAIN_WORK_DIR/pow-calibration.json"}
+POW_CALIBRATION_SOURCE_COMMIT=${POW_CALIBRATION_SOURCE_COMMIT:-}
+POW_CALIBRATION_SOURCE_DIRTY=${POW_CALIBRATION_SOURCE_DIRTY:-}
+POW_CALIBRATION_BUILD_COMMAND=${POW_CALIBRATION_BUILD_COMMAND:-}
+POW_CALIBRATION_MINER_HARDWARE=${POW_CALIBRATION_MINER_HARDWARE:-}
+POW_CALIBRATION_GENESIS_DIFFICULTY=${POW_CALIBRATION_GENESIS_DIFFICULTY:-}
+POW_CALIBRATION_MINIMUM_DIFFICULTY=${POW_CALIBRATION_MINIMUM_DIFFICULTY:-}
+POW_CALIBRATION_ISOLATED_HARDWARE=${POW_CALIBRATION_ISOLATED_HARDWARE:-}
+POW_CALIBRATION_ENVIRONMENT_NOTES=${POW_CALIBRATION_ENVIRONMENT_NOTES:-}
 
 USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x1111111111111111111111111111111111111111}
 MINER_PASS_USDB_MAIN=${MINER_PASS_USDB_MAIN:-$USDB_CHAIN_MINER_ADDRESS}
@@ -206,7 +222,7 @@ usdb_chain_stop_mining() {
 }
 
 usdb_chain_start_mining() {
-  usdb_chain_rpc_call "miner_start" "[1]" >/dev/null || true
+  usdb_chain_rpc_call "miner_start" "[${USDB_CHAIN_MINER_THREADS}]" >/dev/null || true
 }
 
 usdb_chain_start_node() {
@@ -236,7 +252,7 @@ usdb_chain_start_node() {
       --nodiscover \
       --maxpeers "$max_peers" \
       --mine \
-      --miner.threads 1 \
+      --miner.threads "$USDB_CHAIN_MINER_THREADS" \
       --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
       --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
       --miner.usdb.passid "$pass_id" \
@@ -245,6 +261,58 @@ usdb_chain_start_node() {
       --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT"
   ) >>"$GETH_LOG_FILE" 2>&1 &
   GETH_PID=$!
+}
+
+run_pow_calibration() {
+  local final_height="$1"
+  if [[ -z "$POW_CALIBRATION_PROFILE" ]]; then
+    return
+  fi
+  local required_height=$((POW_CALIBRATION_DAG_WARMUP_BLOCKS +
+    POW_CALIBRATION_SAMPLE_BLOCKS +
+    POW_CALIBRATION_CONFIRMATIONS))
+  if ((final_height < required_height)); then
+    echo "PoW calibration requires at least ${required_height} blocks, have ${final_height}" >&2
+    return 1
+  fi
+  for value in \
+    "$POW_CALIBRATION_SOURCE_COMMIT" \
+    "$POW_CALIBRATION_SOURCE_DIRTY" \
+    "$POW_CALIBRATION_BUILD_COMMAND" \
+    "$POW_CALIBRATION_MINER_HARDWARE" \
+    "$POW_CALIBRATION_GENESIS_DIFFICULTY" \
+    "$POW_CALIBRATION_MINIMUM_DIFFICULTY" \
+    "$POW_CALIBRATION_ISOLATED_HARDWARE" \
+    "$POW_CALIBRATION_ENVIRONMENT_NOTES"; do
+    if [[ -z "$value" ]]; then
+      echo "PoW calibration measurement metadata is incomplete" >&2
+      return 1
+    fi
+  done
+  mkdir -p "$(dirname "$POW_CALIBRATION_OUTPUT")"
+  usdb_chain_log "Collecting real-Ethash PoW calibration profile ${POW_CALIBRATION_PROFILE}"
+  python3 "$ROOT_DIR/scripts/usdb/calibrate_pow_difficulty.py" \
+    --rpc-url "http://${HTTP_ADDR}:${HTTP_PORT}" \
+    --profile "$POW_CALIBRATION_PROFILE" \
+    --target-block-seconds "$POW_CALIBRATION_TARGET_BLOCK_SECONDS" \
+    --sample-blocks "$POW_CALIBRATION_SAMPLE_BLOCKS" \
+    --confirmations "$POW_CALIBRATION_CONFIRMATIONS" \
+    --expected-chain-id "$NETWORK_ID" \
+    --source-commit "$POW_CALIBRATION_SOURCE_COMMIT" \
+    --source-dirty "$POW_CALIBRATION_SOURCE_DIRTY" \
+    --build-command "$POW_CALIBRATION_BUILD_COMMAND" \
+    --miner-hardware "$POW_CALIBRATION_MINER_HARDWARE" \
+    --miner-threads "$USDB_CHAIN_MINER_THREADS" \
+    --dag-warmup-blocks "$POW_CALIBRATION_DAG_WARMUP_BLOCKS" \
+    --genesis-difficulty "$POW_CALIBRATION_GENESIS_DIFFICULTY" \
+    --minimum-difficulty "$POW_CALIBRATION_MINIMUM_DIFFICULTY" \
+    --isolated-hardware "$POW_CALIBRATION_ISOLATED_HARDWARE" \
+    --environment-notes "$POW_CALIBRATION_ENVIRONMENT_NOTES" \
+    --output "$POW_CALIBRATION_OUTPUT"
+  python3 "$ROOT_DIR/scripts/usdb/calibrate_pow_difficulty.py" \
+    --input-report "$POW_CALIBRATION_OUTPUT" \
+    --expected-chain-id "$NETWORK_ID" >/dev/null
+  usdb_chain_log "PoW calibration report replayed successfully: ${POW_CALIBRATION_OUTPUT}"
 }
 
 usdb_chain_current_height() {
@@ -752,6 +820,13 @@ EOF
 
   usdb_chain_log "Generating canonical USDB genesis"
   run_geth dumpgenesis --usdb >"$GENESIS_JSON"
+  if [[ -n "$POW_CALIBRATION_PROFILE" ]]; then
+    usdb_chain_log "Applying PoW calibration difficulty: genesis=${POW_CALIBRATION_GENESIS_DIFFICULTY}, minimum=${POW_CALIBRATION_MINIMUM_DIFFICULTY}"
+    python3 "$ROOT_DIR/scripts/usdb/configure_usdb_pow_calibration_genesis.py" \
+      --genesis "$GENESIS_JSON" \
+      --genesis-difficulty "$POW_CALIBRATION_GENESIS_DIFFICULTY" \
+      --minimum-difficulty "$POW_CALIBRATION_MINIMUM_DIFFICULTY"
+  fi
   if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
     usdb_chain_log "Adding test-only activation at USDB block ${ACTIVATION_CONFORMANCE_BLOCK}"
     python3 "$ROOT_DIR/scripts/usdb/configure_usdb_activation_conformance_genesis.py" \
@@ -893,6 +968,7 @@ PY
   if [[ "$SELECTOR_TAMPER_CHECK" == "1" ]]; then
     run_selector_tamper_import_matrix
   fi
+  run_pow_calibration "$final_block_height"
 
   usdb_chain_log "USDB-chain profile/difficulty E2E succeeded."
   usdb_chain_log "pass_id=${pass_id}, coinbase=${USDB_CHAIN_MINER_ADDRESS}, blocks=${final_block_height}, balance=${latest_balance_hex}"
