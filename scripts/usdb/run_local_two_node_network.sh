@@ -22,6 +22,9 @@ BOOTSTRAP_REPLAY_STATE_FILE=${BOOTSTRAP_REPLAY_STATE_FILE:-"$WORK_DIR/sourcedao-
 NODE1_VALIDATION_FILE=${NODE1_VALIDATION_FILE:-"$WORK_DIR/node1-bootstrap-validation.json"}
 NODE2_VALIDATION_FILE=${NODE2_VALIDATION_FILE:-"$WORK_DIR/node2-bootstrap-validation.json"}
 FEE_PROBE_FILE=${FEE_PROBE_FILE:-"$WORK_DIR/usdb-fee-split-probe.json"}
+BOOTSTRAP_ACCEPTANCE_FILE=${BOOTSTRAP_ACCEPTANCE_FILE:-"$WORK_DIR/usdb-bootstrap-acceptance.json"}
+BOOTSTRAP_ACCEPTANCE_TAMPERED_FILE=${BOOTSTRAP_ACCEPTANCE_TAMPERED_FILE:-"$WORK_DIR/usdb-bootstrap-acceptance-tampered.json"}
+BOOTSTRAP_VALIDATION_TAMPERED_FILE=${BOOTSTRAP_VALIDATION_TAMPERED_FILE:-"$WORK_DIR/node1-bootstrap-validation-tampered.json"}
 FEE_PROBE_TIMEOUT_MS=${FEE_PROBE_TIMEOUT_MS:-600000}
 USDB_BOOTSTRAP_FAKE_POW=${USDB_BOOTSTRAP_FAKE_POW:-1}
 USDB_BOOTSTRAP_FAKE_POW_DELAY=${USDB_BOOTSTRAP_FAKE_POW_DELAY:-1s}
@@ -432,6 +435,56 @@ run_source_dao_validation() {
   )
 }
 
+run_bootstrap_acceptance_create() {
+  local rpc_url=$1
+  local validation_file=$2
+  local checkpoint_block=$3
+  run_geth usdb-bootstrap-acceptance create \
+    --rpc-url "$rpc_url" \
+    --genesis "$GENESIS_JSON" \
+    --bootstrap-config "$SOURCE_DAO_FULL_CONFIG" \
+    --bootstrap-state "$BOOTSTRAP_STATE_FILE" \
+    --validation "$validation_file" \
+    --checkpoint-block "$checkpoint_block" \
+    --artifact "$BOOTSTRAP_ACCEPTANCE_FILE"
+}
+
+run_bootstrap_acceptance_verify() {
+  local rpc_url=$1
+  local validation_file=$2
+  local artifact_file=${3:-$BOOTSTRAP_ACCEPTANCE_FILE}
+  run_geth usdb-bootstrap-acceptance verify \
+    --rpc-url "$rpc_url" \
+    --genesis "$GENESIS_JSON" \
+    --bootstrap-config "$SOURCE_DAO_FULL_CONFIG" \
+    --bootstrap-state "$BOOTSTRAP_STATE_FILE" \
+    --validation "$validation_file" \
+    --artifact "$artifact_file"
+}
+
+assert_tampered_bootstrap_acceptance_rejected() {
+  local checkpoint_replacement validation_admin_replacement
+  checkpoint_replacement=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  validation_admin_replacement=0x0000000000000000000000000000000000009999
+
+  jq --arg replacement "$checkpoint_replacement" \
+    '.checkpoint.hash = $replacement' \
+    "$BOOTSTRAP_ACCEPTANCE_FILE" >"$BOOTSTRAP_ACCEPTANCE_TAMPERED_FILE"
+  if run_bootstrap_acceptance_verify "$NODE1_RPC" "$NODE1_VALIDATION_FILE" "$BOOTSTRAP_ACCEPTANCE_TAMPERED_FILE"; then
+    echo "Tampered bootstrap acceptance checkpoint was accepted" >&2
+    return 1
+  fi
+
+  jq --arg replacement "$validation_admin_replacement" \
+    '.bootstrapAdmin = $replacement' \
+    "$NODE1_VALIDATION_FILE" >"$BOOTSTRAP_VALIDATION_TAMPERED_FILE"
+  if run_bootstrap_acceptance_verify "$NODE1_RPC" "$BOOTSTRAP_VALIDATION_TAMPERED_FILE"; then
+    echo "Bootstrap acceptance accepted a polluted bootstrap admin" >&2
+    return 1
+  fi
+  echo "Tampered checkpoint and bootstrap-admin pollution were rejected."
+}
+
 run_source_dao_fee_probe() {
   local rpc_url=$1
   local output_file=$2
@@ -509,10 +562,6 @@ run_full_bootstrap_lifecycle() {
   echo "Running SourceDAO full bootstrap against node 1"
   run_source_dao_full_bootstrap "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE"
   run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
-  accelerate_fake_pow_after_bootstrap
-  echo "Running UIP-0011 fee split and Dividend ledger-sync probe"
-  run_source_dao_fee_probe "$NODE1_RPC" "$FEE_PROBE_FILE"
-  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
 
   bootstrap_height=$(wait_for_height "$NODE1_RPC" 1)
   read -r bootstrap_hash bootstrap_state_root < <(block_identity_at "$NODE1_RPC" "$bootstrap_height")
@@ -521,6 +570,14 @@ run_full_bootstrap_lifecycle() {
     return 1
   fi
   echo "Captured post-bootstrap checkpoint: height=${bootstrap_height} hash=${bootstrap_hash} stateRoot=${bootstrap_state_root}"
+  run_bootstrap_acceptance_create "$NODE1_RPC" "$NODE1_VALIDATION_FILE" "$bootstrap_height"
+  run_bootstrap_acceptance_verify "$NODE1_RPC" "$NODE1_VALIDATION_FILE"
+  assert_tampered_bootstrap_acceptance_rejected
+
+  accelerate_fake_pow_after_bootstrap
+  echo "Running UIP-0011 fee split and Dividend ledger-sync probe"
+  run_source_dao_fee_probe "$NODE1_RPC" "$FEE_PROBE_FILE"
+  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
 
   if [[ "$RESTART_NODE1_AFTER_BOOTSTRAP" == "1" ]]; then
     echo "Restarting node 1 with its existing datadir"
@@ -534,6 +591,7 @@ run_full_bootstrap_lifecycle() {
       "$bootstrap_hash" \
       "$bootstrap_state_root"
     run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
+    run_bootstrap_acceptance_verify "$NODE1_RPC" "$NODE1_VALIDATION_FILE"
   fi
 
   if [[ "$START_JOINER_AFTER_BOOTSTRAP" == "1" ]]; then
@@ -550,6 +608,7 @@ run_full_bootstrap_lifecycle() {
     "$bootstrap_hash" \
     "$bootstrap_state_root"
   run_source_dao_validation "$NODE2_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE2_VALIDATION_FILE"
+  run_bootstrap_acceptance_verify "$NODE2_RPC" "$NODE2_VALIDATION_FILE"
   assert_validation_summaries_match
 
   echo "Replaying full bootstrap against node 1"
@@ -569,7 +628,10 @@ rm -f \
   "$BOOTSTRAP_REPLAY_STATE_FILE" \
   "$NODE1_VALIDATION_FILE" \
   "$NODE2_VALIDATION_FILE" \
-  "$FEE_PROBE_FILE"
+  "$FEE_PROBE_FILE" \
+  "$BOOTSTRAP_ACCEPTANCE_FILE" \
+  "$BOOTSTRAP_ACCEPTANCE_TAMPERED_FILE" \
+  "$BOOTSTRAP_VALIDATION_TAMPERED_FILE"
 
 echo "Generating shared USDB bootstrap genesis from $USDB_CONFIG"
 run_geth dumpgenesis \
@@ -635,6 +697,7 @@ if [[ "$RUN_FULL_BOOTSTRAP" == "1" ]]; then
   run_full_bootstrap_lifecycle
   echo "Full-bootstrap restart/joiner lifecycle test passed."
   echo "bootstrap state: $BOOTSTRAP_STATE_FILE"
+  echo "acceptance:      $BOOTSTRAP_ACCEPTANCE_FILE"
   echo "replay state:    $BOOTSTRAP_REPLAY_STATE_FILE"
   echo "fee probe:       $FEE_PROBE_FILE"
 fi

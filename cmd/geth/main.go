@@ -226,6 +226,7 @@ func init() {
 		removedbCommand,
 		dumpCommand,
 		dumpGenesisCommand,
+		usdbBootstrapAcceptanceCommand,
 		// See accountcmd.go:
 		accountCommand,
 		walletCommand,

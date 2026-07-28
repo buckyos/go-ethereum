@@ -215,16 +215,59 @@ PoW difficulty。
 1. 只启动 node1，并执行完整 SourceDAO bootstrap。
 2. 写入 `Dividend.bootstrapFinalized()`，保存 state 并执行 strict validation。
 3. 跨过 `DividendFeeSplitBlock`，验证 emission、60%/40% fee 和 Dividend ledger sync。
-4. 固定 bootstrap 完成高度的 block hash 和 state root。
-5. 使用原 datadir 重启 node1，检查固定区块身份和完整合约状态不变。
-6. bootstrap 完成后才启动 `--syncmode full` 的全新 node2，使其从同一 genesis 重放历史。
-7. 检查 node2 在固定高度得到相同 block hash/state root，且两端 strict validation 摘要一致。
-8. 再次执行 full bootstrap，要求 state 中不存在新的 `completed` 或 `error` operation。
+4. 使用 `geth usdb-bootstrap-acceptance create` 固定 genesis、bootstrap config/state、规范化
+   strict validation、checkpoint block hash 和 state root。
+5. 证明 checkpoint 替换和 bootstrap-admin 污染均被 acceptance verifier 拒绝。
+6. 使用原 datadir 重启 node1，重新执行 strict validation 并验证 acceptance artifact。
+7. bootstrap 完成后才启动 `--syncmode full` 的全新 node2，使其从同一 genesis 重放历史。
+8. node2 使用独立 strict validation 摘要验证同一 acceptance artifact。
+9. 再次执行 full bootstrap，要求 state 中不存在新的 `completed` 或 `error` operation。
 
 该测试默认使用 1 秒 fake-PoW seal interval 和 test-only UIP-0006 indexer fixture。1 秒下限避免
 链上时间快于墙钟而使 fresh joiner 以 `block in the future` 拒绝历史。该入口证明 bootstrap
 persistence、reward/fee state transition、historical replay、validator 接线和幂等性，但不作为
 真实 BTC-side state 或 PoW 难度标定证据。
+
+### 3.2.3 Bootstrap acceptance checkpoint
+
+`bootstrapFinalized` 只用于 fee readiness；它不能证明 DAO admin、全部模块 wiring 和初始化参数
+属于发布方预期状态。public release 使用独立的
+`uip-0010-bootstrap-acceptance:v1` artifact，把受控候选链提升为可公开接入的网络。
+
+创建：
+
+```bash
+geth usdb-bootstrap-acceptance create \
+  --rpc-url http://candidate:8545 \
+  --genesis genesis-bootstrap.json \
+  --bootstrap-config sourcedao-bootstrap-config.json \
+  --bootstrap-state sourcedao-bootstrap-state.json \
+  --validation sourcedao-bootstrap-validation.json \
+  --checkpoint-block 0x100 \
+  --min-confirmations 32 \
+  --artifact usdb-bootstrap-acceptance.json
+```
+
+joiner 在同步到 checkpoint 后必须重新运行 SourceDAO strict validator，再执行：
+
+```bash
+geth usdb-bootstrap-acceptance verify \
+  --rpc-url http://joiner:8545 \
+  --genesis genesis-bootstrap.json \
+  --bootstrap-config sourcedao-bootstrap-config.json \
+  --bootstrap-state sourcedao-bootstrap-state.json \
+  --validation joiner-bootstrap-validation.json \
+  --artifact usdb-bootstrap-acceptance.json
+```
+
+artifact 固定 exact genesis/config/state bytes、completed bootstrap transaction hash 集合，并使用
+去除 RPC URL、路径和时间戳后的 strict validation identity，使独立 joiner 可以重算相同 digest。
+验证还要求 chain ID、genesis block hash、checkpoint block hash/state root、确认深度，以及
+checkpoint 前不存在 bootstrap state 未记录的额外交易。
+
+public RPC、bootnode、bridge 和其他外部承诺只能在 artifact 生成、审计并进入签名 release
+manifest 后开放。创建或验证失败表示本次 candidate chain 未被接受，应废弃对应 datadir 并重新
+bootstrap，不允许把不一致状态修补后继续作为同一 public release。
 
 ### 3.3 状态转换
 
@@ -366,12 +409,14 @@ keccak256("sourcedao.dividend.bootstrap-finalized:v1")
 3. 单向 readiness marker 与 strict validator。
 4. UIP-0011 fee policy v1 状态转换和负向测试。
 5. fee/ledger、restart、fresh joiner 和幂等 live E2E。
+6. bootstrap candidate acceptance artifact、restart/joiner 强制验证及篡改拒绝。
 
-public release 前仍需冻结最终地址、artifact、genesis hash、activation height、manifest
-signature 和 bootstrap-admin custody。
+public release 前仍需冻结最终地址、artifact、genesis hash、activation height、acceptance
+confirmation depth、manifest signature 和 bootstrap-admin custody。
 
 ## 7. 当前结论
 
-开发实现已经完成从 chain config、cold start、on-chain readiness 到 fee state transition 的闭环。
-本地 marker 和 RPC 健康状态不参与共识；validator 只信任 chain config、Dividend runtime code 和
-state-root 承诺的 finalized slot。剩余工作属于 public release 参数冻结和更大规模网络演练。
+开发实现已经完成从 chain config、cold start、on-chain readiness、candidate acceptance 到 fee
+state transition 的闭环。本地 marker 和 RPC 健康状态不参与共识；fee validator 只信任 chain
+config、Dividend runtime code 和 state-root 承诺的 finalized slot，public network identity 则由
+canonical genesis、链历史和签名 release manifest 中冻结的 acceptance checkpoint 共同约束。
