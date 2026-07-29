@@ -12,7 +12,7 @@ The built-in development chain activates these policies from USDB block `0`:
 - `payload_version = 1`
 - `difficulty_policy_version = 1`
 - USDB activation checkpoint binding
-  `btcActivationRegistryId = 22d820e6...aaf83d` (`btc-regtest` revision 1)
+  `btcActivationRegistryId = 596728fd...330aa9` (`btc-regtest` revision 1)
 
 The same checkpoint activates UIP-0011 CoinBase emission, UIP-0012
 collaboration efficiency, and UIP-0013 fixed price at version `1`.

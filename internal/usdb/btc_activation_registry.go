@@ -13,16 +13,16 @@ import (
 )
 
 const (
-	goActivationGoldenSchemaVersion = "uip-0008-go-btc-activation-golden:v2"
-	btcActivationRegistrySchemaV1   = "uip-0008-btc-activation-registry:v1"
+	goActivationGoldenSchemaVersion = "uip-0008-go-btc-activation-golden:v3"
+	btcActivationRegistrySchemaV2   = "uip-0008-btc-activation-registry:v2"
 
 	// BTCMainnetActivationRegistryIDV1 is generated from btc-mainnet.json.
-	BTCMainnetActivationRegistryIDV1 = "bb751626eb1415bbc349e77f58cb412908584842cbf7d786262b7bd1f6a7d39e"
+	BTCMainnetActivationRegistryIDV1 = "cc47923f4cdff1875f89771d08e1b89fa22295c92bb816073c3271dc53c54c1c"
 	// BTCRegtestActivationRegistryIDV1 is generated from btc-regtest.json.
-	BTCRegtestActivationRegistryIDV1 = "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
+	BTCRegtestActivationRegistryIDV1 = "596728fd8ccca69c9421a13083e39e953d082e7b031f1f3731481a200c330aa9"
 	// BTCRegtestActivationRegistryIDRevision2 is the staged append-only regtest
 	// revision used to exercise registry rollout without activating a new formula.
-	BTCRegtestActivationRegistryIDRevision2 = "25a39e8022e8351a40f59736b86cf81321c08042121cdb74b85a8f3918a2b973"
+	BTCRegtestActivationRegistryIDRevision2 = "cdde4da47ce5748a27ff307c4d8cadc22ef59f636f0ead5d31cf310f6dc33497"
 )
 
 var (
@@ -54,6 +54,7 @@ type btcActivationRegistry struct {
 	NetworkID            string               `json:"network_id"`
 	Revision             uint32               `json:"revision"`
 	Current              bool                 `json:"current"`
+	StableLagBlocks      uint32               `json:"stable_lag_blocks"`
 	ActivationRegistryID string               `json:"activation_registry_id"`
 	Activations          []btcActivationPoint `json:"activations"`
 }
@@ -91,7 +92,7 @@ func parseBTCActivationGolden(input []byte) (map[string]*btcActivationRegistry, 
 	if artifact.SchemaVersion != goActivationGoldenSchemaVersion {
 		return nil, fmt.Errorf("unsupported Go BTC activation golden schema %q", artifact.SchemaVersion)
 	}
-	if artifact.SourceRegistrySchemaVersion != btcActivationRegistrySchemaV1 {
+	if artifact.SourceRegistrySchemaVersion != btcActivationRegistrySchemaV2 {
 		return nil, fmt.Errorf("unsupported source BTC activation registry schema %q", artifact.SourceRegistrySchemaVersion)
 	}
 	if len(artifact.Registries) == 0 {
@@ -107,6 +108,9 @@ func parseBTCActivationGolden(input []byte) (map[string]*btcActivationRegistry, 
 		}
 		if registry.Revision == 0 {
 			return nil, fmt.Errorf("Go BTC activation registry %s has revision 0", registry.NetworkID)
+		}
+		if registry.StableLagBlocks == 0 {
+			return nil, fmt.Errorf("Go BTC activation registry %s has zero stable_lag_blocks", registry.NetworkID)
 		}
 		if _, err := parseCanonicalHex32("activation_registry_id", registry.ActivationRegistryID); err != nil {
 			return nil, err
@@ -158,6 +162,9 @@ func validateBTCActivationRevisionHistory(networkID string, revisions []*btcActi
 			previous := revisions[index-1]
 			if revision.Revision != previous.Revision+1 {
 				return fmt.Errorf("Go BTC activation registry %s has non-contiguous revisions %d and %d", networkID, previous.Revision, revision.Revision)
+			}
+			if revision.StableLagBlocks != previous.StableLagBlocks {
+				return fmt.Errorf("Go BTC activation registry %s revision %d changes stable_lag_blocks", networkID, revision.Revision)
 			}
 			if len(revision.Activations) < len(previous.Activations) {
 				return fmt.Errorf("Go BTC activation registry %s revision %d removes activation history", networkID, revision.Revision)

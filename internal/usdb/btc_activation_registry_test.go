@@ -27,7 +27,8 @@ func TestGeneratedBTCActivationGoldenMatchesRustRegistryIDs(t *testing.T) {
 			t.Fatalf("failed to load %s golden registry: %v", test.networkID, err)
 		}
 		if registry.NetworkID != test.networkID || registry.ActivationRegistryID != test.registryID ||
-			registry.Revision != test.revision || registry.Current != test.current {
+			registry.Revision != test.revision || registry.Current != test.current ||
+			registry.StableLagBlocks != 5 {
 			t.Fatalf("unexpected golden registry: %+v", registry)
 		}
 		for _, height := range []uint32{0, 1, ^uint32(0)} {
@@ -113,11 +114,12 @@ func TestBTCActivationGoldenReloadPreservesCrossActivationReplay(t *testing.T) {
 	registryID := strings.Repeat("a", 64)
 	artifact := btcActivationGoldenArtifact{
 		SchemaVersion:               goActivationGoldenSchemaVersion,
-		SourceRegistrySchemaVersion: btcActivationRegistrySchemaV1,
+		SourceRegistrySchemaVersion: btcActivationRegistrySchemaV2,
 		Registries: []btcActivationRegistry{{
 			NetworkID:            "btc-restart-test",
 			Revision:             1,
 			Current:              true,
+			StableLagBlocks:      5,
 			ActivationRegistryID: registryID,
 			Activations: []btcActivationPoint{
 				{BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID},
@@ -165,11 +167,12 @@ func TestBTCActivationGoldenCatalogRetainsImmutableRevisions(t *testing.T) {
 	currentID := strings.Repeat("b", 64)
 	artifact := btcActivationGoldenArtifact{
 		SchemaVersion:               goActivationGoldenSchemaVersion,
-		SourceRegistrySchemaVersion: btcActivationRegistrySchemaV1,
+		SourceRegistrySchemaVersion: btcActivationRegistrySchemaV2,
 		Registries: []btcActivationRegistry{
 			{
 				NetworkID:            "btc-regtest-revisions",
 				Revision:             1,
+				StableLagBlocks:      5,
 				ActivationRegistryID: oldID,
 				Activations: []btcActivationPoint{{
 					BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID,
@@ -179,6 +182,7 @@ func TestBTCActivationGoldenCatalogRetainsImmutableRevisions(t *testing.T) {
 				NetworkID:            "btc-regtest-revisions",
 				Revision:             2,
 				Current:              true,
+				StableLagBlocks:      5,
 				ActivationRegistryID: currentID,
 				Activations: []btcActivationPoint{{
 					BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID,
@@ -209,6 +213,17 @@ func TestBTCActivationGoldenCatalogRetainsImmutableRevisions(t *testing.T) {
 	if _, err := parseBTCActivationGolden(encoded); err == nil || !strings.Contains(err.Error(), "rewrites activation index") {
 		t.Fatalf("expected historical revision rewrite to fail, got %v", err)
 	}
+
+	changedLag := artifact
+	changedLag.Registries = append([]btcActivationRegistry(nil), artifact.Registries...)
+	changedLag.Registries[1].StableLagBlocks++
+	encoded, err = json.Marshal(changedLag)
+	if err != nil {
+		t.Fatalf("failed to encode changed-lag catalog: %v", err)
+	}
+	if _, err := parseBTCActivationGolden(encoded); err == nil || !strings.Contains(err.Error(), "changes stable_lag_blocks") {
+		t.Fatalf("expected stable lag revision change to fail, got %v", err)
+	}
 }
 
 func TestProfileFormulaDispatchRejectsUnsupportedActiveVersion(t *testing.T) {
@@ -236,6 +251,7 @@ func TestVerifierDispatchesFormulaFromPayloadHeight(t *testing.T) {
 	registryID := strings.Repeat("a", 64)
 	registry := &btcActivationRegistry{
 		ActivationRegistryID: registryID,
+		StableLagBlocks:      5,
 		Activations: []btcActivationPoint{
 			{BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID},
 			{BTCHeight: 100, ActiveVersionSet: v2, ActiveVersionSetID: v2ID},

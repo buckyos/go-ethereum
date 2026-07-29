@@ -117,6 +117,7 @@ func newTestProfileView(t *testing.T, selector ProfileSelectorPayload, rawEnergy
 			BTCHeight:                      selector.BTCHeight,
 			SnapshotID:                     selector.SnapshotIDHex(),
 			StableBlockHash:                repeatHex("44", 32),
+			StableLag:                      5,
 			LocalStateCommit:               repeatHex("55", 32),
 			SystemStateID:                  selector.SystemStateIDHex(),
 			BalanceHistoryAPIVersion:       "1.0.0",

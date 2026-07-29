@@ -250,6 +250,14 @@ func validateProfileIdentity(selector ProfileSelectorPayload, view *PassEconomic
 		state.ActiveVersionSetID == "" {
 		return nil, fmt.Errorf("%w: external_state is incomplete", ErrProfileStateMismatch)
 	}
+	if state.StableLag != btcRegistry.StableLagBlocks {
+		return nil, fmt.Errorf(
+			"%w: stable_lag have %d want %d",
+			ErrProfileStateMismatch,
+			state.StableLag,
+			btcRegistry.StableLagBlocks,
+		)
+	}
 	activation, err := btcRegistry.validateIdentity(
 		selector.BTCHeight,
 		state.ActivationRegistryID,

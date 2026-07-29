@@ -120,7 +120,7 @@ var (
 			Activations: []USDBConsensusActivation{
 				{
 					Block:                   0,
-					BTCActivationRegistryID: "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d",
+					BTCActivationRegistryID: "596728fd8ccca69c9421a13083e39e953d082e7b031f1f3731481a200c330aa9",
 					BTCAnchorMaxAgeBlocks:   USDBDevelopmentBTCAnchorMaxAgeBlocks,
 					Versions: USDBConsensusVersions{
 						PayloadVersion:                       1,

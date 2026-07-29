@@ -9,11 +9,12 @@ PAYLOAD_SIZE = 111
 BTC_ANCHOR_MAX_AGE_BLOCKS = 6_650
 VIEW_VERSION = "uip-0006-usdb-economic-state-view:v1"
 BTC_REGTEST_ACTIVATION_REGISTRY_ID = (
-    "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
+    "596728fd8ccca69c9421a13083e39e953d082e7b031f1f3731481a200c330aa9"
 )
 BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID = (
-    "25a39e8022e8351a40f59736b86cf81321c08042121cdb74b85a8f3918a2b973"
+    "cdde4da47ce5748a27ff307c4d8cadc22ef59f636f0ead5d31cf310f6dc33497"
 )
+BTC_STABLE_LAG_BLOCKS = 5
 BTC_V1_ACTIVE_VERSION_SET_ID = (
     "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
 )
@@ -343,6 +344,7 @@ def resolve_profile(
     for field, expected in (
         ("btc_height", selector["btc_height"]),
         ("snapshot_id", selector["snapshot_id"]),
+        ("stable_lag", BTC_STABLE_LAG_BLOCKS),
         ("activation_registry_id", expected_activation_registry_id),
         ("active_version_set_id", expected_active_version_set_id),
         ("system_state_id", selector["system_state_id"]),

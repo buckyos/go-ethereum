@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 
-REGISTRY_ID = "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
+REGISTRY_ID = "596728fd8ccca69c9421a13083e39e953d082e7b031f1f3731481a200c330aa9"
 ACTIVE_VERSION_SET_ID = "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
 SNAPSHOT_ID = "11" * 32
 SYSTEM_STATE_ID = "22" * 32
@@ -80,6 +80,7 @@ def build_pass_profile(
             "btc_height": 0,
             "snapshot_id": SNAPSHOT_ID,
             "stable_block_hash": "44" * 32,
+            "stable_lag": 5,
             "local_state_commit": "55" * 32,
             "system_state_id": SYSTEM_STATE_ID,
             "balance_history_api_version": "1.0.0",

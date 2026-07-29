@@ -112,6 +112,7 @@ type EconomicExternalState struct {
 	BTCHeight                      uint32           `json:"btc_height"`
 	SnapshotID                     string           `json:"snapshot_id"`
 	StableBlockHash                string           `json:"stable_block_hash"`
+	StableLag                      uint32           `json:"stable_lag"`
 	LocalStateCommit               string           `json:"local_state_commit"`
 	SystemStateID                  string           `json:"system_state_id"`
 	BalanceHistoryAPIVersion       string           `json:"balance_history_api_version"`
