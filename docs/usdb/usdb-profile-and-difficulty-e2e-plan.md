@@ -40,7 +40,7 @@ Each live runner performs the following operations:
 2. Mint one UIP-0001 `v=1` standard pass using `usdb_main`.
 3. Wait until the BTC-side services expose a consensus-ready UIP-0006 profile.
 4. Generate the canonical USDB genesis and initialize one or two geth nodes.
-5. Mine USDB blocks with the 107-byte UIP-0007 selector in `header.Extra`.
+5. Mine USDB blocks with the 111-byte UIP-0007 selector in `header.Extra`.
 6. Stop mining and replay every payload against `get_pass_economic_profile`.
 7. Require every historical profile to match the chain-bound BTC registry ID,
    v1 active-version-set ID, and complete active-version-set golden.
@@ -64,8 +64,10 @@ block's system slots.
 
 For every mined block the common validator checks:
 
-- `header.Extra` is exactly 107 bytes.
+- `header.Extra` is exactly 111 bytes.
 - `payload_version = 1`; the normal runners require `difficulty_policy_version = 1`, while the activation runner selects the expected policy from the USDB block.
+- `btc_anchor_age_blocks` is zero on the first/new-height selector, increments
+  exactly once for same-height reuse, and stays within the activation-bound max.
 - `btc_height`, `snapshot_id`, `system_state_id`, and `pass_id` reproduce one
   exact historical UIP-0006 profile.
 - `activation_registry_id` equals the chain-config-bound `btc-regtest` registry.
@@ -170,7 +172,8 @@ For every mined block the common validator checks:
 - Exports one canonical block and imports it into a clean datadir as a control.
 - Mutates each selector field independently and requires offline import to
   reject `payload_version`, `difficulty_policy_version`, `btc_height`,
-  `snapshot_id`, `system_state_id`, and `pass_id` with the expected reason.
+  `btc_anchor_age_blocks`, `snapshot_id`, `system_state_id`, and `pass_id`
+  with the expected reason.
 
 ## Fail-Closed Matrix
 

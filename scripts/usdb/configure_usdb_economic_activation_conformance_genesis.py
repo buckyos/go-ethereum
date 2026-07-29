@@ -17,6 +17,7 @@ def checkpoint(base, block, version):
     return {
         "block": block,
         "btcActivationRegistryId": base["btcActivationRegistryId"],
+        "btcAnchorMaxAgeBlocks": base["btcAnchorMaxAgeBlocks"],
         "versions": versions,
     }
 

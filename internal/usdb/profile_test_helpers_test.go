@@ -32,6 +32,7 @@ func newTestSelector(t *testing.T, height uint32) ProfileSelectorPayload {
 	selector, err := NewProfileSelectorPayload(
 		DifficultyPolicyVersionV1,
 		height,
+		0,
 		repeatHex("11", 32),
 		repeatHex("22", 32),
 		repeatHex("33", 32)+"i7",

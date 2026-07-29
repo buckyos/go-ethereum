@@ -12,6 +12,7 @@ func testSelectorBytes(t *testing.T) []byte {
 	selector, err := usdb.NewProfileSelectorPayload(
 		usdb.DifficultyPolicyVersionV1,
 		137,
+		4,
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		"2222222222222222222222222222222222222222222222222222222222222222",
 		"3333333333333333333333333333333333333333333333333333333333333333i0",
@@ -36,6 +37,7 @@ func TestTamperSelectorChangesExactlyOneField(t *testing.T) {
 		fieldPayloadVersion,
 		fieldDifficultyPolicy,
 		fieldBTCHeight,
+		fieldBTCAnchorAge,
 		fieldSnapshotID,
 		fieldSystemStateID,
 		fieldPassID,
@@ -73,6 +75,8 @@ func TestTamperSelectorChangesExactlyOneField(t *testing.T) {
 				expected.DifficultyPolicyVersion ^= 0xffff
 			case fieldBTCHeight:
 				expected.BTCHeight ^= 1
+			case fieldBTCAnchorAge:
+				expected.BTCAnchorAgeBlocks ^= 1
 			case fieldSnapshotID:
 				expected.SnapshotID[0] ^= 0xff
 			case fieldSystemStateID:

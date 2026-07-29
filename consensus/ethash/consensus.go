@@ -282,16 +282,25 @@ func (ethash *Ethash) VerifyUncles(chain consensus.ChainReader, block *types.Blo
 // stock Ethereum ethash engine.
 // See YP section 4.3.4. "Block Header Validity"
 func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, uncle bool, seal bool, unixNow int64) error {
-	// Ensure that the header's extra-data section is of a reasonable size
-	if uint64(len(header.Extra)) > params.MaximumExtraDataSize {
-		return fmt.Errorf("extra-data too long: %d > %d", len(header.Extra), params.MaximumExtraDataSize)
-	}
 	if header.Number == nil || !header.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
+	if parent.Number == nil {
+		return consensus.ErrInvalidNumber
+	}
+	if diff := new(big.Int).Sub(header.Number, parent.Number); diff.Cmp(big.NewInt(1)) != 0 {
 		return consensus.ErrInvalidNumber
 	}
 	activation, err := chain.Config().USDBActivationAt(header.Number.Uint64())
 	if err != nil {
 		return fmt.Errorf("invalid usdb consensus config: %w", err)
+	}
+	maxExtraDataSize := params.MaximumExtraDataSize
+	if activation != nil {
+		maxExtraDataSize = params.MaximumUSDBExtraDataSize
+	}
+	if uint64(len(header.Extra)) > maxExtraDataSize {
+		return fmt.Errorf("extra-data too long: %d > %d", len(header.Extra), maxExtraDataSize)
 	}
 	if activation != nil {
 		policy := &activation.Versions
@@ -302,6 +311,9 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 		}
 		if err := usdb.ValidateProfileSelectorPayload(header.Extra, policy.PayloadVersion, policy.DifficultyPolicyVersion); err != nil {
 			return fmt.Errorf("invalid usdb profile selector: %w", err)
+		}
+		if err := validateUSDBBTCAnchorTransition(chain.Config(), activation, parent, header); err != nil {
+			return fmt.Errorf("invalid usdb BTC anchor transition: %w", err)
 		}
 	}
 	// Verify the header's timestamp
@@ -354,10 +366,6 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	} else if err := misc.VerifyEip1559Header(chain.Config(), parent, header); err != nil {
 		// Verify the header's EIP-1559 attributes.
 		return err
-	}
-	// Verify that the block number is parent's +1
-	if diff := new(big.Int).Sub(header.Number, parent.Number); diff.Cmp(big.NewInt(1)) != 0 {
-		return consensus.ErrInvalidNumber
 	}
 	// Verify the engine specific seal securing the block
 	if seal {
@@ -705,6 +713,9 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 	if err := usdb.ValidateProfileSelectorPayload(header.Extra, policy.PayloadVersion, policy.DifficultyPolicyVersion); err != nil {
 		return fmt.Errorf("invalid usdb profile selector: %w", err)
 	}
+	if err := validateUSDBBTCAnchorTransition(chain.Config(), activation, parent, header); err != nil {
+		return fmt.Errorf("invalid usdb BTC anchor transition: %w", err)
+	}
 	profile, err := ethash.resolveUSDBProfile(activation.BTCActivationRegistryID, header.Extra)
 	if err != nil {
 		return fmt.Errorf("failed to resolve usdb difficulty profile: %w", err)
@@ -718,6 +729,48 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 		return fmt.Errorf("failed to apply usdb difficulty policy: %w", err)
 	}
 	return nil
+}
+
+func validateUSDBBTCAnchorTransition(
+	config *params.ChainConfig,
+	activation *params.USDBConsensusActivation,
+	parent, header *types.Header,
+) error {
+	var child usdb.ProfileSelectorPayload
+	if err := child.UnmarshalBinary(header.Extra); err != nil {
+		return err
+	}
+	var parentSelector *usdb.ProfileSelectorPayload
+	if parent.Number == nil || !parent.Number.IsUint64() {
+		return consensus.ErrInvalidNumber
+	}
+	if parent.Number.Sign() > 0 {
+		parentActivation, err := config.USDBActivationAt(parent.Number.Uint64())
+		if err != nil {
+			return fmt.Errorf("resolve parent activation: %w", err)
+		}
+		if parentActivation != nil {
+			parentPolicy := &parentActivation.Versions
+			if err := usdb.ValidateProfileSelectorPayload(
+				parent.Extra,
+				parentPolicy.PayloadVersion,
+				parentPolicy.DifficultyPolicyVersion,
+			); err != nil {
+				return fmt.Errorf("invalid parent selector: %w", err)
+			}
+			var decoded usdb.ProfileSelectorPayload
+			if err := decoded.UnmarshalBinary(parent.Extra); err != nil {
+				return fmt.Errorf("decode parent selector: %w", err)
+			}
+			parentSelector = &decoded
+		}
+	}
+	return usdb.ValidateBTCAnchorTransition(
+		parentSelector,
+		child,
+		activation.Versions.BTCAnchorPolicyVersion,
+		activation.BTCAnchorMaxAgeBlocks,
+	)
 }
 
 func (ethash *Ethash) resolveUSDBProfile(btcActivationRegistryID string, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error) {

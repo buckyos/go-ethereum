@@ -32,7 +32,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/event"
-	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
@@ -109,15 +108,15 @@ func TestMiner(t *testing.T) {
 	waitForMiningState(t, miner, true)
 }
 
-func TestMinerSetExtraAcceptsUsdbProfileSelectorPayloadV1(t *testing.T) {
+func TestMinerSetExtraAcceptsLegacyMaximum(t *testing.T) {
 	miner := &Miner{worker: &worker{}}
-	extra := make([]byte, usdb.ProfileSelectorPayloadV1Size)
+	extra := make([]byte, params.MaximumExtraDataSize)
 	if err := miner.SetExtra(extra); err != nil {
-		t.Fatalf("expected payload-sized extra to be accepted, got %v", err)
+		t.Fatalf("expected maximum legacy extra to be accepted, got %v", err)
 	}
 }
 
-func TestMinerSetExtraRejectsExtraPastUsdbLimit(t *testing.T) {
+func TestMinerSetExtraRejectsExtraPastLegacyLimit(t *testing.T) {
 	miner := &Miner{worker: &worker{}}
 	extra := make([]byte, params.MaximumExtraDataSize+1)
 	if err := miner.SetExtra(extra); err == nil {

@@ -650,6 +650,8 @@ run_selector_tamper_import_matrix() {
   run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
     "btc_height" "SNAPSHOT_ID_MISMATCH"
   run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
+    "btc_anchor_age_blocks" "usdb BTC anchor age mismatch"
+  run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
     "snapshot_id" "SNAPSHOT_ID_MISMATCH"
   run_selector_tamper_import_case "$canonical_fixture" "$helper_bin" \
     "system_state_id" "SYSTEM_STATE_ID_MISMATCH"

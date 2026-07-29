@@ -214,10 +214,12 @@ type stubPayloadBuilder struct {
 	recipient   common.Address
 	err         error
 	blockNumber uint64
+	parentExtra []byte
 }
 
-func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber uint64) (*usdb.BuiltProfileSelector, error) {
+func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber uint64, parentExtra []byte) (*usdb.BuiltProfileSelector, error) {
 	s.blockNumber = blockNumber
+	s.parentExtra = append([]byte(nil), parentExtra...)
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -234,8 +236,10 @@ func testWorkerUSDBChainConfig() *params.ChainConfig {
 	config.USDB = &params.USDBConsensusConfig{
 		Activations: []params.USDBConsensusActivation{{
 			BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+			BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 			Versions: params.USDBConsensusVersions{
 				PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+				BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
 				DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
 			},
 		}},
@@ -269,6 +273,30 @@ func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
 	}
 	if builder.blockNumber != 1 {
 		t.Fatalf("builder received block number %d, want 1", builder.blockNumber)
+	}
+	if len(builder.parentExtra) != 0 {
+		t.Fatalf("builder received unexpected genesis parent extra: %x", builder.parentExtra)
+	}
+}
+
+func TestResolveHeaderProfileForwardsParentSelector(t *testing.T) {
+	parentExtra := []byte{0x01, 0x02, 0x03}
+	builder := &stubPayloadBuilder{
+		payload: bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size),
+	}
+	w := &worker{chainConfig: testWorkerUSDBChainConfig()}
+	if _, _, err := w.resolveHeaderProfile(
+		context.Background(),
+		builder,
+		nil,
+		nil,
+		big.NewInt(2),
+		parentExtra,
+	); err != nil {
+		t.Fatalf("resolve profile: %v", err)
+	}
+	if !bytes.Equal(builder.parentExtra, parentExtra) {
+		t.Fatalf("builder received parent extra %x, want %x", builder.parentExtra, parentExtra)
 	}
 }
 

@@ -12,6 +12,7 @@ func TestProfileSelectorPayloadV1GoldenVector(t *testing.T) {
 	payload, err := NewProfileSelectorPayload(
 		0x1234,
 		0x01020304,
+		0x05060708,
 		repeatHex("11", 32),
 		repeatHex("22", 32),
 		repeatHex("33", 32)+"i84281096",
@@ -23,7 +24,7 @@ func TestProfileSelectorPayloadV1GoldenVector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to encode profile selector: %v", err)
 	}
-	const expected = "01123401020304" +
+	const expected = "0112340102030405060708" +
 		"1111111111111111111111111111111111111111111111111111111111111111" +
 		"2222222222222222222222222222222222222222222222222222222222222222" +
 		"3333333333333333333333333333333333333333333333333333333333333333" +
@@ -40,6 +41,7 @@ func TestProfileSelectorPayloadV1RoundTrip(t *testing.T) {
 	payload, err := NewProfileSelectorPayload(
 		DifficultyPolicyVersionV1,
 		123,
+		9,
 		"11"+repeatHex("22", 31),
 		repeatHex("aa", 32),
 		repeatHex("bb", 32)+"i7",
@@ -86,6 +88,7 @@ func TestValidateProfileSelectorPayloadChecksConsensusVersions(t *testing.T) {
 	payload, err := NewProfileSelectorPayload(
 		DifficultyPolicyVersionV1,
 		123,
+		0,
 		repeatHex("11", 32),
 		repeatHex("22", 32),
 		repeatHex("33", 32)+"i7",
@@ -174,7 +177,7 @@ func TestNewProfileSelectorPayloadRejectsNonCanonicalStateIDs(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewProfileSelectorPayload(DifficultyPolicyVersionV1, 1, test.snapshotID, test.systemID, passID); err == nil {
+			if _, err := NewProfileSelectorPayload(DifficultyPolicyVersionV1, 1, 0, test.snapshotID, test.systemID, passID); err == nil {
 				t.Fatal("expected non-canonical state id to be rejected")
 			}
 		})

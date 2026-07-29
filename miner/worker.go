@@ -263,7 +263,7 @@ type worker struct {
 type profileSelectorBuilder interface {
 	// BuildCurrentPayload fetches the current USDB state and returns the encoded
 	// payload and reward recipient for the candidate block.
-	BuildCurrentPayload(ctx context.Context, blockNumber uint64) (*usdb.BuiltProfileSelector, error)
+	BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte) (*usdb.BuiltProfileSelector, error)
 	// Close releases any builder-owned resources such as RPC connections.
 	Close()
 }
@@ -1053,6 +1053,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 			builderErr,
 			staticExtra,
 			header.Number,
+			parent.Extra(),
 		)
 		if err != nil {
 			return nil, err
@@ -1126,6 +1127,7 @@ func (w *worker) resolveHeaderProfile(
 	builderErr error,
 	staticExtra []byte,
 	blockNumber *big.Int,
+	parentExtra []byte,
 ) (*usdb.BuiltProfileSelector, *params.USDBConsensusVersions, error) {
 	if blockNumber == nil || !blockNumber.IsUint64() {
 		return nil, nil, fmt.Errorf("invalid candidate block number %v", blockNumber)
@@ -1138,7 +1140,7 @@ func (w *worker) resolveHeaderProfile(
 		return &usdb.BuiltProfileSelector{Payload: staticExtra}, nil, nil
 	}
 	if builder != nil {
-		built, err := builder.BuildCurrentPayload(ctx, blockNumber.Uint64())
+		built, err := builder.BuildCurrentPayload(ctx, blockNumber.Uint64(), parentExtra)
 		if err != nil {
 			return nil, nil, err
 		}

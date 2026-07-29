@@ -16,6 +16,9 @@ const (
 	ProfileSelectorPayloadVersionV1 byte = 1
 	// DifficultyPolicyVersionV1 identifies the first UIP-0005 difficulty policy.
 	DifficultyPolicyVersionV1 uint16 = 1
+	// BTCAnchorPolicyVersionV1 requires monotonic BTC heights and bounded reuse
+	// of one exact BTC-side state identity.
+	BTCAnchorPolicyVersionV1 uint16 = 1
 	// DifficultyPolicyVersionActivationConformance is reserved for build-tagged
 	// activation tests. Production builds deliberately reject this version.
 	DifficultyPolicyVersionActivationConformance uint16 = 0xffff
@@ -23,14 +26,15 @@ const (
 	// PassIDEncodedSize stores a compact inscription outpoint: 32-byte txid + 4-byte index.
 	PassIDEncodedSize = common.HashLength + 4
 	// ProfileSelectorPayloadV1Size is the exact UIP-0007 v1 header.Extra size.
-	ProfileSelectorPayloadV1Size = 1 + 2 + 4 + common.HashLength + common.HashLength + PassIDEncodedSize
+	ProfileSelectorPayloadV1Size = 1 + 2 + 4 + 4 + common.HashLength + common.HashLength + PassIDEncodedSize
 
 	payloadVersionOffset          = 0
 	difficultyPolicyVersionOffset = 1
 	btcHeightOffset               = 3
-	snapshotIDOffset              = 7
-	systemStateIDOffset           = 39
-	passIDOffset                  = 71
+	btcAnchorAgeBlocksOffset      = 7
+	snapshotIDOffset              = 11
+	systemStateIDOffset           = 43
+	passIDOffset                  = 75
 )
 
 var (
@@ -59,13 +63,14 @@ type ProfileSelectorPayload struct {
 	PayloadVersion          byte
 	DifficultyPolicyVersion uint16
 	BTCHeight               uint32
+	BTCAnchorAgeBlocks      uint32
 	SnapshotID              common.Hash
 	SystemStateID           common.Hash
 	PassID                  PassID
 }
 
 // NewProfileSelectorPayload converts canonical USDB ids into the compact binary payload format.
-func NewProfileSelectorPayload(difficultyPolicyVersion uint16, btcHeight uint32, snapshotID, systemStateID, passID string) (*ProfileSelectorPayload, error) {
+func NewProfileSelectorPayload(difficultyPolicyVersion uint16, btcHeight, btcAnchorAgeBlocks uint32, snapshotID, systemStateID, passID string) (*ProfileSelectorPayload, error) {
 	snapshotHash, err := parseCanonicalHex32("snapshot_id", snapshotID)
 	if err != nil {
 		return nil, err
@@ -82,6 +87,7 @@ func NewProfileSelectorPayload(difficultyPolicyVersion uint16, btcHeight uint32,
 		PayloadVersion:          ProfileSelectorPayloadVersionV1,
 		DifficultyPolicyVersion: difficultyPolicyVersion,
 		BTCHeight:               btcHeight,
+		BTCAnchorAgeBlocks:      btcAnchorAgeBlocks,
 		SnapshotID:              snapshotHash,
 		SystemStateID:           systemHash,
 		PassID:                  parsedPassID,
@@ -96,7 +102,8 @@ func (p ProfileSelectorPayload) MarshalBinary() ([]byte, error) {
 	output := make([]byte, ProfileSelectorPayloadV1Size)
 	output[payloadVersionOffset] = p.PayloadVersion
 	binary.BigEndian.PutUint16(output[difficultyPolicyVersionOffset:btcHeightOffset], p.DifficultyPolicyVersion)
-	binary.BigEndian.PutUint32(output[btcHeightOffset:snapshotIDOffset], p.BTCHeight)
+	binary.BigEndian.PutUint32(output[btcHeightOffset:btcAnchorAgeBlocksOffset], p.BTCHeight)
+	binary.BigEndian.PutUint32(output[btcAnchorAgeBlocksOffset:snapshotIDOffset], p.BTCAnchorAgeBlocks)
 	copy(output[snapshotIDOffset:systemStateIDOffset], p.SnapshotID[:])
 	copy(output[systemStateIDOffset:passIDOffset], p.SystemStateID[:])
 	passBytes, err := p.PassID.MarshalBinary()
@@ -117,7 +124,8 @@ func (p *ProfileSelectorPayload) UnmarshalBinary(data []byte) error {
 	}
 	p.PayloadVersion = data[payloadVersionOffset]
 	p.DifficultyPolicyVersion = binary.BigEndian.Uint16(data[difficultyPolicyVersionOffset:btcHeightOffset])
-	p.BTCHeight = binary.BigEndian.Uint32(data[btcHeightOffset:snapshotIDOffset])
+	p.BTCHeight = binary.BigEndian.Uint32(data[btcHeightOffset:btcAnchorAgeBlocksOffset])
+	p.BTCAnchorAgeBlocks = binary.BigEndian.Uint32(data[btcAnchorAgeBlocksOffset:snapshotIDOffset])
 	p.SnapshotID = common.BytesToHash(data[snapshotIDOffset:systemStateIDOffset])
 	p.SystemStateID = common.BytesToHash(data[systemStateIDOffset:passIDOffset])
 	return p.PassID.UnmarshalBinary(data[passIDOffset:])

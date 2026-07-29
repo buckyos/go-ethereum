@@ -16,6 +16,7 @@ const (
 	fieldPayloadVersion   = "payload_version"
 	fieldDifficultyPolicy = "difficulty_policy_version"
 	fieldBTCHeight        = "btc_height"
+	fieldBTCAnchorAge     = "btc_anchor_age_blocks"
 	fieldSnapshotID       = "snapshot_id"
 	fieldSystemStateID    = "system_state_id"
 	fieldPassID           = "pass_id"
@@ -44,6 +45,8 @@ func tamperSelector(extra []byte, field string) ([]byte, error) {
 		selector.DifficultyPolicyVersion ^= 0xffff
 	case fieldBTCHeight:
 		selector.BTCHeight ^= 1
+	case fieldBTCAnchorAge:
+		selector.BTCAnchorAgeBlocks ^= 1
 	case fieldSnapshotID:
 		selector.SnapshotID[0] ^= 0xff
 	case fieldSystemStateID:

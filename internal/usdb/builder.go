@@ -74,8 +74,9 @@ func (b *PayloadBuilder) Close() {
 }
 
 // BuildCurrentPayload emits a selector for blockNumber only after resolving its
-// consensus policy and validating the configured pass in current state.
-func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64) (*BuiltProfileSelector, error) {
+// consensus policy, deriving its age from parentExtra, and validating the
+// configured pass in current state.
+func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte) (*BuiltProfileSelector, error) {
 	activation, err := b.chainConfig.USDBActivationAt(blockNumber)
 	if err != nil {
 		return nil, err
@@ -86,6 +87,10 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	policy := &activation.Versions
 	if policy.PayloadVersion != ProfileSelectorPayloadVersionV1 {
 		return nil, fmt.Errorf("%w: chain config expects %d, builder supports %d", ErrProfileSelectorVersion, policy.PayloadVersion, ProfileSelectorPayloadVersionV1)
+	}
+	parentSelector, err := b.parentSelector(blockNumber, parentExtra)
+	if err != nil {
+		return nil, err
 	}
 	btcRegistry, err := loadBTCActivationRegistry(activation.BTCActivationRegistryID)
 	if err != nil {
@@ -114,12 +119,22 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	payload, err := NewProfileSelectorPayload(
 		policy.DifficultyPolicyVersion,
 		systemState.LocalSyncedBlockHeight,
+		0,
 		systemState.UpstreamSnapshotID,
 		systemState.SystemStateID,
 		b.passID.String(),
 	)
 	if err != nil {
 		return nil, err
+	}
+	payload.BTCAnchorAgeBlocks, err = ExpectedBTCAnchorAgeBlocks(
+		parentSelector,
+		*payload,
+		policy.BTCAnchorPolicyVersion,
+		activation.BTCAnchorMaxAgeBlocks,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cannot extend parent BTC anchor: %w", err)
 	}
 	profile, err := resolveConsensusProfile(queryCtx, b.client, btcRegistry, *payload)
 	if err != nil {
@@ -136,6 +151,32 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 		Payload:         encoded,
 		RewardRecipient: profile.RewardRecipient,
 	}, nil
+}
+
+func (b *PayloadBuilder) parentSelector(blockNumber uint64, parentExtra []byte) (*ProfileSelectorPayload, error) {
+	if blockNumber <= 1 {
+		return nil, nil
+	}
+	parentActivation, err := b.chainConfig.USDBActivationAt(blockNumber - 1)
+	if err != nil {
+		return nil, err
+	}
+	if parentActivation == nil {
+		return nil, nil
+	}
+	parentPolicy := &parentActivation.Versions
+	if err := ValidateProfileSelectorPayload(
+		parentExtra,
+		parentPolicy.PayloadVersion,
+		parentPolicy.DifficultyPolicyVersion,
+	); err != nil {
+		return nil, fmt.Errorf("invalid parent usdb profile selector: %w", err)
+	}
+	var parent ProfileSelectorPayload
+	if err := parent.UnmarshalBinary(parentExtra); err != nil {
+		return nil, fmt.Errorf("decode parent usdb profile selector: %w", err)
+	}
+	return &parent, nil
 }
 
 func validateCurrentActivationIdentity(

@@ -121,8 +121,10 @@ var (
 				{
 					Block:                   0,
 					BTCActivationRegistryID: "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d",
+					BTCAnchorMaxAgeBlocks:   USDBDevelopmentBTCAnchorMaxAgeBlocks,
 					Versions: USDBConsensusVersions{
 						PayloadVersion:                       1,
+						BTCAnchorPolicyVersion:               1,
 						DifficultyPolicyVersion:              1,
 						RewardRuleVersion:                    1,
 						CoinbaseEmissionPolicyVersion:        1,
@@ -536,22 +538,24 @@ type USDBConsensusConfig struct {
 }
 
 // USDBConsensusActivation is one complete checkpoint in the USDB activation
-// schedule. It fixes all USDB-chain versions and one immutable BTC registry
-// revision from Block onward. Checkpoints must be strictly ordered and may not
-// share an activation block.
+// schedule. It fixes all USDB-chain versions, one immutable BTC registry
+// revision, and the BTC-anchor age bound from Block onward. Checkpoints must be
+// strictly ordered and may not share an activation block.
 type USDBConsensusActivation struct {
 	Block                   uint64                `json:"block"`
 	BTCActivationRegistryID string                `json:"btcActivationRegistryId"`
+	BTCAnchorMaxAgeBlocks   uint32                `json:"btcAnchorMaxAgeBlocks"`
 	Versions                USDBConsensusVersions `json:"versions"`
 }
 
 // USDBConsensusVersions contains the complete USDB-chain version fields defined
 // by UIP-0008 and UIP-0009. Zero is a development staging value for a family
 // that has not activated; each defining UIP decides whether zero is valid on a
-// final network. Payload and difficulty versions are mandatory for every
-// activation checkpoint.
+// final network. Payload, BTC-anchor, and difficulty versions are mandatory for
+// every activation checkpoint.
 type USDBConsensusVersions struct {
 	PayloadVersion                       uint8  `json:"payloadVersion"`
+	BTCAnchorPolicyVersion               uint16 `json:"btcAnchorPolicyVersion"`
 	DifficultyPolicyVersion              uint16 `json:"difficultyPolicyVersion"`
 	RewardRuleVersion                    uint16 `json:"rewardRuleVersion"`
 	CoinbaseEmissionPolicyVersion        uint16 `json:"coinbaseEmissionPolicyVersion"`
@@ -617,8 +621,10 @@ func (c *ChainConfig) String() string {
 		} else {
 			activation := c.USDB.Activations[0]
 			banner += fmt.Sprintf(
-				"USDB consensus: payload v%d, difficulty policy v%d from block %d (%d activation(s))\n",
+				"USDB consensus: payload v%d, BTC anchor policy v%d/%d blocks, difficulty policy v%d from block %d (%d activation(s))\n",
 				activation.Versions.PayloadVersion,
+				activation.Versions.BTCAnchorPolicyVersion,
+				activation.BTCAnchorMaxAgeBlocks,
 				activation.Versions.DifficultyPolicyVersion,
 				activation.Block,
 				len(c.USDB.Activations),
@@ -901,6 +907,12 @@ func (c *USDBConsensusConfig) validate() error {
 				activation.Block,
 			)
 		}
+		if activation.BTCAnchorMaxAgeBlocks == 0 {
+			return fmt.Errorf(
+				"invalid BTC anchor max age 0 in USDB checkpoint at block %d",
+				activation.Block,
+			)
+		}
 		if err := activation.Versions.validate(activation.Block); err != nil {
 			return err
 		}
@@ -911,6 +923,9 @@ func (c *USDBConsensusConfig) validate() error {
 func (v USDBConsensusVersions) validate(block uint64) error {
 	if v.PayloadVersion == 0 {
 		return fmt.Errorf("invalid USDB payload version 0 at block %d", block)
+	}
+	if v.BTCAnchorPolicyVersion == 0 {
+		return fmt.Errorf("invalid USDB BTC anchor policy version 0 at block %d", block)
 	}
 	if v.DifficultyPolicyVersion == 0 {
 		return fmt.Errorf("invalid USDB difficulty policy version 0 at block %d", block)
@@ -1154,6 +1169,17 @@ func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *Con
 		if storedActivation != nil && storedActivation.BTCActivationRegistryID != updatedActivation.BTCActivationRegistryID {
 			err := newCompatError(
 				"USDB activation checkpoint BTC registry binding",
+				uint64BlockNumber(storedBlock),
+				uint64BlockNumber(updatedBlock),
+			)
+			if block > 0 {
+				err.RewindTo = block - 1
+			}
+			return err
+		}
+		if storedActivation != nil && storedActivation.BTCAnchorMaxAgeBlocks != updatedActivation.BTCAnchorMaxAgeBlocks {
+			err := newCompatError(
+				"USDB activation checkpoint BTC anchor max age",
 				uint64BlockNumber(storedBlock),
 				uint64BlockNumber(updatedBlock),
 			)

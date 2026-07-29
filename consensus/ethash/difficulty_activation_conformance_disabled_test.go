@@ -36,6 +36,7 @@ func TestDefaultBinaryStopsAtActivationConformanceBoundary(t *testing.T) {
 		Time:       1_001,
 		Difficulty: big.NewInt(131_072),
 		GasLimit:   30_000_000,
+		Extra:      newTestPayloadBytes(t),
 	}
 	chain := &stubChainHeaderReader{config: config, header: parent}
 

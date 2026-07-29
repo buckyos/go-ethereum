@@ -161,7 +161,8 @@ func TestUSDBConsensusAtUsesChainConfigVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to resolve built-in USDB policy: %v", err)
 	}
-	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 ||
+	if policy == nil || policy.PayloadVersion != 1 || policy.BTCAnchorPolicyVersion != 1 ||
+		policy.DifficultyPolicyVersion != 1 ||
 		policy.RewardRuleVersion != 1 || policy.CoinbaseEmissionPolicyVersion != 1 ||
 		policy.FeeSplitPolicyVersion != 0 ||
 		policy.CollaborationEfficiencyPolicyVersion != 1 || policy.PricePolicyVersion != 1 ||
@@ -178,6 +179,8 @@ func TestUSDBConsensusAtUsesChainConfigVersions(t *testing.T) {
 		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{BTCActivationRegistryID: strings.Repeat("A", 64), Versions: testUSDBConsensusVersions(1)}}}},
 		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{BTCActivationRegistryID: testBTCActivationRegistryID, Versions: USDBConsensusVersions{DifficultyPolicyVersion: 1}}}}},
 		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{BTCActivationRegistryID: testBTCActivationRegistryID, Versions: USDBConsensusVersions{PayloadVersion: 1}}}}},
+		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{BTCActivationRegistryID: testBTCActivationRegistryID, BTCAnchorMaxAgeBlocks: 10, Versions: USDBConsensusVersions{PayloadVersion: 1, DifficultyPolicyVersion: 1}}}}},
+		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{{BTCActivationRegistryID: testBTCActivationRegistryID, Versions: USDBConsensusVersions{PayloadVersion: 1, BTCAnchorPolicyVersion: 1, DifficultyPolicyVersion: 1}}}}},
 		{USDB: &USDBConsensusConfig{Activations: []USDBConsensusActivation{
 			testUSDBActivation(7, 1),
 			testUSDBActivation(7, 2),
@@ -230,7 +233,9 @@ func TestUSDBConsensusConfigJSONRoundTrip(t *testing.T) {
 	}
 	for _, field := range []string{
 		`"btcActivationRegistryId":"` + testBTCActivationRegistryID + `"`,
+		`"btcAnchorMaxAgeBlocks":6650`,
 		`"activations"`,
+		`"btcAnchorPolicyVersion":1`,
 		`"rewardRuleVersion":1`,
 		`"coinbaseEmissionPolicyVersion":1`,
 		`"feeSplitPolicyVersion":0`,
@@ -251,14 +256,16 @@ func TestUSDBConsensusConfigJSONRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to resolve round-tripped USDB policy: %v", err)
 	}
-	if policy == nil || policy.PayloadVersion != 1 || policy.DifficultyPolicyVersion != 1 {
+	if policy == nil || policy.PayloadVersion != 1 || policy.BTCAnchorPolicyVersion != 1 || policy.DifficultyPolicyVersion != 1 {
 		t.Fatalf("unexpected round-tripped USDB policy: %+v", policy)
 	}
 	activation, err := decoded.USDBActivationAt(19)
-	if err != nil || activation == nil || activation.BTCActivationRegistryID != testBTCActivationRegistryID {
-		t.Fatalf("round-tripped USDB registry binding changed: activation=%+v err=%v", activation, err)
+	if err != nil || activation == nil ||
+		activation.BTCActivationRegistryID != testBTCActivationRegistryID ||
+		activation.BTCAnchorMaxAgeBlocks != USDBDevelopmentBTCAnchorMaxAgeBlocks {
+		t.Fatalf("round-tripped USDB activation checkpoint changed: activation=%+v err=%v", activation, err)
 	}
-	if banner := decoded.String(); !strings.Contains(banner, "USDB consensus: payload v1, difficulty policy v1 from block 0 (1 activation(s))") {
+	if banner := decoded.String(); !strings.Contains(banner, "USDB consensus: payload v1, BTC anchor policy v1/6650 blocks, difficulty policy v1 from block 0 (1 activation(s))") {
 		t.Fatalf("USDB consensus versions missing from chain banner:\n%s", banner)
 	}
 }
@@ -314,11 +321,46 @@ func TestUSDBConsensusCheckCompatible(t *testing.T) {
 		t.Fatalf("genesis registry change returned unexpected compatibility result: %+v", err)
 	}
 
+	changedAnchorAge := &ChainConfig{USDB: &USDBConsensusConfig{
+		Activations: []USDBConsensusActivation{
+			testUSDBActivation(0, 1),
+			testUSDBActivation(100, 2),
+		},
+	}}
+	changedAnchorAge.USDB.Activations[1].BTCAnchorMaxAgeBlocks++
+	if err := stored.CheckCompatible(changedAnchorAge, 99); err != nil {
+		t.Fatalf("future anchor max-age change must remain compatible: %v", err)
+	}
+	if err := stored.CheckCompatible(changedAnchorAge, 100); err == nil || err.What != "USDB activation checkpoint BTC anchor max age" || err.RewindTo != 99 {
+		t.Fatalf("active anchor max-age change returned unexpected compatibility result: %+v", err)
+	}
+
+	changedAnchorPolicy := &ChainConfig{USDB: &USDBConsensusConfig{
+		Activations: []USDBConsensusActivation{
+			testUSDBActivation(0, 1),
+			testUSDBActivation(100, 2),
+		},
+	}}
+	changedAnchorPolicy.USDB.Activations[1].Versions.BTCAnchorPolicyVersion++
+	if err := stored.CheckCompatible(changedAnchorPolicy, 100); err == nil || err.What != "USDB activation checkpoint versions" || err.RewindTo != 99 {
+		t.Fatalf("active anchor-policy change returned unexpected compatibility result: %+v", err)
+	}
+
 	futureRegistry := &ChainConfig{USDB: &USDBConsensusConfig{
-		Activations: []USDBConsensusActivation{{Block: 100, BTCActivationRegistryID: strings.Repeat("b", 64), Versions: testUSDBConsensusVersions(1)}},
+		Activations: []USDBConsensusActivation{{
+			Block:                   100,
+			BTCActivationRegistryID: strings.Repeat("b", 64),
+			BTCAnchorMaxAgeBlocks:   USDBDevelopmentBTCAnchorMaxAgeBlocks,
+			Versions:                testUSDBConsensusVersions(1),
+		}},
 	}}
 	futureRegistryChanged := &ChainConfig{USDB: &USDBConsensusConfig{
-		Activations: []USDBConsensusActivation{{Block: 100, BTCActivationRegistryID: strings.Repeat("c", 64), Versions: testUSDBConsensusVersions(1)}},
+		Activations: []USDBConsensusActivation{{
+			Block:                   100,
+			BTCActivationRegistryID: strings.Repeat("c", 64),
+			BTCAnchorMaxAgeBlocks:   USDBDevelopmentBTCAnchorMaxAgeBlocks,
+			Versions:                testUSDBConsensusVersions(1),
+		}},
 	}}
 	if err := futureRegistry.CheckCompatible(futureRegistryChanged, 99); err != nil {
 		t.Fatalf("future registry binding change must remain compatible: %v", err)
@@ -349,6 +391,7 @@ func testUSDBActivation(block uint64, version uint16) USDBConsensusActivation {
 	return USDBConsensusActivation{
 		Block:                   block,
 		BTCActivationRegistryID: testBTCActivationRegistryID,
+		BTCAnchorMaxAgeBlocks:   USDBDevelopmentBTCAnchorMaxAgeBlocks,
 		Versions:                testUSDBConsensusVersions(version),
 	}
 }
@@ -356,6 +399,7 @@ func testUSDBActivation(block uint64, version uint16) USDBConsensusActivation {
 func testUSDBConsensusVersions(version uint16) USDBConsensusVersions {
 	return USDBConsensusVersions{
 		PayloadVersion:                       1,
+		BTCAnchorPolicyVersion:               1,
 		DifficultyPolicyVersion:              version,
 		RewardRuleVersion:                    1,
 		CoinbaseEmissionPolicyVersion:        1,

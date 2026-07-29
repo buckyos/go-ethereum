@@ -40,6 +40,7 @@ def main():
         {
             "block": args.activation_block,
             "btcActivationRegistryId": BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID,
+            "btcAnchorMaxAgeBlocks": activations[0]["btcAnchorMaxAgeBlocks"],
             "versions": versions,
         }
     )

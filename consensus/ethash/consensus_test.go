@@ -338,6 +338,7 @@ func newTestPayloadBytesForDifficultyVersion(t *testing.T, difficultyPolicyVersi
 	payload, err := usdb.NewProfileSelectorPayload(
 		difficultyPolicyVersion,
 		123,
+		0,
 		common.HexToHash("0x1111").Hex()[2:],
 		common.HexToHash("0x2222").Hex()[2:],
 		common.HexToHash("0x3333").Hex()[2:]+"i7",
@@ -358,8 +359,10 @@ func newTestUSDBChainConfig() *params.ChainConfig {
 		USDB: &params.USDBConsensusConfig{
 			Activations: []params.USDBConsensusActivation{{
 				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+					BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
 					DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
 				},
 			}},
@@ -455,13 +458,189 @@ func TestVerifyHeaderValidatesUsdbProfileSelectorBeforeResolution(t *testing.T) 
 	}
 }
 
+func TestVerifyHeaderKeepsLegacyExtraLimitBeforeUSDBActivation(t *testing.T) {
+	config := newTestUSDBChainConfig()
+	config.USDB.Activations[0].Block = 10
+	parent := &types.Header{
+		Number:     big.NewInt(0),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+	}
+	header := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1_001,
+		Difficulty: CalcDifficulty(config, 1_001, parent),
+		GasLimit:   parent.GasLimit,
+		Extra:      make([]byte, params.MaximumExtraDataSize+1),
+	}
+	err := (&Ethash{}).verifyHeader(
+		&stubChainHeaderReader{config: config},
+		header,
+		parent,
+		false,
+		false,
+		2_000,
+	)
+	if err == nil || !strings.Contains(err.Error(), "extra-data too long: 33 > 32") {
+		t.Fatalf("legacy oversized extra returned %v", err)
+	}
+}
+
+func TestVerifyHeaderEnforcesBTCAnchorParentTransitionBeforeResolution(t *testing.T) {
+	config := newTestUSDBChainConfig()
+	config.USDB.Activations[0].BTCAnchorMaxAgeBlocks = 2
+	chain := &stubChainHeaderReader{config: config}
+	parent := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+		Extra:      newTestPayloadBytes(t),
+	}
+	newHeader := func(selector usdb.ProfileSelectorPayload) *types.Header {
+		extra, err := selector.MarshalBinary()
+		if err != nil {
+			t.Fatalf("encode child selector: %v", err)
+		}
+		return &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     big.NewInt(2),
+			Time:       1_001,
+			Difficulty: CalcDifficulty(config, 1_001, parent),
+			GasLimit:   parent.GasLimit,
+			Extra:      extra,
+		}
+	}
+	var parentSelector usdb.ProfileSelectorPayload
+	if err := parentSelector.UnmarshalBinary(parent.Extra); err != nil {
+		t.Fatalf("decode parent selector: %v", err)
+	}
+	valid := parentSelector
+	valid.BTCAnchorAgeBlocks = 1
+
+	resolver := &stubProfileResolver{resolved: newTestUSDBDifficultyProfile(0)}
+	engine := &Ethash{usdbProfileResolver: resolver}
+	if err := engine.verifyHeader(chain, newHeader(valid), parent, false, false, 2_000); err != nil {
+		t.Fatalf("valid same-anchor transition rejected: %v", err)
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("valid transition resolved profile %d times, want 1", resolver.calls)
+	}
+
+	tests := []struct {
+		name    string
+		child   usdb.ProfileSelectorPayload
+		wantErr error
+	}{
+		{
+			name:    "counter does not increment",
+			child:   parentSelector,
+			wantErr: usdb.ErrBTCAnchorAgeMismatch,
+		},
+		{
+			name: "height regresses",
+			child: func() usdb.ProfileSelectorPayload {
+				child := parentSelector
+				child.BTCHeight--
+				return child
+			}(),
+			wantErr: usdb.ErrBTCAnchorHeightRegression,
+		},
+		{
+			name: "same height identity changes",
+			child: func() usdb.ProfileSelectorPayload {
+				child := valid
+				child.SnapshotID[0] ^= 0xff
+				return child
+			}(),
+			wantErr: usdb.ErrBTCAnchorIdentityMismatch,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := resolver.calls
+			if err := engine.verifyHeader(chain, newHeader(test.child), parent, false, false, 2_000); !errors.Is(err, test.wantErr) {
+				t.Fatalf("expected %v, got %v", test.wantErr, err)
+			}
+			if resolver.calls != calls {
+				t.Fatal("invalid anchor transition reached the profile resolver")
+			}
+		})
+	}
+
+	parentSelector.BTCAnchorAgeBlocks = 2
+	parent.Extra, _ = parentSelector.MarshalBinary()
+	overLimit := parentSelector
+	overLimit.BTCAnchorAgeBlocks = 3
+	calls := resolver.calls
+	if err := engine.verifyHeader(chain, newHeader(overLimit), parent, false, false, 2_000); !errors.Is(err, usdb.ErrBTCAnchorAgeExceeded) {
+		t.Fatalf("expected max-age error, got %v", err)
+	}
+	if resolver.calls != calls {
+		t.Fatal("over-age selector reached the profile resolver")
+	}
+
+	advanced := parentSelector
+	advanced.BTCHeight++
+	advanced.BTCAnchorAgeBlocks = 0
+	if err := engine.verifyHeader(chain, newHeader(advanced), parent, false, false, 2_000); err != nil {
+		t.Fatalf("higher BTC anchor did not reset age: %v", err)
+	}
+}
+
+func TestVerifyHeaderRequiresZeroBTCAnchorAgeAtFirstActiveBlock(t *testing.T) {
+	config := newTestUSDBChainConfig()
+	config.USDB.Activations[0].Block = 2
+	parent := &types.Header{
+		Number:     big.NewInt(1),
+		Time:       1_000,
+		Difficulty: big.NewInt(131_072),
+		GasLimit:   30_000_000,
+	}
+	var selector usdb.ProfileSelectorPayload
+	if err := selector.UnmarshalBinary(newTestPayloadBytes(t)); err != nil {
+		t.Fatalf("decode selector: %v", err)
+	}
+	selector.BTCAnchorAgeBlocks = 1
+	extra, err := selector.MarshalBinary()
+	if err != nil {
+		t.Fatalf("encode selector: %v", err)
+	}
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     big.NewInt(2),
+		Time:       1_001,
+		Difficulty: CalcDifficulty(config, 1_001, parent),
+		GasLimit:   parent.GasLimit,
+		Extra:      extra,
+	}
+	resolver := &stubProfileResolver{resolved: newTestUSDBDifficultyProfile(0)}
+	engine := &Ethash{usdbProfileResolver: resolver}
+	if err := engine.verifyHeader(
+		&stubChainHeaderReader{config: config},
+		header,
+		parent,
+		false,
+		false,
+		2_000,
+	); !errors.Is(err, usdb.ErrBTCAnchorAgeMismatch) {
+		t.Fatalf("expected first-active age error, got %v", err)
+	}
+	if resolver.calls != 0 {
+		t.Fatal("invalid first-active age reached the profile resolver")
+	}
+}
+
 func TestVerifyHeaderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 	config := newTestUSDBChainConfig()
 	config.USDB.Activations = append(config.USDB.Activations, params.USDBConsensusActivation{
 		Block:                   2,
 		BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+		BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 		Versions: params.USDBConsensusVersions{
 			PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+			BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
 			DifficultyPolicyVersion: 2,
 		},
 	})

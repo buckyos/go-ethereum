@@ -43,8 +43,10 @@ func newUSDBFeeTestConfig(policy uint16, splitBlock uint64, dividend common.Addr
 		DividendCodeHash:      codeHash,
 		USDB: &params.USDBConsensusConfig{Activations: []params.USDBConsensusActivation{{
 			BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+			BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 			Versions: params.USDBConsensusVersions{
 				PayloadVersion:                       usdb.ProfileSelectorPayloadVersionV1,
+				BTCAnchorPolicyVersion:               usdb.BTCAnchorPolicyVersionV1,
 				DifficultyPolicyVersion:              usdb.DifficultyPolicyVersionV1,
 				RewardRuleVersion:                    usdb.RewardRuleVersionV1,
 				CoinbaseEmissionPolicyVersion:        usdb.CoinbaseEmissionPolicyVersionV1,

@@ -5,7 +5,8 @@ import json
 import urllib.request
 
 
-PAYLOAD_SIZE = 107
+PAYLOAD_SIZE = 111
+BTC_ANCHOR_MAX_AGE_BLOCKS = 6_650
 VIEW_VERSION = "uip-0006-usdb-economic-state-view:v1"
 BTC_REGTEST_ACTIVATION_REGISTRY_ID = (
     "22d820e6ec242b61f63473f279c41a4103af5cff13206b1925fd415cceaaf83d"
@@ -258,17 +259,53 @@ def decode_selector(block):
         raise SystemExit(f"unexpected payload version at block {number}: {payload[0]}")
     difficulty_policy_version = int.from_bytes(payload[1:3], "big")
     btc_height = int.from_bytes(payload[3:7], "big")
-    snapshot_id = payload[7:39].hex()
-    system_state_id = payload[39:71].hex()
-    pass_txid = payload[71:103].hex()
-    pass_index = int.from_bytes(payload[103:107], "big")
+    btc_anchor_age_blocks = int.from_bytes(payload[7:11], "big")
+    snapshot_id = payload[11:43].hex()
+    system_state_id = payload[43:75].hex()
+    pass_txid = payload[75:107].hex()
+    pass_index = int.from_bytes(payload[107:111], "big")
     return {
         "btc_height": btc_height,
+        "btc_anchor_age_blocks": btc_anchor_age_blocks,
         "snapshot_id": snapshot_id,
         "system_state_id": system_state_id,
         "pass_id": f"{pass_txid}i{pass_index}",
         "difficulty_policy_version": difficulty_policy_version,
     }
+
+
+def validate_selector_transition(parent, selector, number, max_age_blocks):
+    if int(parent["number"], 16) == 0:
+        expected_age = 0
+    else:
+        parent_selector = decode_selector(parent)
+        if selector["btc_height"] < parent_selector["btc_height"]:
+            raise SystemExit(
+                f"BTC anchor height regressed at block {number}: "
+                f"parent {parent_selector['btc_height']} "
+                f"child {selector['btc_height']}"
+            )
+        if selector["btc_height"] > parent_selector["btc_height"]:
+            expected_age = 0
+        else:
+            if (
+                selector["snapshot_id"] != parent_selector["snapshot_id"]
+                or selector["system_state_id"] != parent_selector["system_state_id"]
+            ):
+                raise SystemExit(
+                    f"same-height BTC anchor identity changed at block {number}"
+                )
+            expected_age = parent_selector["btc_anchor_age_blocks"] + 1
+    if selector["btc_anchor_age_blocks"] != expected_age:
+        raise SystemExit(
+            f"BTC anchor age mismatch at block {number}: "
+            f"have {selector['btc_anchor_age_blocks']} want {expected_age}"
+        )
+    if expected_age > max_age_blocks:
+        raise SystemExit(
+            f"BTC anchor age exceeded at block {number}: "
+            f"have {expected_age} maximum {max_age_blocks}"
+        )
 
 
 def resolve_profile(
@@ -435,10 +472,17 @@ def main():
         default=BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID,
     )
     parser.add_argument("--expected-pass-id")
+    parser.add_argument(
+        "--btc-anchor-max-age-blocks",
+        type=int,
+        default=BTC_ANCHOR_MAX_AGE_BLOCKS,
+    )
     parser.add_argument("--stage1-end", type=int)
     parser.add_argument("--initial-raw-energy", type=int)
     parser.add_argument("--boosted-raw-energy", type=int)
     args = parser.parse_args()
+    if args.btc_anchor_max_age_blocks <= 0:
+        raise SystemExit("--btc-anchor-max-age-blocks must be positive")
     economic_conformance = (
         args.economic_conformance_v2_block is not None
         or args.economic_conformance_v3_block is not None
@@ -583,6 +627,12 @@ def main():
             raise SystemExit(f"USDB reward v1 requires empty uncles at block {number}")
 
         selector = decode_selector(block)
+        validate_selector_transition(
+            parent,
+            selector,
+            number,
+            args.btc_anchor_max_age_blocks,
+        )
         expected_policy_version = 1
         expected_registry_id = args.expected_activation_registry_id
         if (
@@ -836,6 +886,7 @@ def main():
                 {
                     "eth_block": number,
                     "btc_height": selector["btc_height"],
+                    "btc_anchor_age_blocks": selector["btc_anchor_age_blocks"],
                     "pass_id": selector["pass_id"],
                     "raw_energy": raw,
                     "collab_contribution": contribution,

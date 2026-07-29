@@ -16,16 +16,20 @@ func newActivationConformanceTestChainConfig(activationBlock uint64) *params.Cha
 			{
 				Block:                   0,
 				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+					BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
 					DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
 				},
 			},
 			{
 				Block:                   activationBlock,
 				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDRevision2,
+				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+					BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
 					DifficultyPolicyVersion: usdb.DifficultyPolicyVersionActivationConformance,
 				},
 			},
@@ -35,12 +39,28 @@ func newActivationConformanceTestChainConfig(activationBlock uint64) *params.Cha
 
 func newActivationConformanceTestHeader(t *testing.T, parent *types.Header, number uint64, difficultyPolicyVersion uint16, timestamp uint64) *types.Header {
 	t.Helper()
+	extra := newTestPayloadBytesForDifficultyVersion(t, difficultyPolicyVersion)
+	if parent.Number.Sign() > 0 {
+		var parentSelector, childSelector usdb.ProfileSelectorPayload
+		if err := parentSelector.UnmarshalBinary(parent.Extra); err != nil {
+			t.Fatalf("decode parent selector: %v", err)
+		}
+		if err := childSelector.UnmarshalBinary(extra); err != nil {
+			t.Fatalf("decode child selector: %v", err)
+		}
+		childSelector.BTCAnchorAgeBlocks = parentSelector.BTCAnchorAgeBlocks + 1
+		var err error
+		extra, err = childSelector.MarshalBinary()
+		if err != nil {
+			t.Fatalf("encode child selector: %v", err)
+		}
+	}
 	return &types.Header{
 		ParentHash: parent.Hash(),
 		Number:     new(big.Int).SetUint64(number),
 		Time:       timestamp,
 		GasLimit:   parent.GasLimit,
-		Extra:      newTestPayloadBytesForDifficultyVersion(t, difficultyPolicyVersion),
+		Extra:      extra,
 	}
 }
 
