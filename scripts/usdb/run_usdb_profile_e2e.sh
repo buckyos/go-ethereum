@@ -27,7 +27,10 @@ ECONOMIC_CONFORMANCE_V3_BLOCK=${ECONOMIC_CONFORMANCE_V3_BLOCK:-}
 INDEXER_OUTAGE_CHECK=${INDEXER_OUTAGE_CHECK:-0}
 SELECTOR_TAMPER_CHECK=${SELECTOR_TAMPER_CHECK:-0}
 ACTIVATION_FRESH_VALIDATOR_CHECK=${ACTIVATION_FRESH_VALIDATOR_CHECK:-0}
+ANCHOR_BOUNDARY_CHECK=${ANCHOR_BOUNDARY_CHECK:-0}
 OUTAGE_OBSERVE_SECONDS=${OUTAGE_OBSERVE_SECONDS:-4}
+ANCHOR_BOUNDARY_OBSERVE_SECONDS=${ANCHOR_BOUNDARY_OBSERVE_SECONDS:-4}
+BTC_ANCHOR_MAX_AGE_BLOCKS=${BTC_ANCHOR_MAX_AGE_BLOCKS:-6650}
 USDB_QUERY_TIMEOUT=${USDB_QUERY_TIMEOUT:-1s}
 USDB_CHAIN_GCMODE=${USDB_CHAIN_GCMODE:-archive}
 USDB_CHAIN_MINER_THREADS=${USDB_CHAIN_MINER_THREADS:-1}
@@ -141,7 +144,9 @@ usdb_chain_rpc_call_url() {
 }
 
 usdb_chain_validator_required() {
-  [[ "$INDEXER_OUTAGE_CHECK" == "1" || "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]]
+  [[ "$INDEXER_OUTAGE_CHECK" == "1" ||
+    "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ||
+    "$ANCHOR_BOUNDARY_CHECK" == "1" ]]
 }
 
 usdb_chain_economic_conformance_enabled() {
@@ -231,8 +236,12 @@ usdb_chain_start_node() {
   shift
   local -a command=("$@")
   local max_peers=0
+  local http_apis="eth,net,web3,admin,miner,txpool"
   if usdb_chain_validator_required; then
     max_peers=10
+  fi
+  if [[ "$ANCHOR_BOUNDARY_CHECK" == "1" ]]; then
+    http_apis="${http_apis},debug"
   fi
   if [[ "$append_log" != "true" ]]; then
     : >"$GETH_LOG_FILE"
@@ -246,7 +255,7 @@ usdb_chain_start_node() {
       --http \
       --http.addr "$HTTP_ADDR" \
       --http.port "$HTTP_PORT" \
-      --http.api eth,net,web3,admin,miner,txpool \
+      --http.api "$http_apis" \
       --authrpc.addr "$HTTP_ADDR" \
       --authrpc.port "$AUTHRPC_PORT" \
       --port "$P2P_PORT" \
@@ -420,6 +429,193 @@ usdb_chain_wait_log_pattern() {
   return 1
 }
 
+usdb_chain_block_summary() {
+  local block_height="$1"
+  local response
+  response="$(usdb_chain_rpc_call "eth_getBlockByNumber" "[$(printf '\"0x%x\"' "$block_height"), false]")"
+  printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+envelope = json.load(sys.stdin)
+if envelope.get("error"):
+    raise SystemExit("eth_getBlockByNumber failed: " + json.dumps(envelope["error"], sort_keys=True))
+block = envelope.get("result")
+if block is None:
+    raise SystemExit("missing requested USDB block")
+extra = bytes.fromhex((block.get("extraData") or "0x")[2:])
+if len(extra) != 111:
+    raise SystemExit(f"unexpected USDB selector size: {len(extra)}")
+btc_height = int.from_bytes(extra[3:7], "big")
+anchor_age = int.from_bytes(extra[7:11], "big")
+timestamp = int(block["timestamp"], 16)
+print("|".join([
+    block["hash"],
+    block["parentHash"],
+    str(timestamp),
+    str(btc_height),
+    str(anchor_age),
+]))'
+}
+
+usdb_chain_assert_anchor_block() {
+  local block_height="$1"
+  local expected_btc_height="$2"
+  local expected_anchor_age="$3"
+  local summary block_hash parent_hash timestamp btc_height anchor_age
+
+  summary="$(usdb_chain_block_summary "$block_height")"
+  IFS='|' read -r block_hash parent_hash timestamp btc_height anchor_age <<<"$summary"
+  if [[ "$btc_height" != "$expected_btc_height" || "$anchor_age" != "$expected_anchor_age" ]]; then
+    echo "Unexpected anchor selector at USDB block ${block_height}: btc_height=${btc_height}, age=${anchor_age}, want btc_height=${expected_btc_height}, age=${expected_anchor_age}" >&2
+    return 1
+  fi
+  ANCHOR_ASSERTED_BLOCK_HASH="$block_hash"
+  ANCHOR_ASSERTED_BLOCK_TIMESTAMP="$timestamp"
+  usdb_chain_log "Anchor block ${block_height}: btc_height=${btc_height}, age=${anchor_age}, hash=${block_hash}, parent=${parent_hash}"
+}
+
+usdb_chain_wait_exact_height() {
+  local expected_height="$1"
+  local actual_height
+  actual_height="$(usdb_chain_wait_block_height "$expected_height")"
+  if (( actual_height != expected_height )); then
+    echo "USDB chain crossed anchor boundary: have ${actual_height}, want ${expected_height}" >&2
+    return 1
+  fi
+}
+
+usdb_chain_assert_height_stalled() {
+  local expected_height="$1"
+  local before_height after_height
+
+  before_height="$(usdb_chain_current_height)"
+  if (( before_height != expected_height )); then
+    echo "USDB chain was not at the expected anchor boundary: have ${before_height}, want ${expected_height}" >&2
+    return 1
+  fi
+  sleep "$ANCHOR_BOUNDARY_OBSERVE_SECONDS"
+  after_height="$(usdb_chain_current_height)"
+  if (( after_height != expected_height )); then
+    echo "USDB chain mined max+1 with a stale BTC anchor: ${before_height} -> ${after_height}" >&2
+    return 1
+  fi
+  usdb_chain_log "USDB mining remained stopped at height=${expected_height} for ${ANCHOR_BOUNDARY_OBSERVE_SECONDS}s"
+}
+
+usdb_chain_advance_btc_stable_height() {
+  local mining_address="$1"
+  local expected_context_height="$2"
+  local system_state_resp
+
+  regtest_log "Mining one BTC block to advance the stable context to height=${expected_context_height}"
+  regtest_mine_blocks 1 "$mining_address"
+  regtest_wait_until_ord_server_synced_to_bitcoind
+  regtest_wait_until_balance_history_synced_eq "$expected_context_height"
+  regtest_wait_balance_history_consensus_ready
+  regtest_wait_until_usdb_synced_eq "$expected_context_height"
+  regtest_wait_usdb_consensus_ready
+
+  system_state_resp="$(regtest_rpc_call_usdb_indexer "get_system_state_info" "[]")"
+  regtest_assert_json_expr "$system_state_resp" "data.get('error') is None" "True"
+  regtest_assert_json_expr \
+    "$system_state_resp" \
+    "(data.get('result') or {}).get('local_synced_block_height')" \
+    "$expected_context_height"
+}
+
+usdb_chain_set_head() {
+  local block_height="$1"
+  local response
+  response="$(usdb_chain_rpc_call "debug_setHead" "[$(printf '\"0x%x\"' "$block_height")]")"
+  printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+envelope = json.load(sys.stdin)
+if envelope.get("error"):
+    raise SystemExit("debug_setHead failed: " + json.dumps(envelope["error"], sort_keys=True))
+if "result" not in envelope:
+    raise SystemExit("debug_setHead response is missing result")'
+}
+
+usdb_chain_wait_after_timestamp() {
+  local minimum_timestamp="$1"
+  local deadline=$((SECONDS + RPC_WAIT_SECONDS))
+  local now
+
+  while (( SECONDS < deadline )); do
+    now="$(date +%s)"
+    if (( now > minimum_timestamp )); then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for wall clock to pass USDB branch timestamp ${minimum_timestamp}" >&2
+  return 1
+}
+
+run_anchor_boundary_check() {
+  local mining_address="$1"
+  local initial_btc_height="$2"
+  local max_age="$BTC_ANCHOR_MAX_AGE_BLOCKS"
+  local first_segment_end=$((max_age + 1))
+  local second_segment_start=$((first_segment_end + 1))
+  local second_segment_end=$((second_segment_start + max_age))
+  local replacement_first_height=$((second_segment_start + 1))
+  local advanced_btc_height=$((initial_btc_height + 1))
+  local old_branch_hash new_branch_hash rewind_parent_timestamp rewound_height
+  local validator_rpc="http://${VALIDATOR_HTTP_ADDR}:${VALIDATOR_HTTP_PORT}"
+
+  usdb_chain_log "Waiting for exact max-age boundary: max=${max_age}, expected_head=${first_segment_end}"
+  usdb_chain_wait_exact_height "$first_segment_end"
+  usdb_chain_assert_anchor_block 1 "$initial_btc_height" 0
+  usdb_chain_assert_anchor_block "$first_segment_end" "$initial_btc_height" "$max_age"
+  usdb_chain_assert_height_stalled "$first_segment_end"
+
+  usdb_chain_advance_btc_stable_height "$mining_address" "$advanced_btc_height"
+  usdb_chain_wait_exact_height "$second_segment_end"
+  usdb_chain_assert_anchor_block "$second_segment_start" "$advanced_btc_height" 0
+  usdb_chain_assert_anchor_block "$replacement_first_height" "$advanced_btc_height" 1
+  old_branch_hash="$ANCHOR_ASSERTED_BLOCK_HASH"
+  usdb_chain_assert_anchor_block "$second_segment_end" "$advanced_btc_height" "$max_age"
+  usdb_chain_assert_height_stalled "$second_segment_end"
+
+  usdb_chain_log "Rewinding USDB canonical head to block ${second_segment_start} for branch replacement"
+  usdb_chain_stop_mining
+  sleep 1
+  usdb_chain_set_head "$second_segment_start"
+  rewound_height="$(usdb_chain_current_height)"
+  if (( rewound_height != second_segment_start )); then
+    echo "debug_setHead did not rewind to ${second_segment_start}: have ${rewound_height}" >&2
+    return 1
+  fi
+  usdb_chain_assert_anchor_block "$second_segment_start" "$advanced_btc_height" 0
+  rewind_parent_timestamp="$ANCHOR_ASSERTED_BLOCK_TIMESTAMP"
+  usdb_chain_wait_after_timestamp "$((rewind_parent_timestamp + 1))"
+
+  usdb_chain_start_mining
+  usdb_chain_wait_exact_height "$second_segment_end"
+  usdb_chain_assert_anchor_block "$replacement_first_height" "$advanced_btc_height" 1
+  new_branch_hash="$ANCHOR_ASSERTED_BLOCK_HASH"
+  if [[ "$new_branch_hash" == "$old_branch_hash" ]]; then
+    echo "USDB branch replacement reproduced the original block hash ${old_branch_hash}" >&2
+    return 1
+  fi
+  usdb_chain_assert_anchor_block "$second_segment_end" "$advanced_btc_height" "$max_age"
+  usdb_chain_assert_height_stalled "$second_segment_end"
+
+  usdb_chain_log "Starting fresh validator against the replacement USDB branch"
+  usdb_chain_start_validator
+  usdb_chain_wait_rpc_url_ready "$validator_rpc"
+  usdb_chain_connect_validator
+  usdb_chain_assert_validator_synced "$second_segment_end"
+  usdb_chain_stop_validator
+
+  ANCHOR_BOUNDARY_FINAL_HEIGHT="$second_segment_end"
+  usdb_chain_log "Anchor boundary check succeeded: old_branch=${old_branch_hash}, replacement_branch=${new_branch_hash}"
+}
+
 usdb_chain_stop_residual_nodes() {
   while IFS= read -r pid; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -502,6 +698,7 @@ verify_profile_blocks() {
     --usdb-chain-rpc-url "http://${HTTP_ADDR}:${HTTP_PORT}" \
     --usdb-indexer-rpc-url "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
     --expected-pass-id "$expected_pass_id" \
+    --btc-anchor-max-age-blocks "$BTC_ANCHOR_MAX_AGE_BLOCKS" \
     "${activation_args[@]}"
 }
 
@@ -704,12 +901,42 @@ main() {
       exit 1
     fi
   fi
-  for check_name in INDEXER_OUTAGE_CHECK SELECTOR_TAMPER_CHECK ACTIVATION_FRESH_VALIDATOR_CHECK; do
+  for check_name in \
+    INDEXER_OUTAGE_CHECK \
+    SELECTOR_TAMPER_CHECK \
+    ACTIVATION_FRESH_VALIDATOR_CHECK \
+    ANCHOR_BOUNDARY_CHECK; do
     if [[ "${!check_name}" != "0" && "${!check_name}" != "1" ]]; then
       echo "${check_name} must be 0 or 1" >&2
       exit 1
     fi
   done
+  if [[ ! "$BTC_ANCHOR_MAX_AGE_BLOCKS" =~ ^[0-9]+$ ]] ||
+    (( BTC_ANCHOR_MAX_AGE_BLOCKS == 0 || BTC_ANCHOR_MAX_AGE_BLOCKS > 4294967295 )); then
+    echo "BTC_ANCHOR_MAX_AGE_BLOCKS must fit one positive uint32" >&2
+    exit 1
+  fi
+  if [[ ! "$ANCHOR_BOUNDARY_OBSERVE_SECONDS" =~ ^[0-9]+$ ]] ||
+    (( ANCHOR_BOUNDARY_OBSERVE_SECONDS <= 0 )); then
+    echo "ANCHOR_BOUNDARY_OBSERVE_SECONDS must be positive" >&2
+    exit 1
+  fi
+  if [[ "$ANCHOR_BOUNDARY_CHECK" == "1" ]]; then
+    if (( BTC_ANCHOR_MAX_AGE_BLOCKS < 2 )); then
+      echo "ANCHOR_BOUNDARY_CHECK requires BTC_ANCHOR_MAX_AGE_BLOCKS >= 2" >&2
+      exit 1
+    fi
+    if [[ "$INDEXER_OUTAGE_CHECK" == "1" ||
+      "$SELECTOR_TAMPER_CHECK" == "1" ||
+      "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ||
+      -n "$ACTIVATION_CONFORMANCE_BLOCK" ||
+      -n "$ECONOMIC_CONFORMANCE_V2_BLOCK" ||
+      -n "$ECONOMIC_CONFORMANCE_V3_BLOCK" ||
+      -n "$POW_CALIBRATION_PROFILE" ]]; then
+      echo "ANCHOR_BOUNDARY_CHECK must run without other conformance/failure/calibration modes" >&2
+      exit 1
+    fi
+  fi
   if [[ "$INDEXER_OUTAGE_CHECK" == "1" ]] &&
     { [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]] || usdb_chain_economic_conformance_enabled; }; then
     echo "INDEXER_OUTAGE_CHECK cannot be combined with activation conformance" >&2
@@ -837,6 +1064,10 @@ EOF
 
   usdb_chain_log "Generating canonical USDB genesis"
   run_geth dumpgenesis --usdb >"$GENESIS_JSON"
+  usdb_chain_log "Configuring development BTC anchor max age=${BTC_ANCHOR_MAX_AGE_BLOCKS}"
+  python3 "$ROOT_DIR/scripts/usdb/configure_usdb_anchor_max_age_genesis.py" \
+    --genesis "$GENESIS_JSON" \
+    --max-age-blocks "$BTC_ANCHOR_MAX_AGE_BLOCKS"
   if [[ -n "$POW_CALIBRATION_PROFILE" ]]; then
     usdb_chain_log "Applying PoW calibration difficulty: genesis=${POW_CALIBRATION_GENESIS_DIFFICULTY}, minimum=${POW_CALIBRATION_MINIMUM_DIFFICULTY}"
     python3 "$ROOT_DIR/scripts/usdb/configure_usdb_pow_calibration_genesis.py" \
@@ -922,7 +1153,10 @@ EOF
     usdb_chain_start_node false "${GETH_CMD[@]}"
     usdb_chain_wait_rpc_ready
   fi
-  if [[ "$INDEXER_OUTAGE_CHECK" == "1" ]]; then
+  if [[ "$ANCHOR_BOUNDARY_CHECK" == "1" ]]; then
+    run_anchor_boundary_check "$miner_btc_address" "$current_context_height"
+    final_block_height="$ANCHOR_BOUNDARY_FINAL_HEIGHT"
+  elif [[ "$INDEXER_OUTAGE_CHECK" == "1" ]]; then
     usdb_chain_wait_block_height 1 >/dev/null
     run_indexer_outage_recovery_check
     final_block_height="$OUTAGE_RECOVERY_HEIGHT"

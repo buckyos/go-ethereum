@@ -117,6 +117,28 @@ For every mined block the common validator checks:
 - Replays old selectors against their committed historical state rather than the
   new BTC head.
 
+### BTC Anchor Max-Age and USDB Branch Replacement
+
+`scripts/usdb/run_usdb_profile_anchor_boundary_e2e.sh`
+
+- Rewrites only the isolated test genesis anchor limit to `3`; production and
+  built-in development parameters are unchanged.
+- Accepts selector ages `0..3`, then requires the max+1 candidate to stop
+  mining while the canonical head remains unchanged.
+- Advances the BTC stable context by one block and requires the next selector
+  to reset to age `0` without restarting geth.
+- Repeats the exact-max/max+1 boundary after the reset.
+- Uses `debug_setHead` to replace the age `1..3` USDB suffix, requires the
+  replacement block hashes to differ, and verifies that age is recomputed from
+  the retained age-0 parent.
+- Starts a fresh validator against the replacement branch and runs the common
+  profile, difficulty, reward, and system-state verifier across the final
+  chain.
+
+This is a deterministic branch-accounting test, not a public-network USDB reorg
+coordination policy. It proves parent-derived anchor age and validator replay
+on the selected canonical branch.
+
 ### Same-Height BTC State Replacement
 
 `scripts/usdb/run_usdb_profile_same_height_replacement_e2e.sh`
@@ -230,6 +252,27 @@ geth binary and BTC-side services completed:
 - The normal and `usdb_activation_conformance` Go regression suites passed for
   `internal/usdb`, `consensus/ethash`, `miner`, `params`, `cmd/utils`,
   `cmd/geth`, and `scripts/usdb`.
+
+## Latest Anchor Boundary Execution
+
+On 2026-07-29, an isolated anchor-boundary run used test-only
+`btcAnchorMaxAgeBlocks = 3` and completed this selector sequence:
+
+- BTC stable height `142`: USDB ages `0,1,2,3`; the max+1 candidate remained
+  rejected for the observation window.
+- BTC stable height advanced to `143`: the next USDB block reset to age `0`,
+  followed by ages `1,2,3`; the second max+1 candidate was also rejected.
+- The canonical USDB head was rewound from block `8` to block `5`. Remined
+  blocks `6..8` had different hashes and recomputed ages `1..3`.
+- A fresh validator synchronized the replacement block-8 head, and the common
+  verifier independently replayed all eight selectors and economic-state
+  transitions.
+
+The first run exposed that geth did not retry a failed USDB work build when only
+the external BTC stable state changed. The worker now retains a retry flag only
+after a USDB work-build failure, polls on the existing recommit interval, and
+clears the flag on the first successful build. Normal successful mining does
+not gain an unconditional polling loop.
 
 ## Latest Economic Activation Execution
 

@@ -375,6 +375,35 @@ func TestPrepareWorkStopsWhenUsdbProfileIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestUSDBWorkFailureRequestsRetryUntilRecovery(t *testing.T) {
+	w := &worker{chainConfig: testWorkerUSDBChainConfig()}
+	if w.shouldRecommitWork() {
+		t.Fatal("fresh worker unexpectedly requested recommit")
+	}
+
+	unavailable := errors.New("current BTC stable state unavailable")
+	w.markUSDBWorkBuildFailure(unavailable)
+	if !w.shouldRecommitWork() {
+		t.Fatal("USDB work failure did not request periodic retry")
+	}
+	w.markUSDBWorkBuildSuccess()
+	if w.shouldRecommitWork() {
+		t.Fatal("successful USDB work build did not clear periodic retry")
+	}
+
+	nonUSDBConfig := *params.AllEthashProtocolChanges
+	nonUSDBConfig.USDB = nil
+	nonUSDBWorker := &worker{chainConfig: &nonUSDBConfig}
+	nonUSDBWorker.markUSDBWorkBuildFailure(unavailable)
+	if nonUSDBWorker.shouldRecommitWork() {
+		t.Fatal("non-USDB work failure enabled external-state retry")
+	}
+	atomic.StoreInt32(&nonUSDBWorker.newTxs, 1)
+	if !nonUSDBWorker.shouldRecommitWork() {
+		t.Fatal("new transactions no longer request recommit")
+	}
+}
+
 func TestGenerateBlockAndImportClique(t *testing.T) {
 	testGenerateBlockAndImport(t, true)
 }

@@ -233,8 +233,9 @@ type worker struct {
 	snapshotState    *state.StateDB
 
 	// atomic status counters
-	running int32 // The indicator whether the consensus engine is running or not.
-	newTxs  int32 // New arrival transaction count since last sealing work submitting.
+	running       int32  // The indicator whether the consensus engine is running or not.
+	newTxs        int32  // New arrival transaction count since last sealing work submitting.
+	usdbWorkRetry uint32 // A failed USDB work build must poll external state until it recovers.
 
 	// noempty is the flag used to control whether the feature of pre-seal empty
 	// block is enabled. The default value is false(pre-seal is enabled by default).
@@ -505,10 +506,12 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 
 		case <-timer.C:
 			// If sealing is running resubmit a new work cycle periodically to pull in
-			// higher priced transactions. Disable this overhead for pending blocks.
+			// higher priced transactions. A failed USDB build also needs polling
+			// because BTC stable-state advancement has no native geth event.
 			if w.isRunning() && (w.chainConfig.Clique == nil || w.chainConfig.Clique.Period > 0) {
-				// Short circuit if no new transaction arrives.
-				if atomic.LoadInt32(&w.newTxs) == 0 {
+				// Short circuit if neither transactions nor an external-state
+				// recovery can change the candidate work.
+				if !w.shouldRecommitWork() {
 					timer.Reset(recommit)
 					continue
 				}
@@ -548,6 +551,25 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		case <-w.exitCh:
 			return
 		}
+	}
+}
+
+func (w *worker) shouldRecommitWork() bool {
+	return atomic.LoadInt32(&w.newTxs) != 0 || atomic.LoadUint32(&w.usdbWorkRetry) != 0
+}
+
+func (w *worker) markUSDBWorkBuildFailure(err error) {
+	if !w.chainConfig.HasUSDBConsensus() {
+		return
+	}
+	if atomic.CompareAndSwapUint32(&w.usdbWorkRetry, 0, 1) {
+		log.Warn("USDB sealing work unavailable; retrying on recommit interval", "err", err)
+	}
+}
+
+func (w *worker) markUSDBWorkBuildSuccess() {
+	if atomic.SwapUint32(&w.usdbWorkRetry, 0) != 0 {
+		log.Info("USDB sealing work recovered")
 	}
 }
 
@@ -1217,8 +1239,10 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 		coinbase:  coinbase,
 	})
 	if err != nil {
+		w.markUSDBWorkBuildFailure(err)
 		return
 	}
+	w.markUSDBWorkBuildSuccess()
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
 	if !noempty && atomic.LoadUint32(&w.noempty) == 0 {

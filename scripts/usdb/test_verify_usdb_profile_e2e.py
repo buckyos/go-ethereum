@@ -79,6 +79,26 @@ class VerifyUSDBProfileE2ETest(unittest.TestCase):
                 1,
             )
 
+    def test_selector_transition_accepts_exact_max_and_rejects_max_plus_one(
+        self,
+    ) -> None:
+        exact_max_parent = self.selector_block(2, 123, 2)
+        validate_selector_transition(
+            exact_max_parent,
+            decode_selector(self.selector_block(3, 123, 3)),
+            3,
+            3,
+        )
+
+        max_parent = self.selector_block(3, 123, 3)
+        with self.assertRaisesRegex(SystemExit, "age exceeded"):
+            validate_selector_transition(
+                max_parent,
+                decode_selector(self.selector_block(4, 123, 4)),
+                4,
+                3,
+            )
+
     def test_emission_matches_rust_and_go_golden_vectors(self) -> None:
         vectors = (
             (0, 0, 10_000, 0),
