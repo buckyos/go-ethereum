@@ -269,6 +269,61 @@ public RPC、bootnode、bridge 和其他外部承诺只能在 artifact 生成、
 manifest 后开放。创建或验证失败表示本次 candidate chain 未被接受，应废弃对应 datadir 并重新
 bootstrap，不允许把不一致状态修补后继续作为同一 public release。
 
+### 3.2.4 Signed public release candidate
+
+`geth usdb-release-manifest` 将 accepted candidate chain 提升为命名 release：
+
+```bash
+geth usdb-release-manifest create \
+  --release-id usdb-testnet-v1 \
+  --network-id 20260323 \
+  --genesis usdb-bootstrap-genesis.json \
+  --acceptance usdb-bootstrap-acceptance.json \
+  --bootnodes usdb-public-release-bootnodes.txt \
+  --manifest usdb-public-release-manifest.json \
+  --signature usdb-public-release-manifest.sig.json \
+  --private-key release-ed25519.pem \
+  --key-id usdb-testnet-release-key-1
+
+geth usdb-release-manifest verify \
+  --release-id usdb-testnet-v1 \
+  --network-id 20260323 \
+  --genesis usdb-bootstrap-genesis.json \
+  --acceptance usdb-bootstrap-acceptance.json \
+  --bootnodes usdb-public-release-bootnodes.txt \
+  --manifest usdb-public-release-manifest.json \
+  --signature usdb-public-release-manifest.sig.json \
+  --trusted-keys usdb-public-release-trusted-keys.json
+```
+
+v1 使用 Ed25519 对 exact manifest bytes 签名。manifest 直接承诺 canonical genesis、
+nonzero-depth acceptance、bootnode artifact 和 Dividend fee policy；genesis 与 acceptance
+再分别承诺 chain config/system code 和 SourceDAO config/state/strict validation/transaction
+evidence。verify 必须先验证 trusted key signature，再根据本地 exact files 重建预期 manifest。
+
+完整候选发布回归入口：
+
+```bash
+./scripts/usdb/run_usdb_public_release_candidate_e2e.sh
+```
+
+该入口默认要求 go-ethereum、SourceDAO 和 usdb 三个 worktree clean，从 source snapshot 和空
+Go cache 重建 geth，重新构建并 audit SourceDAO artifacts，然后覆盖：
+
+1. canonical genesis 重复生成的 exact bytes 一致。
+2. acceptance 使用非零 confirmation depth，并拒绝 checkpoint/admin 污染。
+3. manifest/signature/genesis 篡改均 fail closed。
+4. node1 restart 后重新验证 acceptance 和 signed release。
+5. fresh archive node 只通过 signed bootnode artifact 自动发现 node1，不调用
+   `admin_addPeer`。
+6. archive node 在 genesis 和 acceptance checkpoint 返回历史 Dividend code/storage proof，
+   并重算 strict validation identity。
+7. fee gate 前矿工获得全部 fee；gate 后执行 60%/40% 分账并完成 Dividend ledger sync。
+8. full bootstrap 重放不产生新的 completed/error operation。
+
+脚本使用 ephemeral test release key、fake PoW 和 test-only indexer fixture，因此输出是
+candidate mechanics evidence，不是 public testnet/mainnet release bundle。
+
 ### 3.3 状态转换
 
 文件：
@@ -410,9 +465,12 @@ keccak256("sourcedao.dividend.bootstrap-finalized:v1")
 4. UIP-0011 fee policy v1 状态转换和负向测试。
 5. fee/ledger、restart、fresh joiner 和幂等 live E2E。
 6. bootstrap candidate acceptance artifact、restart/joiner 强制验证及篡改拒绝。
+7. clean-build canonical genesis、signed release manifest、bootnode archive joiner 和历史
+   state-proof public-release candidate E2E。
 
 public release 前仍需冻结最终地址、artifact、genesis hash、activation height、acceptance
-confirmation depth、manifest signature 和 bootstrap-admin custody。
+confirmation depth、正式 release signing key/trusted-key distribution 和 bootstrap-admin
+custody。manifest/signature 机制已经实现，这些网络专属值仍未冻结。
 
 ## 7. 当前结论
 
@@ -420,3 +478,5 @@ confirmation depth、manifest signature 和 bootstrap-admin custody。
 state transition 的闭环。本地 marker 和 RPC 健康状态不参与共识；fee validator 只信任 chain
 config、Dividend runtime code 和 state-root 承诺的 finalized slot，public network identity 则由
 canonical genesis、链历史和签名 release manifest 中冻结的 acceptance checkpoint 共同约束。
+候选发布 E2E 已证明该验证链路可由 fresh archive joiner 重放；正式发布仍必须使用冻结的网络参数
+和受治理的 signing key，而不能沿用测试 signer。

@@ -227,6 +227,7 @@ func init() {
 		dumpCommand,
 		dumpGenesisCommand,
 		usdbBootstrapAcceptanceCommand,
+		usdbReleaseManifestCommand,
 		// See accountcmd.go:
 		accountCommand,
 		walletCommand,

@@ -6,13 +6,13 @@
       "address": "0x0000000000000000000000000000000000001001",
       "artifact": "contracts/Dao.sol/SourceDao.json",
       "runtimeCodeHash": "0xc6549189a694031f7d94e6b1b8b11b2bc43d1753cdaa7ac885a97c5e6d462593",
-      "artifactSha256": "f3ca9cc6bcd687c72843bd0560b8b003aae4897d3b6298c38db69b714f20d506"
+      "artifactSha256": "4ec8d999391a85397518c9a1c82b0b57616a2cb73f8cc0dda7e758fb5831f261"
     },
     "dividend": {
       "address": "0x0000000000000000000000000000000000001002",
       "artifact": "contracts/Dividend.sol/DividendContract.json",
-      "runtimeCodeHash": "0x83a65baf939d7c7703d15fcaf7e7e6c0102d7fc7ddbf378b9166c2be5d2ff046",
-      "artifactSha256": "2e286d2a90cb9f5d3791ee0b16332d70c0b4b8f454b38985e181e698a9c3f03b"
+      "runtimeCodeHash": "0x24859958e81d46d4a3df2de8b346600d05ed8a3e683ad4c2117fe9e73804144e",
+      "artifactSha256": "79c83a7d90a604040f044871b718dc9511788d5d4bb20cb88f2eb660b47c5a2e"
     }
   },
   "bootstrapAdmin": {

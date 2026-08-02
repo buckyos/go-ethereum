@@ -17,6 +17,8 @@ RUN_SMOKE=${RUN_SMOKE:-0}
 RUN_FULL_BOOTSTRAP=${RUN_FULL_BOOTSTRAP:-0}
 START_JOINER_AFTER_BOOTSTRAP=${START_JOINER_AFTER_BOOTSTRAP:-$RUN_FULL_BOOTSTRAP}
 RESTART_NODE1_AFTER_BOOTSTRAP=${RESTART_NODE1_AFTER_BOOTSTRAP:-$RUN_FULL_BOOTSTRAP}
+RUN_PUBLIC_RELEASE_E2E=${RUN_PUBLIC_RELEASE_E2E:-0}
+BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS=${BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS:-0}
 BOOTSTRAP_STATE_FILE=${BOOTSTRAP_STATE_FILE:-"$WORK_DIR/sourcedao-bootstrap-state.json"}
 BOOTSTRAP_REPLAY_STATE_FILE=${BOOTSTRAP_REPLAY_STATE_FILE:-"$WORK_DIR/sourcedao-bootstrap-replay-state.json"}
 NODE1_VALIDATION_FILE=${NODE1_VALIDATION_FILE:-"$WORK_DIR/node1-bootstrap-validation.json"}
@@ -25,6 +27,16 @@ FEE_PROBE_FILE=${FEE_PROBE_FILE:-"$WORK_DIR/usdb-fee-split-probe.json"}
 BOOTSTRAP_ACCEPTANCE_FILE=${BOOTSTRAP_ACCEPTANCE_FILE:-"$WORK_DIR/usdb-bootstrap-acceptance.json"}
 BOOTSTRAP_ACCEPTANCE_TAMPERED_FILE=${BOOTSTRAP_ACCEPTANCE_TAMPERED_FILE:-"$WORK_DIR/usdb-bootstrap-acceptance-tampered.json"}
 BOOTSTRAP_VALIDATION_TAMPERED_FILE=${BOOTSTRAP_VALIDATION_TAMPERED_FILE:-"$WORK_DIR/node1-bootstrap-validation-tampered.json"}
+PUBLIC_RELEASE_ID=${PUBLIC_RELEASE_ID:-usdb-public-release-e2e-v1}
+PUBLIC_RELEASE_MANIFEST_FILE=${PUBLIC_RELEASE_MANIFEST_FILE:-"$WORK_DIR/usdb-public-release-manifest.json"}
+PUBLIC_RELEASE_SIGNATURE_FILE=${PUBLIC_RELEASE_SIGNATURE_FILE:-"$WORK_DIR/usdb-public-release-manifest.sig.json"}
+PUBLIC_RELEASE_TRUSTED_KEYS_FILE=${PUBLIC_RELEASE_TRUSTED_KEYS_FILE:-"$WORK_DIR/usdb-public-release-trusted-keys.json"}
+PUBLIC_RELEASE_SIGNING_KEY_FILE=${PUBLIC_RELEASE_SIGNING_KEY_FILE:-"$WORK_DIR/usdb-public-release-signing-key.pem"}
+PUBLIC_RELEASE_SIGNING_KEY_ID=${PUBLIC_RELEASE_SIGNING_KEY_ID:-usdb-public-release-e2e-key-1}
+PUBLIC_RELEASE_BOOTNODES_FILE=${PUBLIC_RELEASE_BOOTNODES_FILE:-"$WORK_DIR/usdb-public-release-bootnodes.txt"}
+PUBLIC_RELEASE_TAMPERED_MANIFEST_FILE=${PUBLIC_RELEASE_TAMPERED_MANIFEST_FILE:-"$WORK_DIR/usdb-public-release-manifest-tampered.json"}
+PUBLIC_RELEASE_TAMPERED_SIGNATURE_FILE=${PUBLIC_RELEASE_TAMPERED_SIGNATURE_FILE:-"$WORK_DIR/usdb-public-release-signature-tampered.json"}
+PUBLIC_RELEASE_TAMPERED_GENESIS_FILE=${PUBLIC_RELEASE_TAMPERED_GENESIS_FILE:-"$WORK_DIR/usdb-public-release-genesis-tampered.json"}
 FEE_PROBE_TIMEOUT_MS=${FEE_PROBE_TIMEOUT_MS:-600000}
 USDB_BOOTSTRAP_FAKE_POW=${USDB_BOOTSTRAP_FAKE_POW:-1}
 USDB_BOOTSTRAP_FAKE_POW_DELAY=${USDB_BOOTSTRAP_FAKE_POW_DELAY:-1s}
@@ -52,6 +64,7 @@ NODE2_HTTP_PORT=${NODE2_HTTP_PORT:-18546}
 NODE2_P2P_PORT=${NODE2_P2P_PORT:-31304}
 NODE2_AUTHRPC_PORT=${NODE2_AUTHRPC_PORT:-18552}
 NODE2_LOG=${NODE2_LOG:-"$WORK_DIR/node2.log"}
+NODE2_GCMODE=${NODE2_GCMODE:-full}
 USDB_BOOTSTRAP_INDEXER_PORT=${USDB_BOOTSTRAP_INDEXER_PORT:-$((NODE2_HTTP_PORT + 1))}
 
 GETH_BIN=${GETH_BIN:-}
@@ -112,6 +125,7 @@ normalize_boolean() {
 RUN_FULL_BOOTSTRAP=$(normalize_boolean RUN_FULL_BOOTSTRAP "$RUN_FULL_BOOTSTRAP")
 START_JOINER_AFTER_BOOTSTRAP=$(normalize_boolean START_JOINER_AFTER_BOOTSTRAP "$START_JOINER_AFTER_BOOTSTRAP")
 RESTART_NODE1_AFTER_BOOTSTRAP=$(normalize_boolean RESTART_NODE1_AFTER_BOOTSTRAP "$RESTART_NODE1_AFTER_BOOTSTRAP")
+RUN_PUBLIC_RELEASE_E2E=$(normalize_boolean RUN_PUBLIC_RELEASE_E2E "$RUN_PUBLIC_RELEASE_E2E")
 
 if [[ "$RUN_FULL_BOOTSTRAP" == "1" && "$RUN_SMOKE" == "1" ]]; then
   echo "RUN_FULL_BOOTSTRAP and RUN_SMOKE are separate test modes and cannot both be enabled" >&2
@@ -124,6 +138,37 @@ fi
 if [[ "$RESTART_NODE1_AFTER_BOOTSTRAP" == "1" && "$RUN_FULL_BOOTSTRAP" != "1" ]]; then
   echo "RESTART_NODE1_AFTER_BOOTSTRAP requires RUN_FULL_BOOTSTRAP=1" >&2
   exit 1
+fi
+if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]] &&
+  { [[ "$RUN_FULL_BOOTSTRAP" != "1" ]] ||
+    [[ "$START_JOINER_AFTER_BOOTSTRAP" != "1" ]] ||
+    [[ "$RESTART_NODE1_AFTER_BOOTSTRAP" != "1" ]]; }; then
+  echo "RUN_PUBLIC_RELEASE_E2E requires full bootstrap, delayed joiner, and node restart" >&2
+  exit 1
+fi
+if [[ ! "$BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS" =~ ^[0-9]+$ ]]; then
+  echo "BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS must be a non-negative integer" >&2
+  exit 1
+fi
+if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" && "$BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS" == "0" ]]; then
+  echo "Public release E2E requires non-zero bootstrap acceptance confirmations" >&2
+  exit 1
+fi
+if [[ "$NODE2_GCMODE" != "full" && "$NODE2_GCMODE" != "archive" ]]; then
+  echo "NODE2_GCMODE must be full or archive" >&2
+  exit 1
+fi
+if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" && "$NODE2_GCMODE" != "archive" ]]; then
+  echo "Public release E2E requires NODE2_GCMODE=archive" >&2
+  exit 1
+fi
+if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+  for required_file in "$PUBLIC_RELEASE_SIGNING_KEY_FILE" "$PUBLIC_RELEASE_TRUSTED_KEYS_FILE"; do
+    if [[ ! -f "$required_file" ]]; then
+      echo "Public release E2E input does not exist: $required_file" >&2
+      exit 1
+    fi
+  done
 fi
 if [[ "$RUN_FULL_BOOTSTRAP" == "1" ]] && ! command -v jq >/dev/null; then
   echo "jq is required for the full-bootstrap lifecycle assertions" >&2
@@ -329,6 +374,12 @@ assert_cross_node_checkpoint() {
 }
 
 start_node1() {
+  local -a discovery_args
+  if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+    discovery_args=(--nat extip:127.0.0.1)
+  else
+    discovery_args=(--nodiscover)
+  fi
   echo "Starting node 1 (mining)"
   (
     cd "$ROOT_DIR"
@@ -343,7 +394,7 @@ start_node1() {
       --authrpc.port "$NODE1_AUTHRPC_PORT" \
       --port "$NODE1_P2P_PORT" \
       --ipcpath "$NODE1_DATADIR/geth.ipc" \
-      --nodiscover \
+      "${discovery_args[@]}" \
       "${POW_ARGS[@]}" \
       --miner.usdb.passid "$USDB_BOOTSTRAP_PASS_ID" \
       --miner.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL" \
@@ -358,6 +409,18 @@ start_node1() {
 }
 
 start_node2() {
+  local -a discovery_args
+  if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+    local bootnodes
+    bootnodes="$(tr -d '\r\n ' <"$PUBLIC_RELEASE_BOOTNODES_FILE")"
+    if [[ -z "$bootnodes" ]]; then
+      echo "Public release bootnodes file is empty: $PUBLIC_RELEASE_BOOTNODES_FILE" >&2
+      return 1
+    fi
+    discovery_args=(--bootnodes "$bootnodes" --nat extip:127.0.0.1)
+  else
+    discovery_args=(--nodiscover)
+  fi
   echo "Starting node 2"
   (
     cd "$ROOT_DIR"
@@ -372,8 +435,9 @@ start_node2() {
       --authrpc.port "$NODE2_AUTHRPC_PORT" \
       --port "$NODE2_P2P_PORT" \
       --ipcpath "$NODE2_DATADIR/geth.ipc" \
-      --nodiscover \
+      "${discovery_args[@]}" \
       --syncmode full \
+      --gcmode "$NODE2_GCMODE" \
       "${POW_ARGS[@]}" \
       --ethash.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL" \
       --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
@@ -395,6 +459,12 @@ accelerate_fake_pow_after_bootstrap() {
 }
 
 connect_nodes() {
+  if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+    echo "Waiting for node 2 to discover node 1 through the signed bootnode artifact"
+    wait_for_peers "$NODE1_RPC" 1
+    wait_for_peers "$NODE2_RPC" 1
+    return
+  fi
   local node1_enode
   node1_enode=$(fetch_enode "$NODE1_RPC")
   echo "Node 1 enode: $node1_enode"
@@ -446,6 +516,7 @@ run_bootstrap_acceptance_create() {
     --bootstrap-state "$BOOTSTRAP_STATE_FILE" \
     --validation "$validation_file" \
     --checkpoint-block "$checkpoint_block" \
+    --min-confirmations "$BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS" \
     --artifact "$BOOTSTRAP_ACCEPTANCE_FILE"
 }
 
@@ -485,6 +556,69 @@ assert_tampered_bootstrap_acceptance_rejected() {
   echo "Tampered checkpoint and bootstrap-admin pollution were rejected."
 }
 
+write_public_release_bootnodes() {
+  local node1_enode
+  node1_enode="$(fetch_enode "$NODE1_RPC")"
+  if [[ -z "$node1_enode" ]]; then
+    echo "Failed to resolve node 1 enode for the public release bundle" >&2
+    return 1
+  fi
+  printf '%s\n' "$node1_enode" >"$PUBLIC_RELEASE_BOOTNODES_FILE"
+  echo "Published candidate bootnode: $node1_enode"
+}
+
+run_public_release_create() {
+  run_geth usdb-release-manifest create \
+    --release-id "$PUBLIC_RELEASE_ID" \
+    --network-id "$NETWORK_ID" \
+    --genesis "$GENESIS_JSON" \
+    --acceptance "$BOOTSTRAP_ACCEPTANCE_FILE" \
+    --bootnodes "$PUBLIC_RELEASE_BOOTNODES_FILE" \
+    --manifest "$PUBLIC_RELEASE_MANIFEST_FILE" \
+    --signature "$PUBLIC_RELEASE_SIGNATURE_FILE" \
+    --private-key "$PUBLIC_RELEASE_SIGNING_KEY_FILE" \
+    --key-id "$PUBLIC_RELEASE_SIGNING_KEY_ID"
+}
+
+run_public_release_verify() {
+  local genesis_file=${1:-$GENESIS_JSON}
+  local manifest_file=${2:-$PUBLIC_RELEASE_MANIFEST_FILE}
+  local signature_file=${3:-$PUBLIC_RELEASE_SIGNATURE_FILE}
+  run_geth usdb-release-manifest verify \
+    --release-id "$PUBLIC_RELEASE_ID" \
+    --network-id "$NETWORK_ID" \
+    --genesis "$genesis_file" \
+    --acceptance "$BOOTSTRAP_ACCEPTANCE_FILE" \
+    --bootnodes "$PUBLIC_RELEASE_BOOTNODES_FILE" \
+    --manifest "$manifest_file" \
+    --signature "$signature_file" \
+    --trusted-keys "$PUBLIC_RELEASE_TRUSTED_KEYS_FILE"
+}
+
+assert_tampered_public_release_rejected() {
+  jq '.network_id += 1' \
+    "$PUBLIC_RELEASE_MANIFEST_FILE" >"$PUBLIC_RELEASE_TAMPERED_MANIFEST_FILE"
+  if run_public_release_verify "$GENESIS_JSON" "$PUBLIC_RELEASE_TAMPERED_MANIFEST_FILE"; then
+    echo "Tampered public release manifest was accepted" >&2
+    return 1
+  fi
+
+  jq '.signature_base64 = ("A" * 88)' \
+    "$PUBLIC_RELEASE_SIGNATURE_FILE" >"$PUBLIC_RELEASE_TAMPERED_SIGNATURE_FILE"
+  if run_public_release_verify "$GENESIS_JSON" "$PUBLIC_RELEASE_MANIFEST_FILE" "$PUBLIC_RELEASE_TAMPERED_SIGNATURE_FILE"; then
+    echo "Tampered public release signature was accepted" >&2
+    return 1
+  fi
+
+  cp "$GENESIS_JSON" "$PUBLIC_RELEASE_TAMPERED_GENESIS_FILE"
+  printf '\n' >>"$PUBLIC_RELEASE_TAMPERED_GENESIS_FILE"
+  if run_public_release_verify "$PUBLIC_RELEASE_TAMPERED_GENESIS_FILE"; then
+    echo "Tampered canonical genesis bytes were accepted" >&2
+    return 1
+  fi
+  echo "Tampered release manifest, signature, and genesis bytes were rejected."
+}
+
 run_source_dao_fee_probe() {
   local rpc_url=$1
   local output_file=$2
@@ -513,7 +647,12 @@ run_source_dao_fee_probe() {
   )
   if ! jq -e '
     .status == "ok"
+    and (.preGate.totalFee | tonumber) > 0
+    and .preGate.daoFee == "0"
+    and .preGate.dividendBalanceBefore == .preGate.dividendBalanceAfter
+    and .preGate.blockNumber < .feeSplitBlock
     and (.probe.daoFee | tonumber) > 0
+    and .probe.blockNumber >= .feeSplitBlock
     and (.probe.emission | tonumber) > 0
     and (.ledgerSync.pendingBefore | tonumber) > 0
     and .ledgerSync.pendingAfter == .ledgerSync.daoFee
@@ -521,6 +660,61 @@ run_source_dao_fee_probe() {
     echo "USDB fee split probe did not produce the expected accounting result" >&2
     return 1
   fi
+}
+
+historical_dividend_proof() {
+  local rpc_url=$1
+  local block_tag=$2
+  local dividend_address finalized_slot response
+  dividend_address="$(jq -r '.fee_policy.dividend_address' "$PUBLIC_RELEASE_MANIFEST_FILE")"
+  finalized_slot=0x7d8bb76c5e489191d3f481f0b7ade016df922a8ec91d3eb9c93c07ee5a337054
+  response="$(rpc_call "$rpc_url" \
+    "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getProof\",\"params\":[\"${dividend_address}\",[\"${finalized_slot}\"],\"${block_tag}\"],\"id\":1}")"
+  if ! jq -e '.error == null and .result != null' <<<"$response" >/dev/null; then
+    echo "Historical Dividend proof failed at block ${block_tag}: ${response}" >&2
+    return 1
+  fi
+  jq -S -c \
+    '.result | {address, balance, codeHash, nonce, storageHash, finalized: .storageProof[0].value}' \
+    <<<"$response"
+}
+
+assert_archive_replay() {
+  local checkpoint_number checkpoint_tag expected_code_hash
+  local genesis_proof checkpoint_proof checkpoint_block expected_checkpoint_hash expected_state_root
+  checkpoint_number="$(jq -r '.acceptance.checkpoint.number' "$PUBLIC_RELEASE_MANIFEST_FILE")"
+  checkpoint_tag="$(printf '0x%x' "$checkpoint_number")"
+  expected_code_hash="$(jq -r '.fee_policy.dividend_code_hash' "$PUBLIC_RELEASE_MANIFEST_FILE")"
+  expected_checkpoint_hash="$(jq -r '.acceptance.checkpoint.hash' "$PUBLIC_RELEASE_MANIFEST_FILE")"
+  expected_state_root="$(jq -r '.acceptance.checkpoint.state_root' "$PUBLIC_RELEASE_MANIFEST_FILE")"
+
+  genesis_proof="$(historical_dividend_proof "$NODE2_RPC" 0x0)"
+  checkpoint_proof="$(historical_dividend_proof "$NODE2_RPC" "$checkpoint_tag")"
+  if ! jq -e \
+    --arg code_hash "$expected_code_hash" \
+    '.codeHash == $code_hash and (.finalized == "0x0" or .finalized == "0x")' \
+    <<<"$genesis_proof" >/dev/null; then
+    echo "Archive joiner genesis proof does not match the canonical Dividend predeploy: $genesis_proof" >&2
+    return 1
+  fi
+  if ! jq -e \
+    --arg code_hash "$expected_code_hash" \
+    '.codeHash == $code_hash and .finalized == "0x1"' \
+    <<<"$checkpoint_proof" >/dev/null; then
+    echo "Archive joiner acceptance proof does not contain finalized Dividend state: $checkpoint_proof" >&2
+    return 1
+  fi
+  checkpoint_block="$(rpc_call "$NODE2_RPC" \
+    "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"${checkpoint_tag}\",false],\"id\":1}")"
+  if ! jq -e \
+    --arg hash "$expected_checkpoint_hash" \
+    --arg state_root "$expected_state_root" \
+    '.result.hash == $hash and .result.stateRoot == $state_root' \
+    <<<"$checkpoint_block" >/dev/null; then
+    echo "Archive joiner checkpoint header differs from the signed release manifest" >&2
+    return 1
+  fi
+  echo "Archive joiner replayed genesis and acceptance checkpoint state proofs."
 }
 
 assert_idempotent_replay_state() {
@@ -557,7 +751,7 @@ assert_validation_summaries_match() {
 }
 
 run_full_bootstrap_lifecycle() {
-  local bootstrap_height bootstrap_hash bootstrap_state_root
+  local bootstrap_height bootstrap_hash bootstrap_state_root required_acceptance_head node1_head
 
   echo "Running SourceDAO full bootstrap against node 1"
   run_source_dao_full_bootstrap "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE"
@@ -570,9 +764,20 @@ run_full_bootstrap_lifecycle() {
     return 1
   fi
   echo "Captured post-bootstrap checkpoint: height=${bootstrap_height} hash=${bootstrap_hash} stateRoot=${bootstrap_state_root}"
+  required_acceptance_head=$((bootstrap_height + BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS))
+  if (( BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS > 0 )); then
+    echo "Waiting for ${BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS} acceptance confirmations through block ${required_acceptance_head}"
+    wait_for_height "$NODE1_RPC" "$required_acceptance_head" >/dev/null
+  fi
   run_bootstrap_acceptance_create "$NODE1_RPC" "$NODE1_VALIDATION_FILE" "$bootstrap_height"
   run_bootstrap_acceptance_verify "$NODE1_RPC" "$NODE1_VALIDATION_FILE"
   assert_tampered_bootstrap_acceptance_rejected
+  if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+    write_public_release_bootnodes
+    run_public_release_create
+    run_public_release_verify
+    assert_tampered_public_release_rejected
+  fi
 
   accelerate_fake_pow_after_bootstrap
   echo "Running UIP-0011 fee split and Dividend ledger-sync probe"
@@ -592,13 +797,23 @@ run_full_bootstrap_lifecycle() {
       "$bootstrap_state_root"
     run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
     run_bootstrap_acceptance_verify "$NODE1_RPC" "$NODE1_VALIDATION_FILE"
+    if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+      run_public_release_verify
+    fi
   fi
 
   if [[ "$START_JOINER_AFTER_BOOTSTRAP" == "1" ]]; then
     echo "Starting fresh node 2 after full bootstrap"
+    if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+      echo "Verifying signed release bundle before initializing the archive joiner"
+      run_public_release_verify
+    fi
+    run_geth init --datadir "$NODE2_DATADIR" "$GENESIS_JSON" >/dev/null
     start_node2
     wait_for_chain "$NODE2_RPC"
     connect_nodes
+    node1_head="$(wait_for_height "$NODE1_RPC" 1)"
+    wait_for_height "$NODE2_RPC" "$((node1_head))" >/dev/null
   fi
 
   assert_block_identity \
@@ -609,6 +824,10 @@ run_full_bootstrap_lifecycle() {
     "$bootstrap_state_root"
   run_source_dao_validation "$NODE2_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE2_VALIDATION_FILE"
   run_bootstrap_acceptance_verify "$NODE2_RPC" "$NODE2_VALIDATION_FILE"
+  if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+    run_public_release_verify
+    assert_archive_replay
+  fi
   assert_validation_summaries_match
 
   echo "Replaying full bootstrap against node 1"
@@ -631,7 +850,13 @@ rm -f \
   "$FEE_PROBE_FILE" \
   "$BOOTSTRAP_ACCEPTANCE_FILE" \
   "$BOOTSTRAP_ACCEPTANCE_TAMPERED_FILE" \
-  "$BOOTSTRAP_VALIDATION_TAMPERED_FILE"
+  "$BOOTSTRAP_VALIDATION_TAMPERED_FILE" \
+  "$PUBLIC_RELEASE_MANIFEST_FILE" \
+  "$PUBLIC_RELEASE_SIGNATURE_FILE" \
+  "$PUBLIC_RELEASE_BOOTNODES_FILE" \
+  "$PUBLIC_RELEASE_TAMPERED_MANIFEST_FILE" \
+  "$PUBLIC_RELEASE_TAMPERED_SIGNATURE_FILE" \
+  "$PUBLIC_RELEASE_TAMPERED_GENESIS_FILE"
 
 echo "Generating shared USDB bootstrap genesis from $USDB_CONFIG"
 run_geth dumpgenesis \
@@ -639,10 +864,26 @@ run_geth dumpgenesis \
   --usdb.bootstrap.config "$USDB_CONFIG" \
   --usdb.bootstrap.artifacts "$USDB_ARTIFACTS" \
   > "$GENESIS_JSON"
+if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+  genesis_replay_file="$WORK_DIR/usdb-bootstrap-genesis-replay.json"
+  run_geth dumpgenesis \
+    --usdb \
+    --usdb.bootstrap.config "$USDB_CONFIG" \
+    --usdb.bootstrap.artifacts "$USDB_ARTIFACTS" \
+    >"$genesis_replay_file"
+  if ! cmp -s "$GENESIS_JSON" "$genesis_replay_file"; then
+    echo "Repeated canonical genesis generation produced different bytes" >&2
+    diff -u "$GENESIS_JSON" "$genesis_replay_file" >&2 || true
+    exit 1
+  fi
+  echo "Repeated canonical genesis generation produced identical bytes."
+fi
 
 echo "Initializing node datadirs"
 run_geth init --datadir "$NODE1_DATADIR" "$GENESIS_JSON" >/dev/null
-run_geth init --datadir "$NODE2_DATADIR" "$GENESIS_JSON" >/dev/null
+if [[ "$START_JOINER_AFTER_BOOTSTRAP" == "0" ]]; then
+  run_geth init --datadir "$NODE2_DATADIR" "$GENESIS_JSON" >/dev/null
+fi
 
 trap cleanup EXIT
 if [[ "$USE_MOCK_INDEXER" == "1" ]]; then
@@ -700,6 +941,11 @@ if [[ "$RUN_FULL_BOOTSTRAP" == "1" ]]; then
   echo "acceptance:      $BOOTSTRAP_ACCEPTANCE_FILE"
   echo "replay state:    $BOOTSTRAP_REPLAY_STATE_FILE"
   echo "fee probe:       $FEE_PROBE_FILE"
+  if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
+    echo "release manifest: $PUBLIC_RELEASE_MANIFEST_FILE"
+    echo "release signature: $PUBLIC_RELEASE_SIGNATURE_FILE"
+    echo "release bootnodes: $PUBLIC_RELEASE_BOOTNODES_FILE"
+  fi
 fi
 
 if [[ "$KEEP_RUNNING" == "1" ]]; then
