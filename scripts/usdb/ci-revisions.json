@@ -5,7 +5,7 @@
     "go_ethereum": {
       "repository": "buckyos/go-ethereum",
       "directory": "go-ethereum",
-      "revision": "031d905fd9c9d3a6a7d94a8a507bb7823747eecc"
+      "revision": "70cb00d3fa6305bf72db1b1df072b23bf07164bd"
     },
     "usdb": {
       "repository": "buckyos/usdb",
