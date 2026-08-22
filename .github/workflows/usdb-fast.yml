@@ -1,0 +1,142 @@
+name: USDB Fast
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: usdb-fast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  revision_lock:
+    name: Revision lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      go_release: ${{ steps.lock.outputs.go_release_version }}
+      go_compatibility: ${{ steps.lock.outputs.go_compatibility_version }}
+      python: ${{ steps.lock.outputs.python_version }}
+      rust: ${{ steps.lock.outputs.rust_version }}
+      usdb_repository: ${{ steps.lock.outputs.usdb_repository }}
+      usdb_revision: ${{ steps.lock.outputs.usdb_revision }}
+      source_dao_repository: ${{ steps.lock.outputs.source_dao_repository }}
+      source_dao_revision: ${{ steps.lock.outputs.source_dao_revision }}
+    steps:
+      - name: Check out go-ethereum
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.13.7
+          check-latest: false
+
+      - name: Validate revision lock
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/usdb/test_ci_revisions.py
+          python3 scripts/usdb/ci_revisions.py validate
+          python3 scripts/usdb/ci_revisions.py github-output >>"$GITHUB_OUTPUT"
+
+  go_fast:
+    name: Go canonical and compatibility
+    needs: revision_lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out go-ethereum
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ needs.revision_lock.outputs.python }}
+          check-latest: false
+
+      - name: Set up canonical Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.revision_lock.outputs.go_release }}
+          check-latest: false
+          cache: false
+
+      - name: Capture canonical Go path
+        shell: bash
+        run: echo "USDB_CANONICAL_GO_BIN=$(command -v go)" >>"$GITHUB_ENV"
+
+      - name: Set up compatibility Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.revision_lock.outputs.go_compatibility }}
+          check-latest: false
+          cache: false
+
+      - name: Capture compatibility Go path
+        shell: bash
+        run: echo "USDB_COMPAT_GO_BIN=$(command -v go)" >>"$GITHUB_ENV"
+
+      - name: Run Go fast gate
+        env:
+          USDB_FAST_SCOPE: go
+          USDB_FAST_REQUIRE_COMPAT_GO: "1"
+          USDB_FAST_OUTPUT_DIR: ${{ runner.temp }}/usdb-fast-ci
+        run: scripts/usdb/run_fast_ci.sh
+
+  cross_repo_golden:
+    name: Cross-repository golden artifacts
+    needs: revision_lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out current go-ethereum
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: go-ethereum
+
+      - name: Check out pinned usdb
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.revision_lock.outputs.usdb_repository }}
+          ref: ${{ needs.revision_lock.outputs.usdb_revision }}
+          path: usdb
+
+      - name: Check out pinned SourceDAO
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.revision_lock.outputs.source_dao_repository }}
+          ref: ${{ needs.revision_lock.outputs.source_dao_revision }}
+          path: SourceDAO
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ needs.revision_lock.outputs.python }}
+          check-latest: false
+
+      - name: Set up pinned Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${{ needs.revision_lock.outputs.rust }}" --profile minimal
+          rustup default "${{ needs.revision_lock.outputs.rust }}"
+
+      - name: Verify checked-out revisions
+        run: >-
+          python3 go-ethereum/scripts/usdb/ci_revisions.py verify
+          --workspace-root "$GITHUB_WORKSPACE"
+          --current-repository go_ethereum
+
+      - name: Check frozen Rust-to-Go artifacts
+        env:
+          USDB_FAST_SCOPE: golden
+          USDB_REPO_DIR: ${{ github.workspace }}/usdb
+        run: go-ethereum/scripts/usdb/run_fast_ci.sh

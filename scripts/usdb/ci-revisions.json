@@ -1,0 +1,30 @@
+{
+  "schema_version": "usdb-ci-revisions:v1",
+  "coordinator": "go_ethereum",
+  "repositories": {
+    "go_ethereum": {
+      "repository": "buckyos/go-ethereum",
+      "directory": "go-ethereum",
+      "revision": "031d905fd9c9d3a6a7d94a8a507bb7823747eecc"
+    },
+    "usdb": {
+      "repository": "buckyos/usdb",
+      "directory": "usdb",
+      "revision": "f69cea89cc9ac769cd667e8ebfd395cd5c13840b"
+    },
+    "source_dao": {
+      "repository": "buckyos/SourceDAO",
+      "directory": "SourceDAO",
+      "revision": "a6031556848290f9dac02b65a1532cbf93190013"
+    }
+  },
+  "toolchains": {
+    "runner": "ubuntu-24.04",
+    "go_release": "1.18.5",
+    "go_compatibility": "1.26.0",
+    "python": "3.13.7",
+    "rust": "1.91.0",
+    "node": "24.12.0",
+    "npm": "11.6.2"
+  }
+}

@@ -155,34 +155,20 @@ run_go_checks() {
     "$ROOT_DIR"/scripts/usdb/*.sh \
     "$ROOT_DIR"/scripts/usdb/lib/*.sh
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_verify_usdb_profile_e2e.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_ci_revisions.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_calibrate_pow_difficulty.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_configure_usdb_pow_calibration_genesis.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_configure_usdb_anchor_max_age_genesis.py"
 }
 
 run_rust_checks() {
-  local manifest="$USDB_REPO_DIR/src/btc/Cargo.toml"
-  local script_dir="src/btc/usdb-indexer/scripts"
+  local runner="$USDB_REPO_DIR/src/btc/scripts/run_fast_ci.sh"
 
-  require_command shellcheck
-  require_command python3
-  if [[ ! -f "$manifest" ]]; then
-    echo "USDB Rust workspace is unavailable: $manifest" >&2
+  if [[ ! -x "$runner" ]]; then
+    echo "USDB Rust fast runner is unavailable or not executable: $runner" >&2
     exit 1
   fi
-  log "running Rust formatting, Clippy, and workspace tests"
-  cargo fmt --manifest-path "$manifest" --all -- --check
-  cargo clippy --manifest-path "$manifest" --workspace --all-targets -- -D warnings
-  cargo test --manifest-path "$manifest" --workspace
-
-  log "running Rust-side shell and simulator checks"
-  (
-    local -a shell_files
-    cd "$USDB_REPO_DIR"
-    mapfile -d '' shell_files < <(find "$script_dir" -maxdepth 1 -type f -name '*.sh' -print0)
-    shellcheck -x -P "$script_dir" "${shell_files[@]}"
-    env PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/test_regtest_world_simulator.py"
-  )
+  "$runner"
 }
 
 run_golden_checks() {
@@ -207,13 +193,6 @@ run_sourcedao_checks() {
   fi
   require_command node
   require_command npm
-  node -e '
-const [major, minor] = process.versions.node.split(".").map(Number);
-if (major < 22 || (major === 22 && minor < 13)) {
-  console.error("SourceDAO fast checks require Node >= 22.13, have " + process.version);
-  process.exit(1);
-}
-'
 
   if [[ ! -f "$SOURCE_DAO_REPO_DIR/package-lock.json" ]]; then
     echo "SourceDAO checkout is unavailable: $SOURCE_DAO_REPO_DIR" >&2
@@ -238,9 +217,7 @@ if (major < 22 || (major === 22 && minor < 13)) {
   log "running SourceDAO tests, USDB build, and bytecode audit"
   (
     cd "$SOURCE_DAO_REPO_DIR"
-    npm test
-    npm run build:usdb
-    npm run test:usdb:audit
+    npm run test:usdb:fast
   )
 }
 

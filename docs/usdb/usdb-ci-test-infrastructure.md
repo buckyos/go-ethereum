@@ -2,9 +2,17 @@
 
 ## Status
 
-The repository currently provides local fast-check infrastructure. GitHub Actions
-workflows and the cross-process nightly matrix are intentionally deferred to the
-next batch so that CI will invoke commands already proven locally.
+The three repositories now provide a minimum blocking GitHub Actions fast gate:
+
+- `go-ethereum/.github/workflows/usdb-fast.yml` runs the canonical and
+  compatibility Go lanes and coordinates cross-repository golden checks;
+- `usdb/.github/workflows/usdb-fast.yml` runs the Rust workspace, ShellCheck,
+  and world-simulator gate;
+- `SourceDAO/.github/workflows/usdb-fast.yml` runs contract tests, the USDB
+  build, and bytecode audit.
+
+Cross-process E2E, capacity, and soak workloads remain outside the per-change
+blocking gate and are planned as a separate nightly layer.
 
 The entrypoint is:
 
@@ -87,10 +95,43 @@ mechanically.
 - USDB-targeted Solidity build
 - USDB bytecode audit
 
-Node 22.13 or newer is required. `USDB_NODE_BIN_DIR` can select an explicit
-toolchain without depending on an interactive `nvm` shell. Existing
-`node_modules` are reused by default; set `USDB_FAST_SOURCE_DAO_INSTALL=ci` for
-a clean `npm ci` installation in a disposable CI checkout.
+Node 24.12.0 and npm 11.6.2 are exact fast-gate inputs. SourceDAO freezes them
+through `.nvmrc`, `package.json`, `.npmrc`, and a runtime verifier.
+`USDB_NODE_BIN_DIR` can select the exact toolchain without depending on an
+interactive `nvm` shell. Existing `node_modules` are reused by default; set
+`USDB_FAST_SOURCE_DAO_INSTALL=ci` for a clean `npm ci` installation in a
+disposable CI checkout.
+
+## Toolchain And Action Locks
+
+The minimum fast gate freezes these inputs:
+
+| Input | Version |
+| --- | --- |
+| GitHub-hosted runner | `ubuntu-24.04` |
+| canonical Go | `1.18.5` |
+| compatibility Go | `1.26.0` |
+| Python | `3.13.7` |
+| Rust | `1.91.0` |
+| Node | `24.12.0` |
+| npm | `11.6.2` |
+
+Rust is also pinned by `usdb/src/btc/rust-toolchain.toml`; SourceDAO owns its
+Node/npm pins. Third-party Actions are referenced by immutable full commit SHA,
+with the reviewed release tag retained in a comment.
+
+`scripts/usdb/ci-revisions.json` is the cross-repository revision lock. It
+contains exact 40-character commit IDs for `go-ethereum`, `usdb`, and
+`SourceDAO`, plus the shared fast-gate toolchains. The schema validator rejects
+duplicate or unknown JSON keys, floating refs, unexpected repositories, and
+unversioned toolchains.
+
+The lock is a last-validated baseline, not a self-referential claim that the
+current coordinator commit already exists in its own file. In a go-ethereum
+workflow, the current go-ethereum checkout may advance from its recorded
+baseline; every sibling checkout must exactly match the lock. After coordinated
+changes are committed and validated, update sibling revisions and record the
+last validated go-ethereum commit in a follow-up lock update.
 
 ## Validation Baseline
 
@@ -100,13 +141,19 @@ builds. The Rust workspace, simulator, and frozen golden checks passed. The
 SourceDAO lane passed 266 tests, compiled 29 Solidity files, and audited 42 USDB
 artifact files with Node 24.
 
-## Next Batch
+On 2026-08-22, all three workflow definitions passed actionlint. The exact
+repo-local gates were then rerun with Rust 1.91.0 and Node 24.12.0/npm 11.6.2,
+including a clean `npm ci`; the Go dual-toolchain and cross-repository golden
+lanes also passed. Actual GitHub-hosted execution remains pending until this
+uncommitted workflow batch is reviewed, committed, and pushed.
 
-The formal CI layer should remain thin:
+## Remaining CI Work
 
-1. repository-local fast workflows invoke the relevant runner scopes;
-2. a central nightly workflow checks out all three repositories at pinned full
-   commit IDs;
-3. nightly jobs add deterministic regtest, activation/reorg, bootstrap/public
-   release, capacity, and soak shards;
-4. build and service logs plus JSON reports are retained as job artifacts.
+1. Add a central nightly workflow that checks out the locked three-repository
+   baseline and runs deterministic regtest, activation/reorg,
+   bootstrap/public-release, capacity, and soak shards.
+2. Retain build and service logs plus JSON reports as nightly artifacts.
+3. Remove the modern-Go compatibility linker workaround after the inherited
+   `memsize` runtime dependency is upgraded or removed.
+4. Recheck the minimum Actions runner version before moving these workflows to
+   self-hosted infrastructure.
