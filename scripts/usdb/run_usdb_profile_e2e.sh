@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# shellcheck source=lib/go_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
 
 E2E_WORK_DIR=${WORK_DIR:-/tmp/usdb-profile-e2e}
@@ -84,16 +86,13 @@ export ORD_SERVER_LOG_FILE="${ORD_SERVER_LOG_FILE:-$WORK_DIR/ord-server.log}"
 export REGTEST_LOG_PREFIX="[usdb-profile-e2e/usdb]"
 
 GETH_BIN=${GETH_BIN:-}
-GETH_GO=${GETH_GO:-/usr/local/go/bin/go}
+USDB_GO_TOOLCHAIN_MODE=${USDB_GO_TOOLCHAIN_MODE:-auto}
 PRE_ACTIVATION_GETH_BIN=${PRE_ACTIVATION_GETH_BIN:-}
 MID_ACTIVATION_GETH_BIN=${MID_ACTIVATION_GETH_BIN:-}
 POST_ACTIVATION_GETH_BIN=${POST_ACTIVATION_GETH_BIN:-}
 
-if [[ -n "$GETH_BIN" ]]; then
-  GETH_CMD=("$GETH_BIN")
-else
-  GETH_CMD=("$GETH_GO" run -ldflags=-checklinkname=0 ./cmd/geth)
-fi
+usdb_prepare_geth_binary GETH_BIN "$ROOT_DIR" "$E2E_WORK_DIR/bin/geth"
+GETH_CMD=("$GETH_BIN")
 if [[ -n "$PRE_ACTIVATION_GETH_BIN" ]]; then
   PRE_ACTIVATION_GETH_CMD=("$PRE_ACTIVATION_GETH_BIN")
 else
@@ -822,7 +821,7 @@ run_selector_tamper_import_matrix() {
 
   (
     cd "$ROOT_DIR"
-    "$GETH_GO" build -o "$helper_bin" ./scripts/usdb
+    usdb_go build -o "$helper_bin" ./scripts/usdb
   )
 
   usdb_chain_log "Importing the unmodified fixture as a control"

@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# shellcheck source=lib/go_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
 
 E2E_WORK_DIR=${WORK_DIR:-/tmp/usdb-profile-growth-e2e}
@@ -49,13 +51,9 @@ export ORD_SERVER_LOG_FILE="${ORD_SERVER_LOG_FILE:-$WORK_DIR/ord-server.log}"
 export REGTEST_LOG_PREFIX="[usdb-profile-growth/usdb]"
 
 GETH_BIN=${GETH_BIN:-}
-GETH_GO=${GETH_GO:-/usr/local/go/bin/go}
-
-if [[ -n "$GETH_BIN" ]]; then
-  GETH_CMD=("$GETH_BIN")
-else
-  GETH_CMD=("$GETH_GO" run -ldflags=-checklinkname=0 ./cmd/geth)
-fi
+USDB_GO_TOOLCHAIN_MODE=${USDB_GO_TOOLCHAIN_MODE:-auto}
+usdb_prepare_geth_binary GETH_BIN "$ROOT_DIR" "$E2E_WORK_DIR/bin/geth"
+GETH_CMD=("$GETH_BIN")
 
 # shellcheck source=/dev/null
 source "$USDB_REPO_DIR/src/btc/usdb-indexer/scripts/regtest_reorg_lib.sh"

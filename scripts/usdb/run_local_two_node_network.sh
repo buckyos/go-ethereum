@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# shellcheck source=lib/go_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
 SOURCE_DAO_DIR=${SOURCE_DAO_DIR:-"$ROOT_DIR/../SourceDAO"}
 USDB_CONFIG=${USDB_CONFIG:-"$ROOT_DIR/tools/config/usdb-local-chain.json"}
 USDB_ARTIFACTS=${USDB_ARTIFACTS:-"$SOURCE_DAO_DIR/artifacts-usdb"}
@@ -68,13 +70,9 @@ NODE2_GCMODE=${NODE2_GCMODE:-full}
 USDB_BOOTSTRAP_INDEXER_PORT=${USDB_BOOTSTRAP_INDEXER_PORT:-$((NODE2_HTTP_PORT + 1))}
 
 GETH_BIN=${GETH_BIN:-}
-GETH_GO=${GETH_GO:-/usr/local/go/bin/go}
-
-if [[ -n "$GETH_BIN" ]]; then
-  GETH_CMD=("$GETH_BIN")
-else
-  GETH_CMD=("$GETH_GO" run -ldflags=-checklinkname=0 ./cmd/geth)
-fi
+USDB_GO_TOOLCHAIN_MODE=${USDB_GO_TOOLCHAIN_MODE:-auto}
+usdb_prepare_geth_binary GETH_BIN "$ROOT_DIR" "$WORK_DIR/bin/geth"
+GETH_CMD=("$GETH_BIN")
 
 POW_ARGS=()
 case "$USDB_BOOTSTRAP_FAKE_POW" in

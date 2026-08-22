@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# shellcheck source=lib/go_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
 SOURCE_DAO_REPO=${SOURCE_DAO_REPO:-"$ROOT_DIR/../SourceDAO"}
 USDB_REPO=${USDB_REPO:-"$ROOT_DIR/../usdb"}
 WORK_DIR=${WORK_DIR:-/tmp/usdb-public-release-candidate-e2e}
@@ -9,9 +11,9 @@ SOURCE_ROOT=${SOURCE_ROOT:-"$WORK_DIR/source"}
 GO_SOURCE_DIR=${GO_SOURCE_DIR:-"$SOURCE_ROOT/go-ethereum"}
 SOURCE_DAO_SOURCE_DIR=${SOURCE_DAO_SOURCE_DIR:-"$SOURCE_ROOT/SourceDAO"}
 NETWORK_WORK_DIR=${NETWORK_WORK_DIR:-"$WORK_DIR/network"}
-GETH_GO=${GETH_GO:-/home/bucky/.cache/geth-go-1.18.5-linux-amd64/go/bin/go}
+USDB_GO_TOOLCHAIN_MODE=release
 GETH_BIN=${GETH_BIN:-"$WORK_DIR/bin/geth"}
-GOCACHE=${GOCACHE:-"$WORK_DIR/go-cache"}
+USDB_GOCACHE=${USDB_GOCACHE:-"$WORK_DIR/go-cache"}
 PUBLIC_RELEASE_ID=${PUBLIC_RELEASE_ID:-usdb-public-release-e2e-v1}
 PUBLIC_RELEASE_SIGNING_KEY_ID=${PUBLIC_RELEASE_SIGNING_KEY_ID:-usdb-public-release-e2e-key-1}
 PUBLIC_RELEASE_FEE_SPLIT_BLOCK=${PUBLIC_RELEASE_FEE_SPLIT_BLOCK:-192}
@@ -93,17 +95,10 @@ load_node_toolchain() {
 }
 
 build_clean_artifacts() {
-  rm -rf "${GOCACHE:?}" "${WORK_DIR:?}/bin"
-  mkdir -p "$GOCACHE" "$WORK_DIR/bin"
+  rm -rf "${USDB_GOCACHE:?}" "${WORK_DIR:?}/bin"
+  mkdir -p "$USDB_GOCACHE" "$WORK_DIR/bin"
   echo "Building geth from an isolated source snapshot and empty Go cache"
-  (
-    cd "$GO_SOURCE_DIR"
-    GOCACHE="$GOCACHE" "$GETH_GO" build \
-      -trimpath \
-      -buildvcs=false \
-      -o "$GETH_BIN" \
-      ./cmd/geth
-  )
+  usdb_build_geth "$GO_SOURCE_DIR" "$GETH_BIN"
   "$GETH_BIN" version >/dev/null
 
   echo "Building and auditing SourceDAO USDB artifacts from an isolated source snapshot"
@@ -253,10 +248,7 @@ main() {
   require_command tar
   ALLOW_DIRTY_RELEASE_E2E="$(normalize_boolean ALLOW_DIRTY_RELEASE_E2E "$ALLOW_DIRTY_RELEASE_E2E")"
 
-  if [[ ! -x "$GETH_GO" ]]; then
-    echo "GETH_GO is not executable: $GETH_GO" >&2
-    exit 1
-  fi
+  usdb_init_go_toolchain
   for repo in "$ROOT_DIR" "$SOURCE_DAO_REPO" "$USDB_REPO"; do
     if [[ ! -d "$repo/.git" ]]; then
       echo "Missing required git checkout: $repo" >&2

@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# shellcheck source=lib/go_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
 OUTPUT_ROOT=${USDB_POW_CALIBRATION_OUTPUT_ROOT:-/tmp/usdb-pow-calibration}
 PROFILE=${USDB_POW_CALIBRATION_PROFILE:-local-cpu-single-thread}
 TARGET_BLOCK_SECONDS=${USDB_POW_CALIBRATION_TARGET_BLOCK_SECONDS:-13}
@@ -13,14 +15,14 @@ GENESIS_DIFFICULTY=${USDB_POW_CALIBRATION_GENESIS_DIFFICULTY:-0x2000}
 MINIMUM_DIFFICULTY=${USDB_POW_CALIBRATION_MINIMUM_DIFFICULTY:-$GENESIS_DIFFICULTY}
 REQUIRE_UNCENSORED=${USDB_POW_CALIBRATION_REQUIRE_UNCENSORED:-1}
 REQUIRE_RELEASE_ELIGIBLE=${USDB_POW_CALIBRATION_REQUIRE_RELEASE_ELIGIBLE:-0}
-GETH_GO=${GETH_GO:-/usr/local/go/bin/go}
+USDB_GO_TOOLCHAIN_MODE=${USDB_GO_TOOLCHAIN_MODE:-auto}
 GETH_BIN=${GETH_BIN:-"$OUTPUT_ROOT/geth"}
 REUSE_GETH_BIN=${USDB_POW_CALIBRATION_REUSE_GETH_BIN:-0}
 ISOLATED_HARDWARE=${USDB_POW_CALIBRATION_ISOLATED_HARDWARE:-0}
 ENVIRONMENT_NOTES=${USDB_POW_CALIBRATION_ENVIRONMENT_NOTES:-operator_did_not_declare_isolation}
 WORK_DIR=${WORK_DIR:-"$OUTPUT_ROOT/e2e"}
 REPORT_FILE=${USDB_POW_CALIBRATION_REPORT:-"$OUTPUT_ROOT/${PROFILE}.json"}
-GOCACHE=${GOCACHE:-/tmp/usdb-pow-calibration-go-cache}
+USDB_GOCACHE=${USDB_GOCACHE:-/tmp/usdb-pow-calibration-go-cache}
 
 require_positive_integer() {
   local name="$1"
@@ -74,15 +76,14 @@ if genesis < minimum:
     raise SystemExit("PoW calibration genesis difficulty must not be below minimum")
 PY
 
-mkdir -p "$OUTPUT_ROOT" "$GOCACHE"
+mkdir -p "$OUTPUT_ROOT" "$USDB_GOCACHE"
 if [[ "$REUSE_GETH_BIN" == "1" && -x "$GETH_BIN" ]]; then
   echo "[usdb-pow-calibration] reusing geth binary ${GETH_BIN}"
+  reused_geth_binary=true
 else
   echo "[usdb-pow-calibration] building geth from current source"
-  (
-    cd "$ROOT_DIR"
-    GOCACHE="$GOCACHE" "$GETH_GO" build -ldflags=-checklinkname=0 -o "$GETH_BIN" ./cmd/geth
-  )
+  usdb_build_geth "$ROOT_DIR" "$GETH_BIN"
+  reused_geth_binary=false
 fi
 
 source_commit=$(git -C "$ROOT_DIR" rev-parse HEAD)
@@ -92,7 +93,11 @@ else
   source_dirty=false
 fi
 binary_sha256=$(sha256sum "$GETH_BIN" | awk '{print $1}')
-build_command="${GETH_GO} build -ldflags=-checklinkname=0 -o ${GETH_BIN} ./cmd/geth; sha256=${binary_sha256}"
+if [[ "$reused_geth_binary" == "true" ]]; then
+  build_command="reused binary=${GETH_BIN}; sha256=${binary_sha256}"
+else
+  build_command="$(usdb_geth_build_description "$GETH_BIN"); sha256=${binary_sha256}"
+fi
 cpu_model=$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')
 virtualization=$(lscpu | awk -F: '/Hypervisor vendor/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')
 miner_hardware="${cpu_model}; logical_cpus=$(nproc); hypervisor=${virtualization:-none}; kernel=$(uname -sr)"
