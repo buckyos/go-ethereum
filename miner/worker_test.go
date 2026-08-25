@@ -234,6 +234,8 @@ func (s *stubPayloadBuilder) Close() {}
 func testWorkerUSDBChainConfig() *params.ChainConfig {
 	config := *params.AllEthashProtocolChanges
 	config.USDB = &params.USDBConsensusConfig{
+		BTCNetworkID:         "btc-regtest",
+		BTCIndexOriginHeight: 1,
 		Activations: []params.USDBConsensusActivation{{
 			BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
 			BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,

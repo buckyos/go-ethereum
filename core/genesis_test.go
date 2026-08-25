@@ -356,23 +356,29 @@ func TestDefaultUSDBGenesisBlockWithBootstrap(t *testing.T) {
 	genesisDifficulty := big.NewInt(0x40000)
 	minimumDifficulty := big.NewInt(0x20000)
 
-	genesis, err := DefaultUSDBGenesisBlockWithBootstrap(USDBBootstrapGenesisConfig{
-		DaoAddress:            daoAddr,
-		DaoCode:               daoCode,
-		DividendAddress:       dividendAddr,
-		DividendCode:          dividendCode,
-		BootstrapAdmin:        adminAddr,
-		BootstrapAdminBalance: adminBalance,
-		DividendFeeSplitBlock: activationBlock,
-		GenesisDifficulty:     genesisDifficulty,
-		MinimumDifficulty:     minimumDifficulty,
-	})
+	opts := validUSDBBootstrapGenesisConfig()
+	opts.DaoAddress = daoAddr
+	opts.DaoCode = daoCode
+	opts.DividendAddress = dividendAddr
+	opts.DividendCode = dividendCode
+	opts.BootstrapAdmin = adminAddr
+	opts.BootstrapAdminBalance = adminBalance
+	opts.DividendFeeSplitBlock = activationBlock
+	opts.GenesisDifficulty = genesisDifficulty
+	opts.MinimumDifficulty = minimumDifficulty
+	genesis, err := DefaultUSDBGenesisBlockWithBootstrap(opts)
 	if err != nil {
 		t.Fatalf("failed to build USDB bootstrap genesis: %v", err)
 	}
 
 	if got := genesis.Config.DividendAddress; got != dividendAddr {
 		t.Fatalf("unexpected dividend address: %s", got)
+	}
+	if got := genesis.Config.ChainID; got == nil || got.Cmp(opts.ChainID) != 0 {
+		t.Fatalf("unexpected configurable chain ID: %v", got)
+	}
+	if got := genesis.Config.ChainID_ALT; got == nil || got.Cmp(opts.ChainID) != 0 {
+		t.Fatalf("unexpected alternate chain ID: %v", got)
 	}
 	if got := genesis.Config.DividendFeeSplitBlock; got == nil || got.Cmp(activationBlock) != 0 {
 		t.Fatalf("unexpected dividend activation block: %v", got)
@@ -462,6 +468,7 @@ func TestUSDBBootstrapGenesisPreservesAndClonesBaseState(t *testing.T) {
 	existingBalance.SetInt64(1)
 	opts.DaoCode[0] = 0xfe
 	opts.BootstrapAdminBalance.SetInt64(1)
+	opts.USDBConsensus.Activations[0].Versions.PayloadVersion = 2
 	base.Config.USDB.Activations[0].Versions.PayloadVersion = 2
 
 	if got := genesis.Alloc[existingAddress].Code[0]; got != 0x60 {
@@ -486,6 +493,30 @@ func TestUSDBBootstrapGenesisRejectsInvalidConfig(t *testing.T) {
 		name   string
 		mutate func(*USDBBootstrapGenesisConfig)
 	}{
+		{
+			name: "zero chain ID",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.ChainID = big.NewInt(0)
+			},
+		},
+		{
+			name: "empty consensus schedule",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.USDBConsensus.Activations = nil
+			},
+		},
+		{
+			name: "BTC registry network mismatch",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.USDBConsensus.BTCNetworkID = "btc-mainnet"
+			},
+		},
+		{
+			name: "fee policy disabled",
+			mutate: func(config *USDBBootstrapGenesisConfig) {
+				config.USDBConsensus.Activations[0].Versions.FeeSplitPolicyVersion = 0
+			},
+		},
 		{
 			name: "zero Dao address",
 			mutate: func(config *USDBBootstrapGenesisConfig) {
@@ -558,7 +589,13 @@ func TestUSDBBootstrapGenesisRejectsBaseAllocConflict(t *testing.T) {
 }
 
 func validUSDBBootstrapGenesisConfig() USDBBootstrapGenesisConfig {
+	consensus := cloneUSDBConsensusConfig(params.USDBChainConfig.USDB)
+	for i := range consensus.Activations {
+		consensus.Activations[i].Versions.FeeSplitPolicyVersion = usdb.FeeSplitPolicyVersionV1
+	}
 	return USDBBootstrapGenesisConfig{
+		ChainID:               big.NewInt(42_424_242),
+		USDBConsensus:         consensus,
 		DaoAddress:            common.HexToAddress("0x0000000000000000000000000000000000001001"),
 		DaoCode:               []byte{0x60, 0x00, 0x60, 0x00},
 		DividendAddress:       common.HexToAddress("0x0000000000000000000000000000000000001002"),

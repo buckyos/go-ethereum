@@ -11,6 +11,8 @@ import (
 
 func testBuilderChainConfig(payloadVersion byte, difficultyPolicyVersion uint16) *params.ChainConfig {
 	return &params.ChainConfig{USDB: &params.USDBConsensusConfig{
+		BTCNetworkID:         "btc-regtest",
+		BTCIndexOriginHeight: 1,
 		Activations: []params.USDBConsensusActivation{{
 			BTCActivationRegistryID: BTCRegtestActivationRegistryIDV1,
 			BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
@@ -173,6 +175,8 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 		profile: newTestProfileView(t, selector, "0", "0"),
 	}
 	config := &params.ChainConfig{USDB: &params.USDBConsensusConfig{
+		BTCNetworkID:         "btc-regtest",
+		BTCIndexOriginHeight: 1,
 		Activations: []params.USDBConsensusActivation{
 			{
 				Block:                   0,

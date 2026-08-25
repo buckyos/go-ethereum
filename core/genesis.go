@@ -539,6 +539,8 @@ func DefaultUSDBGenesisBlock() *Genesis {
 // SourceDAO fresh bootstrap. Contract initialization still happens through
 // transactions after the chain starts.
 type USDBBootstrapGenesisConfig struct {
+	ChainID               *big.Int
+	USDBConsensus         *params.USDBConsensusConfig
 	DaoAddress            common.Address
 	DaoCode               []byte
 	DividendAddress       common.Address
@@ -567,6 +569,21 @@ func buildUSDBGenesisBlockWithBootstrap(base *Genesis, opts USDBBootstrapGenesis
 	if err != nil {
 		return nil, err
 	}
+	genesis.Config.ChainID = new(big.Int).Set(opts.ChainID)
+	genesis.Config.ChainID_ALT = new(big.Int).Set(opts.ChainID)
+	genesis.Config.USDB = cloneUSDBConsensusConfig(opts.USDBConsensus)
+	if opts.GenesisDifficulty != nil {
+		genesis.Difficulty = new(big.Int).Set(opts.GenesisDifficulty)
+	}
+	if opts.MinimumDifficulty != nil {
+		genesis.Config.EthPoWMinimumDifficultyOverride = new(big.Int).Set(opts.MinimumDifficulty)
+	}
+	genesis.Config.DividendAddress = opts.DividendAddress
+	genesis.Config.DividendCodeHash = crypto.Keccak256Hash(opts.DividendCode)
+	genesis.Config.DividendFeeSplitBlock = new(big.Int).Set(opts.DividendFeeSplitBlock)
+	if err := genesis.Config.CheckConfigForkOrder(); err != nil {
+		return nil, fmt.Errorf("invalid USDB bootstrap chain config: %w", err)
+	}
 
 	genesis.Alloc[opts.DaoAddress] = GenesisAccount{
 		Balance: big.NewInt(0),
@@ -581,21 +598,6 @@ func buildUSDBGenesisBlockWithBootstrap(base *Genesis, opts USDBBootstrapGenesis
 	}
 	if err := initializeUSDBGenesisSystemState(genesis.Alloc, genesis.Config); err != nil {
 		return nil, fmt.Errorf("initialize USDB bootstrap system state: %w", err)
-	}
-	if opts.GenesisDifficulty != nil {
-		genesis.Difficulty = new(big.Int).Set(opts.GenesisDifficulty)
-	}
-	if opts.MinimumDifficulty != nil {
-		genesis.Config.EthPoWMinimumDifficultyOverride = new(big.Int).Set(opts.MinimumDifficulty)
-	}
-	genesis.Config.DividendAddress = opts.DividendAddress
-	genesis.Config.DividendCodeHash = crypto.Keccak256Hash(opts.DividendCode)
-	genesis.Config.DividendFeeSplitBlock = new(big.Int).Set(opts.DividendFeeSplitBlock)
-	for i := range genesis.Config.USDB.Activations {
-		genesis.Config.USDB.Activations[i].Versions.FeeSplitPolicyVersion = usdb.FeeSplitPolicyVersionV1
-	}
-	if err := genesis.Config.CheckConfigForkOrder(); err != nil {
-		return nil, fmt.Errorf("invalid USDB bootstrap chain config: %w", err)
 	}
 	return genesis, nil
 }
@@ -699,6 +701,29 @@ func validateUSDBBootstrapGenesisConfig(base *Genesis, opts USDBBootstrapGenesis
 	if base.Difficulty == nil || base.Difficulty.Sign() <= 0 {
 		return errors.New("USDB bootstrap genesis base has invalid difficulty")
 	}
+	if opts.ChainID == nil || opts.ChainID.Sign() <= 0 {
+		return errors.New("USDB bootstrap chain ID must be positive")
+	}
+	if opts.USDBConsensus == nil || len(opts.USDBConsensus.Activations) == 0 {
+		return errors.New("USDB bootstrap consensus activation schedule must not be empty")
+	}
+	if opts.USDBConsensus.Activations[0].Block != 0 {
+		return errors.New("USDB bootstrap consensus activation schedule must start at block 0")
+	}
+	for _, activation := range opts.USDBConsensus.Activations {
+		descriptor, err := usdb.DescribeBTCActivationRegistry(activation.BTCActivationRegistryID)
+		if err != nil {
+			return fmt.Errorf("resolve USDB bootstrap BTC activation registry %q: %w", activation.BTCActivationRegistryID, err)
+		}
+		if descriptor.NetworkID != opts.USDBConsensus.BTCNetworkID {
+			return fmt.Errorf(
+				"USDB bootstrap BTC activation registry %s belongs to network %q, not configured source network %q",
+				activation.BTCActivationRegistryID,
+				descriptor.NetworkID,
+				opts.USDBConsensus.BTCNetworkID,
+			)
+		}
+	}
 	if opts.DaoAddress == (common.Address{}) {
 		return errors.New("USDB bootstrap Dao address is zero")
 	}
@@ -743,6 +768,20 @@ func validateUSDBBootstrapGenesisConfig(base *Genesis, opts USDBBootstrapGenesis
 	}
 	if opts.DividendFeeSplitBlock == nil || opts.DividendFeeSplitBlock.Sign() <= 0 {
 		return errors.New("USDB bootstrap dividend fee-split block must be positive")
+	}
+	if !opts.DividendFeeSplitBlock.IsUint64() {
+		return errors.New("USDB bootstrap dividend fee-split block exceeds uint64")
+	}
+	feeActivation, err := (&params.ChainConfig{USDB: opts.USDBConsensus}).USDBConsensusAt(opts.DividendFeeSplitBlock.Uint64())
+	if err != nil {
+		return fmt.Errorf("resolve USDB bootstrap fee-split policy: %w", err)
+	}
+	if feeActivation == nil || feeActivation.FeeSplitPolicyVersion != usdb.FeeSplitPolicyVersionV1 {
+		return fmt.Errorf(
+			"USDB bootstrap fee-split block %d requires fee policy version %d",
+			opts.DividendFeeSplitBlock.Uint64(),
+			usdb.FeeSplitPolicyVersionV1,
+		)
 	}
 	if (opts.GenesisDifficulty == nil) != (opts.MinimumDifficulty == nil) {
 		return errors.New("USDB bootstrap genesis and minimum difficulty overrides must be provided together")
@@ -790,6 +829,15 @@ func cloneGenesisForBootstrap(base *Genesis) (*Genesis, error) {
 		ParentHash: base.ParentHash,
 		BaseFee:    copyBigInt(base.BaseFee),
 	}, nil
+}
+
+func cloneUSDBConsensusConfig(config *params.USDBConsensusConfig) *params.USDBConsensusConfig {
+	if config == nil {
+		return nil
+	}
+	cloned := *config
+	cloned.Activations = append([]params.USDBConsensusActivation(nil), config.Activations...)
+	return &cloned
 }
 
 func cloneGenesisAccount(account GenesisAccount) GenesisAccount {

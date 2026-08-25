@@ -199,6 +199,42 @@
 - `ChainID_ALT` 在 `v1` 阶段可直接等于 `ChainID`
 - 后续再逐步清理与 `ChainID_ALT` 绑定的 ETHW 历史兼容逻辑
 
+当前 bootstrap schema v2 已把 `chainId` 改为显式、可配置的正数。genesis builder 会同时把
+`ChainID` 和 `ChainID_ALT` 设置为该值，不再要求等于内置开发常量 `20260323`。需要区分：
+
+- `chainId` 是 EVM 交易签名和 chain config 身份。
+- geth `--networkid` 是 devp2p 网络隔离参数，部署同一网络时仍需在所有节点上统一设置。
+- `btcSource.networkId` 是 USDB 索引所读取的 BTC source network，不是 geth `--networkid`。
+
+### 3.3.1 Bootstrap schema v2 的 BTC source 绑定
+
+schema v2 将以下内容直接纳入生成后的 `ChainConfig.usdb`：
+
+- `btcSource.networkId`
+- `btcSource.indexOriginHeight`
+- `usdbConsensus.activations[]`
+
+每个 activation checkpoint 必须显式给出完整 versions、BTC registry ID 和 BTC anchor max age。
+loader 会使用二进制内嵌的 Go golden catalog 验证 registry 存在，且 registry 的 BTC network 必须与
+`btcSource.networkId` 一致；schedule 必须从 USDB block 0 开始。genesis builder 不再隐式改写任何
+policy version。
+
+当前模板：
+
+- `tools/config/usdb-local-chain.json` 和 `usdb-chain-bootstrap.example.json`
+  - BTC source 为 `btc-regtest`
+  - `indexOriginHeight = 1`
+  - 使用内置开发 `chainId = 20260323`
+- `tools/config/usdb-chain-bootstrap-btc-mainnet.example.json`
+  - BTC source 为 `btc-mainnet`
+  - `indexOriginHeight = 963800`，与当前 balance-history 发布快照起点一致
+  - mainnet 在该起点以前没有 USDB inscription，因此无需为当前网络保留更早索引历史
+  - `chainId = 0` 是有意设置的 fail-closed 占位；testnet/mainnet 发布前必须替换为已评审且唯一的正数
+
+BTC-mainnet 模板只冻结了 BTC source 选择和索引起点，不表示 USDB public mainnet 参数已经冻结。
+其中 `btcAnchorMaxAgeBlocks`、难度、fee gate、合约 commitment、admin 和最终 chain ID 仍需随目标
+testnet/mainnet release 一并评审。
+
 同时还应一起调整：
 
 - 默认 bootnodes
@@ -208,7 +244,7 @@
 
 这些组成了完整的“链身份”，不只是交易签名里的 `chainId`。
 
-### 3.3.1 第一阶段网络默认值收口
+### 3.3.2 第一阶段网络默认值收口
 
 第一阶段建议只收口最影响日常开发和节点隔离的默认值：
 
@@ -229,7 +265,7 @@
     - `admin.addPeer(...)`
   - 待进入多机开发或公开测试网阶段后，再补正式 `USDBBootnodes` 和 DNS discovery
 
-### 3.3.2 开发期 bootnodes / static-nodes 生成方式
+### 3.3.3 开发期 bootnodes / static-nodes 生成方式
 
 当前阶段不建议把 bootnodes 直接硬编码进代码，而是先通过外部脚本生成。
 

@@ -65,6 +65,32 @@ type btcActivationPoint struct {
 	ActiveVersionSetID string           `json:"active_version_set_id"`
 }
 
+// BTCActivationRegistryDescriptor exposes the immutable identity metadata for
+// one registry revision without exposing or mutating its activation records.
+type BTCActivationRegistryDescriptor struct {
+	NetworkID            string
+	Revision             uint32
+	Current              bool
+	StableLagBlocks      uint32
+	ActivationRegistryID string
+}
+
+// DescribeBTCActivationRegistry returns the generated catalog metadata for an
+// immutable registry ID. Unknown IDs fail closed.
+func DescribeBTCActivationRegistry(registryID string) (BTCActivationRegistryDescriptor, error) {
+	registry, err := loadBTCActivationRegistry(registryID)
+	if err != nil {
+		return BTCActivationRegistryDescriptor{}, err
+	}
+	return BTCActivationRegistryDescriptor{
+		NetworkID:            registry.NetworkID,
+		Revision:             registry.Revision,
+		Current:              registry.Current,
+		StableLagBlocks:      registry.StableLagBlocks,
+		ActivationRegistryID: registry.ActivationRegistryID,
+	}, nil
+}
+
 func loadBTCActivationRegistry(registryID string) (*btcActivationRegistry, error) {
 	btcActivationGoldenOnce.Do(func() {
 		btcActivationGoldenRegistries, btcActivationGoldenErr = parseBTCActivationGolden(btcActivationGoldenJSON)

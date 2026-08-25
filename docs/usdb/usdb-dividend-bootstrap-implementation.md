@@ -113,13 +113,15 @@ generated genesis hash 同步绑定到该网络的 `USDBGenesisHash`、chain con
 1. 使用 `geth dumpgenesis --usdb --usdb.bootstrap.config <path> --usdb.bootstrap.artifacts <dir>`
    读取 versioned public genesis spec 和独立的 SourceDAO artifact root。
 2. public spec 显式固定：
-   - `schemaVersion`
+   - `schemaVersion = 2` 和正数 `chainId`
+   - `btcSource.networkId` 与 `btcSource.indexOriginHeight`
+   - 完整 `usdbConsensus.activations[]`，包括 registry binding、anchor max age 和全部 policy versions
    - DAO / Dividend 地址、artifact 相对路径、artifact SHA-256 和 runtime code hash
    - `bootstrapAdmin.address` 与初始余额
    - genesis / minimum difficulty
    - `dividendFeeSplitBlock`
-3. loader 严格校验 schema、地址、数值编码、artifact 边界和两个 code commitment 后，生成固定的
-   `genesis-bootstrap.json`。
+3. loader 严格校验 schema、BTC registry/network 归属、activation schedule、地址、数值编码、
+   artifact 边界和两个 code commitment 后，生成固定的 `genesis-bootstrap.json`。
 4. 用 `geth init genesis-bootstrap.json` 初始化本地节点。
 
 bootstrap signer 私钥不属于 genesis spec，也不参与 genesis hash。SourceDAO 初始化脚本必须通过
@@ -143,6 +145,12 @@ bootstrap signer 私钥不属于 genesis spec，也不参与 genesis hash。Sour
 
 ./build/bin/geth --datadir /tmp/usdb-node-1 init /tmp/usdb-bootstrap-genesis.json
 ```
+
+`tools/config/usdb-local-chain.json` 是可直接运行的 `btc-regtest` 模板。读取 BTC mainnet 数据的候选
+网络从 `tools/config/usdb-chain-bootstrap-btc-mainnet.example.json` 开始，其中
+`indexOriginHeight = 963800`；该模板故意保留 `chainId = 0`，必须先替换为目标 testnet/mainnet 的
+正数 chain ID，loader 才会接受。运行节点时还要为同一网络统一配置 geth `--networkid`，它与
+`btcSource.networkId` 是两个不同的命名空间。
 
 或者直接使用仓库脚本，把这两步与 SourceDAO smoke 串起来：
 
@@ -386,7 +394,8 @@ keccak256("sourcedao.dividend.bootstrap-finalized:v1")
 开发和联调阶段：
 
 - 使用严格 public spec 生成 bootstrap overlay；overlay 绑定 address、height、code hash，
-  并把 activation 的 `fee_split_policy_version` 设置为 `1`
+  schema v2 spec 自身必须在对应 activation 中显式设置 `feeSplitPolicyVersion = 1`；builder 不再
+  隐式修改 activation schedule
 
 ### 4.2 激活块建议
 

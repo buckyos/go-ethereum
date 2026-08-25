@@ -357,6 +357,8 @@ func newTestUSDBChainConfig() *params.ChainConfig {
 	return &params.ChainConfig{
 		HomesteadBlock: big.NewInt(0),
 		USDB: &params.USDBConsensusConfig{
+			BTCNetworkID:         "btc-regtest",
+			BTCIndexOriginHeight: 1,
 			Activations: []params.USDBConsensusActivation{{
 				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
 				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,

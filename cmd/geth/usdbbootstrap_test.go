@@ -14,12 +14,14 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	internalusdb "github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 )
 
 const (
 	testDaoArtifactPath      = "contracts/Dao.sol/SourceDao.json"
 	testDividendArtifactPath = "contracts/Dividend.sol/DividendContract.json"
+	testUSDBBootstrapChainID = uint64(42_424_242)
 )
 
 type usdbBootstrapTestFixture struct {
@@ -39,6 +41,18 @@ func TestLoadUSDBBootstrapGenesis(t *testing.T) {
 	}
 	if genesis.Config == params.USDBChainConfig {
 		t.Fatal("bootstrap genesis should clone the base USDB config")
+	}
+	if got := genesis.Config.ChainID; got == nil || got.Uint64() != testUSDBBootstrapChainID {
+		t.Fatalf("unexpected configurable chain ID: %v", got)
+	}
+	if got := genesis.Config.ChainID_ALT; got == nil || got.Uint64() != testUSDBBootstrapChainID {
+		t.Fatalf("unexpected alternate chain ID: %v", got)
+	}
+	if got := genesis.Config.USDB.BTCNetworkID; got != "btc-regtest" {
+		t.Fatalf("unexpected BTC source network: %q", got)
+	}
+	if got := genesis.Config.USDB.BTCIndexOriginHeight; got != 1 {
+		t.Fatalf("unexpected BTC index origin height: %d", got)
 	}
 
 	daoAddress := common.HexToAddress(fixture.config.Predeploys.Dao.Address)
@@ -78,6 +92,27 @@ func TestLoadUSDBBootstrapGenesis(t *testing.T) {
 	}
 }
 
+func TestUSDBBootstrapConfigSelectsBTCMainnet(t *testing.T) {
+	fixture := newUSDBBootstrapTestFixture(t)
+	fixture.config.BTCSource = usdbGenesisBTCSource{
+		NetworkID:         "btc-mainnet",
+		IndexOriginHeight: 963_800,
+	}
+	fixture.config.USDBConsensus.Activations[0].BTCActivationRegistryID = internalusdb.BTCMainnetActivationRegistryIDV1
+	writeUSDBBootstrapTestConfig(t, fixture.configPath, fixture.config)
+
+	genesis, err := loadUSDBBootstrapGenesis(fixture.configPath, fixture.artifactsRoot)
+	if err != nil {
+		t.Fatalf("failed to build BTC-mainnet bootstrap genesis: %v", err)
+	}
+	if got := genesis.Config.USDB.BTCNetworkID; got != "btc-mainnet" {
+		t.Fatalf("unexpected BTC source network: %q", got)
+	}
+	if got := genesis.Config.USDB.BTCIndexOriginHeight; got != 963_800 {
+		t.Fatalf("unexpected BTC mainnet index origin height: %d", got)
+	}
+}
+
 func TestUSDBBootstrapGenesisIsPathIndependentAndDeterministic(t *testing.T) {
 	first := newUSDBBootstrapTestFixture(t)
 	second := newUSDBBootstrapTestFixture(t)
@@ -106,6 +141,69 @@ func TestUSDBBootstrapGenesisIsPathIndependentAndDeterministic(t *testing.T) {
 	}
 }
 
+func TestUSDBBootstrapSchemaV2Templates(t *testing.T) {
+	tests := []struct {
+		name              string
+		file              string
+		wantChainID       uint64
+		wantBTCNetwork    string
+		wantOriginHeight  uint32
+		wantRegistryID    string
+		wantFeeSplitBlock uint64
+	}{
+		{
+			name:              "local regtest",
+			file:              "usdb-local-chain.json",
+			wantChainID:       params.USDBNetworkID,
+			wantBTCNetwork:    "btc-regtest",
+			wantOriginHeight:  1,
+			wantRegistryID:    internalusdb.BTCRegtestActivationRegistryIDV1,
+			wantFeeSplitBlock: 256,
+		},
+		{
+			name:              "regtest example",
+			file:              "usdb-chain-bootstrap.example.json",
+			wantChainID:       params.USDBNetworkID,
+			wantBTCNetwork:    "btc-regtest",
+			wantOriginHeight:  1,
+			wantRegistryID:    internalusdb.BTCRegtestActivationRegistryIDV1,
+			wantFeeSplitBlock: 256,
+		},
+		{
+			name:              "BTC mainnet example",
+			file:              "usdb-chain-bootstrap-btc-mainnet.example.json",
+			wantChainID:       0,
+			wantBTCNetwork:    "btc-mainnet",
+			wantOriginHeight:  963_800,
+			wantRegistryID:    internalusdb.BTCMainnetActivationRegistryIDV1,
+			wantFeeSplitBlock: 8192,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join("..", "..", "tools", "config", test.file)
+			blob, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("failed to read bootstrap template %s: %v", path, err)
+			}
+			var config usdbGenesisBootstrapConfig
+			if err := decodeStrictJSON(blob, &config); err != nil {
+				t.Fatalf("failed to decode bootstrap template %s: %v", path, err)
+			}
+			if config.SchemaVersion != usdbGenesisBootstrapSchemaVersion || config.ChainID != test.wantChainID ||
+				config.BTCSource.NetworkID != test.wantBTCNetwork || config.BTCSource.IndexOriginHeight != test.wantOriginHeight ||
+				config.DividendFeeSplitBlock == nil || *config.DividendFeeSplitBlock != test.wantFeeSplitBlock {
+				t.Fatalf("unexpected bootstrap template identity: %+v", config)
+			}
+			if len(config.USDBConsensus.Activations) != 1 ||
+				config.USDBConsensus.Activations[0].BTCActivationRegistryID != test.wantRegistryID ||
+				config.USDBConsensus.Activations[0].Versions.FeeSplitPolicyVersion != internalusdb.FeeSplitPolicyVersionV1 {
+				t.Fatalf("unexpected bootstrap template activation: %+v", config.USDBConsensus.Activations)
+			}
+		})
+	}
+}
+
 func TestUSDBBootstrapConfigRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -114,13 +212,37 @@ func TestUSDBBootstrapConfigRejectsInvalidValues(t *testing.T) {
 		{
 			name: "unsupported schema",
 			mutate: func(config *usdbGenesisBootstrapConfig) {
-				config.SchemaVersion = 2
+				config.SchemaVersion = 3
 			},
 		},
 		{
-			name: "wrong chain",
+			name: "zero chain ID",
 			mutate: func(config *usdbGenesisBootstrapConfig) {
-				config.ChainID++
+				config.ChainID = 0
+			},
+		},
+		{
+			name: "empty activation schedule",
+			mutate: func(config *usdbGenesisBootstrapConfig) {
+				config.USDBConsensus.Activations = nil
+			},
+		},
+		{
+			name: "activation schedule starts after genesis",
+			mutate: func(config *usdbGenesisBootstrapConfig) {
+				config.USDBConsensus.Activations[0].Block = 1
+			},
+		},
+		{
+			name: "unknown BTC registry",
+			mutate: func(config *usdbGenesisBootstrapConfig) {
+				config.USDBConsensus.Activations[0].BTCActivationRegistryID = strings.Repeat("f", 64)
+			},
+		},
+		{
+			name: "BTC registry network mismatch",
+			mutate: func(config *usdbGenesisBootstrapConfig) {
+				config.BTCSource.NetworkID = "btc-mainnet"
 			},
 		},
 		{
@@ -201,8 +323,8 @@ func TestUSDBBootstrapConfigRejectsAmbiguousJSON(t *testing.T) {
 			name: "duplicate field",
 			json: strings.Replace(
 				base,
-				`"chainId":20260323`,
-				`"chainId":20260323,"chainId":20260323`,
+				`"chainId":42424242`,
+				`"chainId":42424242,"chainId":42424242`,
 				1,
 			),
 			want: "duplicate JSON field",
@@ -340,7 +462,28 @@ func newUSDBBootstrapTestFixture(t *testing.T) usdbBootstrapTestFixture {
 	feeSplitBlock := uint64(16)
 	config := usdbGenesisBootstrapConfig{
 		SchemaVersion: usdbGenesisBootstrapSchemaVersion,
-		ChainID:       params.USDBNetworkID,
+		ChainID:       testUSDBBootstrapChainID,
+		BTCSource: usdbGenesisBTCSource{
+			NetworkID:         "btc-regtest",
+			IndexOriginHeight: 1,
+		},
+		USDBConsensus: usdbGenesisConsensus{
+			Activations: []params.USDBConsensusActivation{{
+				Block:                   0,
+				BTCActivationRegistryID: internalusdb.BTCRegtestActivationRegistryIDV1,
+				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
+				Versions: params.USDBConsensusVersions{
+					PayloadVersion:                       internalusdb.ProfileSelectorPayloadVersionV1,
+					BTCAnchorPolicyVersion:               internalusdb.BTCAnchorPolicyVersionV1,
+					DifficultyPolicyVersion:              internalusdb.DifficultyPolicyVersionV1,
+					RewardRuleVersion:                    internalusdb.RewardRuleVersionV1,
+					CoinbaseEmissionPolicyVersion:        internalusdb.CoinbaseEmissionPolicyVersionV1,
+					FeeSplitPolicyVersion:                internalusdb.FeeSplitPolicyVersionV1,
+					CollaborationEfficiencyPolicyVersion: internalusdb.CollaborationEfficiencyPolicyVersionV1,
+					PricePolicyVersion:                   internalusdb.PricePolicyVersionV1,
+				},
+			}},
+		},
 		Predeploys: usdbGenesisPredeploys{
 			Dao:      daoConfig,
 			Dividend: dividendConfig,

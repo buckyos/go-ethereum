@@ -12,28 +12,32 @@ import (
 func newActivationConformanceTestChainConfig(activationBlock uint64) *params.ChainConfig {
 	return &params.ChainConfig{
 		HomesteadBlock: big.NewInt(0),
-		USDB: &params.USDBConsensusConfig{Activations: []params.USDBConsensusActivation{
-			{
-				Block:                   0,
-				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
-				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
-				Versions: params.USDBConsensusVersions{
-					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
-					BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
-					DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+		USDB: &params.USDBConsensusConfig{
+			BTCNetworkID:         "btc-regtest",
+			BTCIndexOriginHeight: 1,
+			Activations: []params.USDBConsensusActivation{
+				{
+					Block:                   0,
+					BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+					BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
+					Versions: params.USDBConsensusVersions{
+						PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+						BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
+						DifficultyPolicyVersion: usdb.DifficultyPolicyVersionV1,
+					},
+				},
+				{
+					Block:                   activationBlock,
+					BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDRevision2,
+					BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
+					Versions: params.USDBConsensusVersions{
+						PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
+						BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
+						DifficultyPolicyVersion: usdb.DifficultyPolicyVersionActivationConformance,
+					},
 				},
 			},
-			{
-				Block:                   activationBlock,
-				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDRevision2,
-				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
-				Versions: params.USDBConsensusVersions{
-					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
-					BTCAnchorPolicyVersion:  usdb.BTCAnchorPolicyVersionV1,
-					DifficultyPolicyVersion: usdb.DifficultyPolicyVersionActivationConformance,
-				},
-			},
-		}},
+		},
 	}
 }
 

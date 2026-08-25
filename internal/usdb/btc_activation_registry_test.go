@@ -46,6 +46,20 @@ func TestGeneratedBTCActivationGoldenMatchesRustRegistryIDs(t *testing.T) {
 	}
 }
 
+func TestDescribeBTCActivationRegistry(t *testing.T) {
+	descriptor, err := DescribeBTCActivationRegistry(BTCMainnetActivationRegistryIDV1)
+	if err != nil {
+		t.Fatalf("failed to describe BTC mainnet registry: %v", err)
+	}
+	if descriptor.NetworkID != "btc-mainnet" || descriptor.Revision != 1 || !descriptor.Current ||
+		descriptor.StableLagBlocks != 5 || descriptor.ActivationRegistryID != BTCMainnetActivationRegistryIDV1 {
+		t.Fatalf("unexpected BTC mainnet registry descriptor: %+v", descriptor)
+	}
+	if _, err := DescribeBTCActivationRegistry(strings.Repeat("f", 64)); !errors.Is(err, ErrBTCActivationRegistryNotSupported) {
+		t.Fatalf("expected unknown registry descriptor to fail closed, got %v", err)
+	}
+}
+
 func TestBTCActivationGoldenRejectsUnknownRegistryAndTampering(t *testing.T) {
 	if _, err := loadBTCActivationRegistry(strings.Repeat("f", 64)); !errors.Is(err, ErrBTCActivationRegistryNotSupported) {
 		t.Fatalf("expected unknown registry to fail closed, got %v", err)

@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -180,8 +181,15 @@ func TestUSDBDividendBootstrapIntegration(t *testing.T) {
 	bootstrapAddr := crypto.PubkeyToAddress(key.PublicKey)
 	depositValue := big.NewInt(1_000_000_000_000_000)
 	cycleMinLength := big.NewInt(60)
+	consensus := *params.USDBChainConfig.USDB
+	consensus.Activations = append([]params.USDBConsensusActivation(nil), params.USDBChainConfig.USDB.Activations...)
+	for i := range consensus.Activations {
+		consensus.Activations[i].Versions.FeeSplitPolicyVersion = usdb.FeeSplitPolicyVersionV1
+	}
 
 	genesis, err := core.DefaultUSDBGenesisBlockWithBootstrap(core.USDBBootstrapGenesisConfig{
+		ChainID:               new(big.Int).Set(params.USDBChainConfig.ChainID),
+		USDBConsensus:         &consensus,
 		DaoAddress:            daoAddr,
 		DaoCode:               daoCode,
 		DividendAddress:       dividendAddr,

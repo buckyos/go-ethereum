@@ -41,20 +41,24 @@ func newUSDBFeeTestConfig(policy uint16, splitBlock uint64, dividend common.Addr
 		DividendFeeSplitBlock: new(big.Int).SetUint64(splitBlock),
 		DividendAddress:       dividend,
 		DividendCodeHash:      codeHash,
-		USDB: &params.USDBConsensusConfig{Activations: []params.USDBConsensusActivation{{
-			BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
-			BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
-			Versions: params.USDBConsensusVersions{
-				PayloadVersion:                       usdb.ProfileSelectorPayloadVersionV1,
-				BTCAnchorPolicyVersion:               usdb.BTCAnchorPolicyVersionV1,
-				DifficultyPolicyVersion:              usdb.DifficultyPolicyVersionV1,
-				RewardRuleVersion:                    usdb.RewardRuleVersionV1,
-				CoinbaseEmissionPolicyVersion:        usdb.CoinbaseEmissionPolicyVersionV1,
-				FeeSplitPolicyVersion:                policy,
-				CollaborationEfficiencyPolicyVersion: usdb.CollaborationEfficiencyPolicyVersionV1,
-				PricePolicyVersion:                   usdb.PricePolicyVersionV1,
-			},
-		}}},
+		USDB: &params.USDBConsensusConfig{
+			BTCNetworkID:         "btc-regtest",
+			BTCIndexOriginHeight: 1,
+			Activations: []params.USDBConsensusActivation{{
+				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
+				Versions: params.USDBConsensusVersions{
+					PayloadVersion:                       usdb.ProfileSelectorPayloadVersionV1,
+					BTCAnchorPolicyVersion:               usdb.BTCAnchorPolicyVersionV1,
+					DifficultyPolicyVersion:              usdb.DifficultyPolicyVersionV1,
+					RewardRuleVersion:                    usdb.RewardRuleVersionV1,
+					CoinbaseEmissionPolicyVersion:        usdb.CoinbaseEmissionPolicyVersionV1,
+					FeeSplitPolicyVersion:                policy,
+					CollaborationEfficiencyPolicyVersion: usdb.CollaborationEfficiencyPolicyVersionV1,
+					PricePolicyVersion:                   usdb.PricePolicyVersionV1,
+				},
+			}},
+		},
 	}
 }
 

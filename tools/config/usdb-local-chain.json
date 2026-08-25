@@ -1,6 +1,31 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "chainId": 20260323,
+  "btcSource": {
+    "networkId": "btc-regtest",
+    "indexOriginHeight": 1
+  },
+  "usdbConsensus": {
+    "activations": [
+      {
+        "block": 0,
+        "btcActivationRegistryId": "596728fd8ccca69c9421a13083e39e953d082e7b031f1f3731481a200c330aa9",
+        "btcAnchorMaxAgeBlocks": 6650,
+        "versions": {
+          "payloadVersion": 1,
+          "btcAnchorPolicyVersion": 1,
+          "difficultyPolicyVersion": 1,
+          "rewardRuleVersion": 1,
+          "coinbaseEmissionPolicyVersion": 1,
+          "feeSplitPolicyVersion": 1,
+          "collaborationEfficiencyPolicyVersion": 1,
+          "pricePolicyVersion": 1,
+          "quotePolicyVersion": 0,
+          "auxPoolPolicyVersion": 0
+        }
+      }
+    ]
+  },
   "predeploys": {
     "dao": {
       "address": "0x0000000000000000000000000000000000001001",

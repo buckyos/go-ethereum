@@ -117,6 +117,8 @@ var (
 		TerminalTotalDifficulty: nil,
 		Ethash:                  new(EthashConfig),
 		USDB: &USDBConsensusConfig{
+			BTCNetworkID:         "btc-regtest",
+			BTCIndexOriginHeight: 1,
 			Activations: []USDBConsensusActivation{
 				{
 					Block:                   0,
@@ -534,7 +536,14 @@ type ChainConfig struct {
 
 // USDBConsensusConfig is the chain-owned activation schedule for USDB consensus.
 type USDBConsensusConfig struct {
-	Activations []USDBConsensusActivation `json:"activations"`
+	// BTCNetworkID identifies the immutable source-chain network whose state is
+	// consumed by this USDB network. The exact registry revision remains bound
+	// per activation checkpoint below.
+	BTCNetworkID string `json:"btcNetworkId"`
+	// BTCIndexOriginHeight is the first BTC block interpreted by the USDB
+	// inscription index. It is chain identity, not an operator sync hint.
+	BTCIndexOriginHeight uint32                    `json:"btcIndexOriginHeight"`
+	Activations          []USDBConsensusActivation `json:"activations"`
 }
 
 // USDBConsensusActivation is one complete checkpoint in the USDB activation
@@ -616,6 +625,11 @@ func (c *ChainConfig) String() string {
 		banner += "Consensus: unknown\n"
 	}
 	if c.USDB != nil {
+		banner += fmt.Sprintf(
+			"USDB BTC source: %s from height %d\n",
+			c.USDB.BTCNetworkID,
+			c.USDB.BTCIndexOriginHeight,
+		)
 		if len(c.USDB.Activations) == 0 {
 			banner += "USDB consensus: invalid empty activation schedule\n"
 		} else {
@@ -889,6 +903,9 @@ func (c *USDBConsensusConfig) validate() error {
 	if c == nil {
 		return nil
 	}
+	if !isCanonicalUSDBBTCNetworkID(c.BTCNetworkID) {
+		return fmt.Errorf("invalid USDB BTC source network id %q", c.BTCNetworkID)
+	}
 	if len(c.Activations) == 0 {
 		return fmt.Errorf("invalid USDB consensus activation schedule: no activation checkpoints")
 	}
@@ -1142,6 +1159,18 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, head *big.Int) *Confi
 }
 
 func checkUSDBCompatible(stored, updated *USDBConsensusConfig, head uint64) *ConfigCompatError {
+	if stored != nil && updated != nil {
+		if stored.BTCNetworkID != updated.BTCNetworkID {
+			return newCompatError("USDB BTC source network", big.NewInt(0), big.NewInt(0))
+		}
+		if stored.BTCIndexOriginHeight != updated.BTCIndexOriginHeight {
+			return newCompatError(
+				"USDB BTC index origin height",
+				new(big.Int).SetUint64(uint64(stored.BTCIndexOriginHeight)),
+				new(big.Int).SetUint64(uint64(updated.BTCIndexOriginHeight)),
+			)
+		}
+	}
 	var boundaries []uint64
 	boundaries = appendUSDBActivationBoundaries(boundaries, stored, head)
 	boundaries = appendUSDBActivationBoundaries(boundaries, updated, head)
@@ -1231,6 +1260,18 @@ func isCanonicalUSDBRegistryID(value string) bool {
 	}
 	for _, char := range value {
 		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalUSDBBTCNetworkID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-') {
 			return false
 		}
 	}

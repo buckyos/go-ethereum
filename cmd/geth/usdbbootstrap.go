@@ -17,19 +17,31 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/crypto"
+	internalusdb "github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/params"
 )
 
-const usdbGenesisBootstrapSchemaVersion uint64 = 1
+const usdbGenesisBootstrapSchemaVersion uint64 = 2
 
 type usdbGenesisBootstrapConfig struct {
 	SchemaVersion         uint64                    `json:"schemaVersion"`
 	ChainID               uint64                    `json:"chainId"`
+	BTCSource             usdbGenesisBTCSource      `json:"btcSource"`
+	USDBConsensus         usdbGenesisConsensus      `json:"usdbConsensus"`
 	Predeploys            usdbGenesisPredeploys     `json:"predeploys"`
 	BootstrapAdmin        usdbGenesisBootstrapAdmin `json:"bootstrapAdmin"`
 	GenesisDifficulty     string                    `json:"genesisDifficulty"`
 	MinimumDifficulty     string                    `json:"minimumDifficulty"`
 	DividendFeeSplitBlock *uint64                   `json:"dividendFeeSplitBlock"`
+}
+
+type usdbGenesisBTCSource struct {
+	NetworkID         string `json:"networkId"`
+	IndexOriginHeight uint32 `json:"indexOriginHeight"`
+}
+
+type usdbGenesisConsensus struct {
+	Activations []params.USDBConsensusActivation `json:"activations"`
 }
 
 type usdbGenesisPredeploys struct {
@@ -86,12 +98,38 @@ func loadUSDBBootstrapGenesis(configPath string, artifactsRoot string) (*core.Ge
 			usdbGenesisBootstrapSchemaVersion,
 		)
 	}
-	if config.ChainID != params.USDBNetworkID {
-		return nil, fmt.Errorf(
-			"USDB genesis bootstrap chainId %d does not match USDB network id %d",
-			config.ChainID,
-			params.USDBNetworkID,
-		)
+	if config.ChainID == 0 {
+		return nil, errors.New("USDB genesis bootstrap chainId must be positive")
+	}
+	if len(config.USDBConsensus.Activations) == 0 {
+		return nil, errors.New("USDB genesis bootstrap activation schedule must not be empty")
+	}
+	if config.USDBConsensus.Activations[0].Block != 0 {
+		return nil, errors.New("USDB genesis bootstrap activation schedule must start at block 0")
+	}
+	for _, activation := range config.USDBConsensus.Activations {
+		descriptor, err := internalusdb.DescribeBTCActivationRegistry(activation.BTCActivationRegistryID)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"resolve BTC activation registry %q for USDB block %d: %w",
+				activation.BTCActivationRegistryID,
+				activation.Block,
+				err,
+			)
+		}
+		if descriptor.NetworkID != config.BTCSource.NetworkID {
+			return nil, fmt.Errorf(
+				"BTC activation registry %s belongs to network %q, not configured source network %q",
+				activation.BTCActivationRegistryID,
+				descriptor.NetworkID,
+				config.BTCSource.NetworkID,
+			)
+		}
+	}
+	consensusConfig := &params.USDBConsensusConfig{
+		BTCNetworkID:         config.BTCSource.NetworkID,
+		BTCIndexOriginHeight: config.BTCSource.IndexOriginHeight,
+		Activations:          append([]params.USDBConsensusActivation(nil), config.USDBConsensus.Activations...),
 	}
 
 	daoAddress, err := parseCanonicalNonZeroAddress("predeploys.dao.address", config.Predeploys.Dao.Address)
@@ -139,6 +177,8 @@ func loadUSDBBootstrapGenesis(configPath string, artifactsRoot string) (*core.Ge
 	}
 
 	return core.DefaultUSDBGenesisBlockWithBootstrap(core.USDBBootstrapGenesisConfig{
+		ChainID:               new(big.Int).SetUint64(config.ChainID),
+		USDBConsensus:         consensusConfig,
 		DaoAddress:            daoAddress,
 		DaoCode:               daoCode,
 		DividendAddress:       dividendAddress,
