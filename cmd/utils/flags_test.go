@@ -19,6 +19,7 @@ package utils
 
 import (
 	"flag"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -165,7 +166,7 @@ func TestMakeGenesisReturnsUSDBGenesis(t *testing.T) {
 	}
 }
 
-func TestSetP2PConfigAppliesUSDBDefaultListenPort(t *testing.T) {
+func TestSetNodeConfigAppliesUSDBDefaultP2PPort(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
 		USDBFlag,
 		NodeKeyHexFlag,
@@ -188,12 +189,16 @@ func TestSetP2PConfigAppliesUSDBDefaultListenPort(t *testing.T) {
 	cfg := node.DefaultConfig
 	SetNodeConfig(ctx, &cfg)
 
-	if cfg.P2P.ListenAddr != ":31303" {
+	wantListenAddr := fmt.Sprintf(":%d", usdbDefaultP2PPort)
+	if cfg.P2P.ListenAddr != wantListenAddr {
 		t.Fatalf("unexpected usdb default listen addr: %s", cfg.P2P.ListenAddr)
+	}
+	if cfg.P2P.DiscAddr != "" {
+		t.Fatalf("unexpected usdb default discovery addr: %s", cfg.P2P.DiscAddr)
 	}
 }
 
-func TestSetP2PConfigKeepsExplicitListenPort(t *testing.T) {
+func TestSetNodeConfigKeepsExplicitP2PPorts(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
 		USDBFlag,
 		NodeKeyHexFlag,
@@ -211,13 +216,46 @@ func TestSetP2PConfigKeepsExplicitListenPort(t *testing.T) {
 		DiscoveryV5Flag,
 		NetrestrictFlag,
 		DeveloperFlag,
-	}, "--usdb", "--port", "32000")
+	}, "--usdb", "--port", "32000", "--discovery.port", "32001")
 
 	cfg := node.DefaultConfig
 	SetNodeConfig(ctx, &cfg)
 
 	if cfg.P2P.ListenAddr != ":32000" {
 		t.Fatalf("unexpected explicit listen addr: %s", cfg.P2P.ListenAddr)
+	}
+	if cfg.P2P.DiscAddr != ":32001" {
+		t.Fatalf("unexpected explicit discovery addr: %s", cfg.P2P.DiscAddr)
+	}
+}
+
+func TestSetNodeConfigKeepsEthereumDefaultP2PPort(t *testing.T) {
+	ctx := newCLIContext(t, []cli.Flag{
+		NodeKeyHexFlag,
+		NodeKeyFileFlag,
+		BootnodesFlag,
+		ListenPortFlag,
+		DiscoveryPortFlag,
+		NATFlag,
+		SyncModeFlag,
+		LightServeFlag,
+		LightMaxPeersFlag,
+		MaxPeersFlag,
+		MaxPendingPeersFlag,
+		NoDiscoverFlag,
+		DiscoveryV5Flag,
+		NetrestrictFlag,
+		DeveloperFlag,
+	})
+
+	cfg := node.DefaultConfig
+	SetNodeConfig(ctx, &cfg)
+
+	if cfg.P2P.ListenAddr != node.DefaultConfig.P2P.ListenAddr {
+		t.Fatalf("unexpected ethereum default listen addr: %s", cfg.P2P.ListenAddr)
+	}
+	if cfg.P2P.DiscAddr != "" {
+		t.Fatalf("unexpected ethereum default discovery addr: %s", cfg.P2P.DiscAddr)
 	}
 }
 

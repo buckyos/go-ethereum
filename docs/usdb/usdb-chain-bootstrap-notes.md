@@ -250,7 +250,9 @@ testnet/mainnet release 一并评审。
 
 - `P2P Listen Port`
   - `--usdb` 使用独立默认端口
-  - 第一阶段固定为 `31303`
+  - 第一阶段固定为 `31303/TCP+UDP`；TCP 承载 devp2p，UDP 承载节点发现
+  - testnet 和 mainnet 使用相同默认端口，网络隔离依赖 chain/network identity，而不是端口号
+  - 同一主机运行多个 USDB 节点时，第二个及后续节点必须通过 `--port` 显式使用其他端口；如需独立 discovery 端口，再配置 `--discovery.port`
   - 目的不是改变链身份，而是避免与本机已有 Ethereum / ETHW 节点默认端口冲突
   - 也避免节点被误连到另一个默认运行在 `30303` 上的网络实例
 - `HTTP / WS / Auth`
