@@ -21,8 +21,11 @@ FROM alpine:latest
 
 RUN apk add --no-cache bash ca-certificates openssl python3
 COPY --from=builder /go-ethereum/build/bin/geth /usr/local/bin/
+COPY scripts/usdb/docker /opt/usdb/scripts
 
-EXPOSE 8545 8546 30303 30303/udp
+RUN chmod +x /opt/usdb/scripts/*.sh /opt/usdb/scripts/*.py
+
+EXPOSE 8545 8546 31303 31303/udp
 ENTRYPOINT ["geth"]
 
 # Add some metadata labels to help programatic image consumption
