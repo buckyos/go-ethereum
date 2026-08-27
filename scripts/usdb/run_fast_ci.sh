@@ -96,6 +96,7 @@ run_go_checks() {
       ./consensus/ethash
       ./miner
       ./cmd/geth
+      ./cmd/usdb-genesis-hash
     )
     local consensus_tests='USDB|Usdb|Profile|BTCAnchor|ActivationConformance|EconomicActivation|QuotePolicy|MinimumDifficulty|DefaultBuildRejectsEconomic'
     local miner_tests='USDB|Usdb|Profile'
@@ -109,6 +110,7 @@ run_go_checks() {
       usdb_go_with_geth_linker_compat test ./consensus/ethash -run "$consensus_tests"
       usdb_go_with_geth_linker_compat test ./miner -run "$miner_tests"
       usdb_go_with_geth_linker_compat test ./cmd/geth -run "$geth_tests"
+      usdb_go_with_geth_linker_compat test ./cmd/usdb-genesis-hash
       usdb_go_with_geth_linker_compat test \
         -tags usdb_activation_conformance ./internal/usdb
       usdb_go_with_geth_linker_compat test \
@@ -139,6 +141,7 @@ run_go_checks() {
         usdb_go_with_geth_linker_compat test ./internal/usdb
         usdb_go_with_geth_linker_compat test ./cmd/geth \
           -run 'USDB|Usdb|Acceptance|CanonicalPositiveBigInt|ChainCommand.*USDB'
+        usdb_go_with_geth_linker_compat test ./cmd/usdb-genesis-hash
       )
       usdb_build_geth "$ROOT_DIR" "$FAST_OUTPUT_DIR/geth-go-compat"
       "$FAST_OUTPUT_DIR/geth-go-compat" version >/dev/null

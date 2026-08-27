@@ -1,6 +1,7 @@
 name: USDB Fast
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
@@ -140,16 +141,3 @@ jobs:
           USDB_FAST_SCOPE: golden
           USDB_REPO_DIR: ${{ github.workspace }}/usdb
         run: go-ethereum/scripts/usdb/run_fast_ci.sh
-
-  publish_chain_image:
-    name: Publish USDB chain image
-    needs:
-      - go_fast
-      - cross_repo_golden
-    if: github.event_name == 'push' && github.repository == 'buckyos/go-ethereum'
-    permissions:
-      attestations: write
-      contents: read
-      id-token: write
-      packages: write
-    uses: ./.github/workflows/usdb-chain-image.yml
