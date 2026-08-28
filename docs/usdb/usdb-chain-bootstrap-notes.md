@@ -283,6 +283,7 @@ testnet/mainnet release 一并评审。
   - 在任意机器上按角色启动一个 USDB devnet 节点
   - 所有角色必须通过 `USDB_INDEXER_RPC_URL` 配置可用的 `usdb-indexer`
   - `NODE_ROLE=miner` 使用 `USDB_CHAIN_MINER_ADDRESS` 作为稳定 `usdb_main`，由 indexer 原子选择具体 active standard pass
+  - miner 按 recommit interval 轻量监控 `system_state_id`；ID 变化时才重新解析 pass 和完整 energy profile
   - 支持：
     - `NODE_ROLE=bootnode`
     - `NODE_ROLE=miner`

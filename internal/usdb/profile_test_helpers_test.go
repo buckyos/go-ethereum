@@ -9,17 +9,20 @@ import (
 )
 
 type stubProfileClient struct {
-	system       *SystemStateInfo
-	profile      *PassEconomicProfileView
-	systemErr    error
-	profileErr   error
-	candidateErr error
-	lastPassID   PassID
-	lastUSDBMain common.Address
-	lastQuery    QueryContext
+	system         *SystemStateInfo
+	profile        *PassEconomicProfileView
+	systemErr      error
+	profileErr     error
+	candidateErr   error
+	lastPassID     PassID
+	lastUSDBMain   common.Address
+	lastQuery      QueryContext
+	systemCalls    int
+	candidateCalls int
 }
 
 func (s *stubProfileClient) ResolveMinerCandidate(_ context.Context, usdbMain common.Address, query QueryContext) (*MinerCandidateProfileView, error) {
+	s.candidateCalls++
 	s.lastUSDBMain = usdbMain
 	s.lastQuery = query
 	if s.candidateErr != nil {
@@ -39,6 +42,7 @@ func (s *stubProfileClient) ResolveMinerCandidate(_ context.Context, usdbMain co
 }
 
 func (s *stubProfileClient) GetSystemStateInfo(context.Context) (*SystemStateInfo, error) {
+	s.systemCalls++
 	return s.system, s.systemErr
 }
 

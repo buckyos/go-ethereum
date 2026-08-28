@@ -33,6 +33,12 @@ USDB-chain activation checkpoints and expected versions come only from
 payload-height BTC-side version set; it does not activate USDB-chain policies.
 The builder resolves the concrete pass atomically by `usdb_main`; the encoded
 selector and validator replay still use the returned explicit pass ID.
+After one complete selector build succeeds, the miner caches its
+`system_state_id`. A dedicated lightweight monitor calls only
+`get_system_state_info` on the sanitized recommit interval. An unchanged ID
+does not recompute the pass profile; a changed ID requests a fresh work build,
+which resolves the pass and all energy fields again. The cache advances only
+after that complete build succeeds.
 
 ## Shared Flow
 
@@ -271,10 +277,10 @@ On 2026-07-29, an isolated anchor-boundary run used test-only
   transitions.
 
 The first run exposed that geth did not retry a failed USDB work build when only
-the external BTC stable state changed. The worker now retains a retry flag only
-after a USDB work-build failure, polls on the existing recommit interval, and
-clears the flag on the first successful build. Normal successful mining does
-not gain an unconditional polling loop.
+the external BTC stable state changed. The worker retains a retry flag after a
+USDB work-build failure and clears it on the first successful build. Normal
+successful mining additionally performs a lightweight `system_state_id` poll;
+only an identity change triggers the full pass/profile/energy rebuild.
 
 ## Latest Economic Activation Execution
 

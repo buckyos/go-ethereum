@@ -210,12 +210,15 @@ func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consens
 }
 
 type stubPayloadBuilder struct {
-	payload     []byte
-	recipient   common.Address
-	err         error
-	blockNumber uint64
-	parentExtra []byte
-	usdbMain    common.Address
+	payload      []byte
+	recipient    common.Address
+	err          error
+	stateErr     error
+	stateChanged bool
+	stateChecks  int32
+	blockNumber  uint64
+	parentExtra  []byte
+	usdbMain     common.Address
 }
 
 func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (*usdb.BuiltProfileSelector, error) {
@@ -229,6 +232,11 @@ func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber 
 		Payload:         append([]byte(nil), s.payload...),
 		RewardRecipient: s.recipient,
 	}, nil
+}
+
+func (s *stubPayloadBuilder) HasSystemStateChanged(context.Context) (bool, error) {
+	atomic.AddInt32(&s.stateChecks, 1)
+	return s.stateChanged, s.stateErr
 }
 
 func (s *stubPayloadBuilder) Close() {}
@@ -432,6 +440,74 @@ func TestUSDBWorkFailureRequestsRetryUntilRecovery(t *testing.T) {
 	atomic.StoreInt32(&nonUSDBWorker.newTxs, 1)
 	if !nonUSDBWorker.shouldRecommitWork() {
 		t.Fatal("new transactions no longer request recommit")
+	}
+}
+
+func TestPollUSDBSystemStateRequestsCoalescedRefresh(t *testing.T) {
+	builder := &stubPayloadBuilder{stateChanged: true}
+	w := &worker{
+		chainConfig:        testWorkerUSDBChainConfig(),
+		usdbPayloadBuilder: builder,
+		usdbStateChangeCh:  make(chan struct{}, 1),
+	}
+	w.pollUSDBSystemState()
+	w.pollUSDBSystemState()
+	if checks := atomic.LoadInt32(&builder.stateChecks); checks != 2 {
+		t.Fatalf("unexpected system-state poll count: %d", checks)
+	}
+	if len(w.usdbStateChangeCh) != 1 {
+		t.Fatalf("state refresh notifications were not coalesced: %d", len(w.usdbStateChangeCh))
+	}
+}
+
+func TestUSDBSystemStateLoopPollsOnlyWhileMining(t *testing.T) {
+	builder := &stubPayloadBuilder{stateChanged: true}
+	w := &worker{
+		chainConfig:        testWorkerUSDBChainConfig(),
+		usdbPayloadBuilder: builder,
+		usdbStateChangeCh:  make(chan struct{}, 1),
+		exitCh:             make(chan struct{}),
+	}
+	w.wg.Add(1)
+	go w.usdbSystemStateLoop(5 * time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	if checks := atomic.LoadInt32(&builder.stateChecks); checks != 0 {
+		close(w.exitCh)
+		w.wg.Wait()
+		t.Fatalf("stopped miner polled system state %d times", checks)
+	}
+
+	atomic.StoreInt32(&w.running, 1)
+	select {
+	case <-w.usdbStateChangeCh:
+	case <-time.After(time.Second):
+		close(w.exitCh)
+		w.wg.Wait()
+		t.Fatal("running miner did not receive system-state refresh notification")
+	}
+	close(w.exitCh)
+	w.wg.Wait()
+}
+
+func TestPollUSDBSystemStateSkipsUnchangedAndRetriesErrors(t *testing.T) {
+	builder := &stubPayloadBuilder{}
+	w := &worker{
+		chainConfig:        testWorkerUSDBChainConfig(),
+		usdbPayloadBuilder: builder,
+		usdbStateChangeCh:  make(chan struct{}, 1),
+	}
+	w.pollUSDBSystemState()
+	if len(w.usdbStateChangeCh) != 0 || w.shouldRecommitWork() {
+		t.Fatal("unchanged system state requested work refresh")
+	}
+
+	builder.stateErr = errors.New("system state unavailable")
+	w.pollUSDBSystemState()
+	if len(w.usdbStateChangeCh) != 1 {
+		t.Fatal("monitor error did not request a full work rebuild")
+	}
+	if !w.shouldRecommitWork() {
+		t.Fatal("monitor error did not enable periodic recovery")
 	}
 }
 

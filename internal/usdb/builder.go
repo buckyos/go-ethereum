@@ -3,6 +3,7 @@ package usdb
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -20,6 +21,9 @@ type PayloadBuilder struct {
 	client       Client
 	chainConfig  *params.ChainConfig
 	queryTimeout time.Duration
+
+	stateMu           sync.RWMutex
+	lastSystemStateID string
 }
 
 // NewPayloadBuilder constructs a builder from an already-configured USDB client.
@@ -65,6 +69,30 @@ func (b *PayloadBuilder) Close() {
 	if b != nil && b.client != nil {
 		b.client.Close()
 	}
+}
+
+// HasSystemStateChanged performs the lightweight half of work refresh. The
+// cached identity advances only after BuildCurrentPayload validates and builds
+// a complete selector, so a failed rebuild cannot hide an external-state
+// transition from later polls.
+func (b *PayloadBuilder) HasSystemStateChanged(ctx context.Context) (bool, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, b.queryTimeout)
+	defer cancel()
+
+	systemState, err := b.client.GetSystemStateInfo(queryCtx)
+	if err != nil {
+		return false, err
+	}
+	if systemState == nil {
+		return false, fmt.Errorf("usdb returned no current system state")
+	}
+	if systemState.SystemStateID == "" {
+		return false, fmt.Errorf("usdb returned an empty system_state_id")
+	}
+	b.stateMu.RLock()
+	lastSystemStateID := b.lastSystemStateID
+	b.stateMu.RUnlock()
+	return lastSystemStateID == "" || systemState.SystemStateID != lastSystemStateID, nil
 }
 
 // BuildCurrentPayload emits a selector for blockNumber only after resolving its
@@ -184,6 +212,9 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if err != nil {
 		return nil, err
 	}
+	b.stateMu.Lock()
+	b.lastSystemStateID = systemState.SystemStateID
+	b.stateMu.Unlock()
 	return &BuiltProfileSelector{
 		Payload:         encoded,
 		RewardRecipient: profile.RewardRecipient,

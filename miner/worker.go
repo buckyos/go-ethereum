@@ -259,12 +259,18 @@ type worker struct {
 	// usdbPayloadBuilderErr preserves initialization failures so block assembly can
 	// fail closed instead of falling back to stale or empty extra-data.
 	usdbPayloadBuilderErr error
+	// usdbStateChangeCh coalesces external state changes detected by the
+	// lightweight system_state_id monitor into work-rebuild requests.
+	usdbStateChangeCh chan struct{}
 }
 
 type profileSelectorBuilder interface {
 	// BuildCurrentPayload fetches the current USDB state and returns the encoded
 	// payload and reward recipient for the candidate block.
 	BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (*usdb.BuiltProfileSelector, error)
+	// HasSystemStateChanged compares the current lightweight state identity with
+	// the identity of the last completely built selector.
+	HasSystemStateChanged(ctx context.Context) (bool, error)
 	// Close releases any builder-owned resources such as RPC connections.
 	Close()
 }
@@ -293,6 +299,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
+		usdbStateChangeCh:  make(chan struct{}, 1),
 		coinbase:           config.Etherbase,
 	}
 	if chainConfig.HasUSDBConsensus() {
@@ -328,10 +335,16 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	}
 
 	worker.wg.Add(4)
+	if worker.usdbPayloadBuilder != nil {
+		worker.wg.Add(1)
+	}
 	go worker.mainLoop()
 	go worker.newWorkLoop(recommit)
 	go worker.resultLoop()
 	go worker.taskLoop()
+	if worker.usdbPayloadBuilder != nil {
+		go worker.usdbSystemStateLoop(recommit)
+	}
 
 	// Submit first work to initialize pending state.
 	if init {
@@ -425,11 +438,11 @@ func (w *worker) isRunning() bool {
 // Note the worker does not support being closed multiple times.
 func (w *worker) close() {
 	atomic.StoreInt32(&w.running, 0)
+	close(w.exitCh)
+	w.wg.Wait()
 	if w.usdbPayloadBuilder != nil {
 		w.usdbPayloadBuilder.Close()
 	}
-	close(w.exitCh)
-	w.wg.Wait()
 }
 
 // recalcRecommit recalculates the resubmitting interval upon feedback.
@@ -504,6 +517,12 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
+		case <-w.usdbStateChangeCh:
+			if w.isRunning() {
+				timestamp = time.Now().Unix()
+				commit(true, commitInterruptResubmit)
+			}
+
 		case <-timer.C:
 			// If sealing is running resubmit a new work cycle periodically to pull in
 			// higher priced transactions. A failed USDB build also needs polling
@@ -551,6 +570,48 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		case <-w.exitCh:
 			return
 		}
+	}
+}
+
+func (w *worker) usdbSystemStateLoop(interval time.Duration) {
+	defer w.wg.Done()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if !w.isRunning() {
+				continue
+			}
+			w.pollUSDBSystemState()
+		case <-w.exitCh:
+			return
+		}
+	}
+}
+
+func (w *worker) pollUSDBSystemState() {
+	if w.usdbPayloadBuilder == nil {
+		return
+	}
+	changed, err := w.usdbPayloadBuilder.HasSystemStateChanged(context.Background())
+	if err != nil {
+		w.markUSDBWorkBuildFailure(fmt.Errorf("failed to monitor usdb system_state_id: %w", err))
+		w.requestUSDBStateRefresh()
+		return
+	}
+	if changed {
+		w.requestUSDBStateRefresh()
+	}
+}
+
+func (w *worker) requestUSDBStateRefresh() {
+	select {
+	case w.usdbStateChangeCh <- struct{}{}:
+		log.Debug("USDB external state requires sealing work refresh")
+	default:
+		// A pending notification already covers the newest observed state.
 	}
 }
 

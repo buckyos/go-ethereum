@@ -17,6 +17,7 @@ HTTP_PORT=${HTTP_PORT:-19645}
 P2P_PORT=${P2P_PORT:-31323}
 AUTHRPC_PORT=${AUTHRPC_PORT:-19651}
 NETWORK_ID=${NETWORK_ID:-20260323}
+BTC_STABLE_LAG_BLOCKS=${BTC_STABLE_LAG_BLOCKS:-5}
 PHASE1_TARGET_BLOCKS=${PHASE1_TARGET_BLOCKS:-2}
 PHASE2_TARGET_BLOCKS=${PHASE2_TARGET_BLOCKS:-2}
 RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-90}
@@ -161,7 +162,8 @@ pass_energy_now() {
   local block_height
   local resp
 
-  block_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
+  resp="$(regtest_rpc_call_balance_history "get_block_height" "[]")"
+  block_height="$(regtest_json_expr "$resp" "data.get('result', 0)")"
   resp="$(regtest_get_pass_economic_profile_response "$pass_id" "$block_height")"
   if [[ "$(regtest_json_expr "$resp" "data.get('error') is None")" != "True" ]]; then
     regtest_log "Failed to fetch current pass economic profile: pass_id=${pass_id}, response=${resp}"
@@ -250,7 +252,8 @@ main() {
   regtest_start_bitcoind
   regtest_ensure_wallet
 
-  local miner_btc_address ord_receive_address mint_content_file pass_id current_tip_height
+  local miner_btc_address ord_receive_address mint_content_file pass_id
+  local current_btc_tip_height current_context_height
   local phase1_end_height phase2_end_height balance_resp latest_balance_hex blocks_file
   local initial_energy boosted_energy
 
@@ -274,18 +277,23 @@ EOF
 
   pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$mint_content_file" "$ord_receive_address")"
   regtest_mine_blocks "$INSCRIBE_CONFIRM_BLOCKS" "$miner_btc_address"
+  if (( BTC_STABLE_LAG_BLOCKS > 0 )); then
+    regtest_log "Mining ${BTC_STABLE_LAG_BLOCKS} blocks so the mint reaches the stable frontier"
+    regtest_mine_blocks "$BTC_STABLE_LAG_BLOCKS" "$miner_btc_address"
+  fi
   regtest_wait_until_ord_server_synced_to_bitcoind
-  current_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
+  current_btc_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
+  current_context_height=$((current_btc_tip_height - BTC_STABLE_LAG_BLOCKS))
 
   regtest_create_balance_history_config
   regtest_create_usdb_indexer_config
   regtest_start_balance_history
   regtest_wait_balance_history_rpc_ready
-  regtest_wait_until_balance_history_synced_eq "$current_tip_height"
+  regtest_wait_until_balance_history_synced_eq "$current_context_height"
   regtest_wait_balance_history_consensus_ready
   regtest_start_usdb_indexer
   regtest_wait_usdb_rpc_ready
-  regtest_wait_until_usdb_synced_eq "$current_tip_height"
+  regtest_wait_until_usdb_synced_eq "$current_context_height"
   regtest_wait_usdb_consensus_ready
 
   initial_energy="$(pass_energy_now "$pass_id")"
@@ -332,10 +340,15 @@ EOF
   if (( ENERGY_GROWTH_BLOCKS > 0 )); then
     regtest_mine_blocks "$ENERGY_GROWTH_BLOCKS" "$miner_btc_address"
   fi
+  if (( BTC_STABLE_LAG_BLOCKS > 0 )); then
+    regtest_log "Mining ${BTC_STABLE_LAG_BLOCKS} blocks so the top-up reaches the stable frontier"
+    regtest_mine_blocks "$BTC_STABLE_LAG_BLOCKS" "$miner_btc_address"
+  fi
   regtest_wait_until_ord_server_synced_to_bitcoind
-  current_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
-  regtest_wait_until_balance_history_synced_eq "$current_tip_height"
-  regtest_wait_until_usdb_synced_eq "$current_tip_height"
+  current_btc_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
+  current_context_height=$((current_btc_tip_height - BTC_STABLE_LAG_BLOCKS))
+  regtest_wait_until_balance_history_synced_eq "$current_context_height"
+  regtest_wait_until_usdb_synced_eq "$current_context_height"
   regtest_wait_balance_history_consensus_ready
   regtest_wait_usdb_consensus_ready
   boosted_energy="$(pass_energy_now "$pass_id")"

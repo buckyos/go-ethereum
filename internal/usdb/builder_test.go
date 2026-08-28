@@ -81,6 +81,58 @@ func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 	}
 }
 
+func TestPayloadBuilderMonitorsSystemStateWithoutRecomputingProfile(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	client := &stubProfileClient{
+		system:  newTestSystemStateInfo(t, selector),
+		profile: newTestProfileView(t, selector, "1000000", "500000"),
+	}
+	builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0)
+	if err != nil {
+		t.Fatalf("failed to build payload builder: %v", err)
+	}
+
+	changed, err := builder.HasSystemStateChanged(context.Background())
+	if err != nil || !changed {
+		t.Fatalf("uninitialized monitor must request the first build: changed=%v err=%v", changed, err)
+	}
+	if client.candidateCalls != 0 {
+		t.Fatalf("lightweight monitor queried candidate profile %d times", client.candidateCalls)
+	}
+
+	built, err := builder.BuildCurrentPayload(
+		context.Background(),
+		42,
+		testBuilderParentExtra(t, selector, DifficultyPolicyVersionV1, 0),
+		testBuilderUSDBMain(),
+	)
+	if err != nil {
+		t.Fatalf("initial selector build failed: %v", err)
+	}
+	candidateCallsAfterBuild := client.candidateCalls
+	changed, err = builder.HasSystemStateChanged(context.Background())
+	if err != nil || changed {
+		t.Fatalf("unchanged system state requested a rebuild: changed=%v err=%v", changed, err)
+	}
+	if client.candidateCalls != candidateCallsAfterBuild {
+		t.Fatal("unchanged system-state poll recomputed the candidate profile")
+	}
+
+	client.system.SystemStateID = repeatHex("99", 32)
+	changed, err = builder.HasSystemStateChanged(context.Background())
+	if err != nil || !changed {
+		t.Fatalf("changed system_state_id was not detected: changed=%v err=%v", changed, err)
+	}
+	client.candidateErr = errors.New("candidate rebuild unavailable")
+	if _, err := builder.BuildCurrentPayload(context.Background(), 43, built.Payload, testBuilderUSDBMain()); err == nil {
+		t.Fatal("failed candidate rebuild unexpectedly succeeded")
+	}
+	changed, err = builder.HasSystemStateChanged(context.Background())
+	if err != nil || !changed {
+		t.Fatalf("failed rebuild advanced the monitor baseline: changed=%v err=%v", changed, err)
+	}
+}
+
 func TestPayloadBuilderFollowsSameUSDBMainRemint(t *testing.T) {
 	first := newTestSelector(t, 123)
 	client := &stubProfileClient{
