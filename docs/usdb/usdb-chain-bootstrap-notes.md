@@ -235,6 +235,11 @@ BTC-mainnet 模板只冻结了 BTC source 选择和索引起点，不表示 USDB
 其中 `btcAnchorMaxAgeBlocks`、难度、fee gate、合约 commitment、admin 和最终 chain ID 仍需随目标
 testnet/mainnet release 一并评审。
 
+上述三个 `tools/config` 文件都是 development fixture。它们使用的
+`0xabCd35AfbB4561213fEAfF01B5F91e18F8Df7c37` 已知对应公开开发私钥，只能用于 local/world-sim；
+即使模板读取 BTC mainnet，也不能把该 admin 带入 USDB testnet/mainnet。public network bundle
+必须只记录各网络独立托管 signer 的公开地址，并由 release validator 拒绝已知 development admin。
+
 同时还应一起调整：
 
 - 默认 bootnodes

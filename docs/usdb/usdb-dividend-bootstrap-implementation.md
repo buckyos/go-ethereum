@@ -152,6 +152,10 @@ bootstrap signer 私钥不属于 genesis spec，也不参与 genesis hash。Sour
 正数 chain ID，loader 才会接受。运行节点时还要为同一网络统一配置 geth `--networkid`，它与
 `btcSource.networkId` 是两个不同的命名空间。
 
+这些 `tools/config` 模板中的固定 bootstrap admin 是公开 development fixture，不是 testnet 或
+mainnet signer。testnet 与 mainnet 必须分别生成独立 signer；发布 bundle 和 Git 只保存公开地址，
+私钥由对应网络负责人在仓库外托管。
+
 或者直接使用仓库脚本，把这两步与 SourceDAO smoke 串起来：
 
 ```bash
