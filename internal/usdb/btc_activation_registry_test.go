@@ -28,7 +28,7 @@ func TestGeneratedBTCActivationGoldenMatchesRustRegistryIDs(t *testing.T) {
 		}
 		if registry.NetworkID != test.networkID || registry.ActivationRegistryID != test.registryID ||
 			registry.Revision != test.revision || registry.Current != test.current ||
-			registry.StableLagBlocks != 5 {
+			registry.StableLagBlocks != 10 {
 			t.Fatalf("unexpected golden registry: %+v", registry)
 		}
 		for _, height := range []uint32{0, 1, ^uint32(0)} {
@@ -52,7 +52,7 @@ func TestDescribeBTCActivationRegistry(t *testing.T) {
 		t.Fatalf("failed to describe BTC mainnet registry: %v", err)
 	}
 	if descriptor.NetworkID != "btc-mainnet" || descriptor.Revision != 1 || !descriptor.Current ||
-		descriptor.StableLagBlocks != 5 || descriptor.ActivationRegistryID != BTCMainnetActivationRegistryIDV1 {
+		descriptor.StableLagBlocks != 10 || descriptor.ActivationRegistryID != BTCMainnetActivationRegistryIDV1 {
 		t.Fatalf("unexpected BTC mainnet registry descriptor: %+v", descriptor)
 	}
 	if _, err := DescribeBTCActivationRegistry(strings.Repeat("f", 64)); !errors.Is(err, ErrBTCActivationRegistryNotSupported) {
@@ -133,7 +133,7 @@ func TestBTCActivationGoldenReloadPreservesCrossActivationReplay(t *testing.T) {
 			NetworkID:            "btc-restart-test",
 			Revision:             1,
 			Current:              true,
-			StableLagBlocks:      5,
+			StableLagBlocks:      10,
 			ActivationRegistryID: registryID,
 			Activations: []btcActivationPoint{
 				{BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID},
@@ -186,7 +186,7 @@ func TestBTCActivationGoldenCatalogRetainsImmutableRevisions(t *testing.T) {
 			{
 				NetworkID:            "btc-regtest-revisions",
 				Revision:             1,
-				StableLagBlocks:      5,
+				StableLagBlocks:      10,
 				ActivationRegistryID: oldID,
 				Activations: []btcActivationPoint{{
 					BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID,
@@ -196,7 +196,7 @@ func TestBTCActivationGoldenCatalogRetainsImmutableRevisions(t *testing.T) {
 				NetworkID:            "btc-regtest-revisions",
 				Revision:             2,
 				Current:              true,
-				StableLagBlocks:      5,
+				StableLagBlocks:      10,
 				ActivationRegistryID: currentID,
 				Activations: []btcActivationPoint{{
 					BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID,
@@ -265,7 +265,7 @@ func TestVerifierDispatchesFormulaFromPayloadHeight(t *testing.T) {
 	registryID := strings.Repeat("a", 64)
 	registry := &btcActivationRegistry{
 		ActivationRegistryID: registryID,
-		StableLagBlocks:      5,
+		StableLagBlocks:      10,
 		Activations: []btcActivationPoint{
 			{BTCHeight: 0, ActiveVersionSet: v1, ActiveVersionSetID: v1ID},
 			{BTCHeight: 100, ActiveVersionSet: v2, ActiveVersionSetID: v2ID},

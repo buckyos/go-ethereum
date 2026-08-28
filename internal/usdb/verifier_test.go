@@ -85,7 +85,7 @@ func TestVerifierResolveProfileRejectsSelectorIdentityMismatch(t *testing.T) {
 		{name: "btc height", mutate: func(view *PassEconomicProfileView) { view.ExternalState.BTCHeight++ }},
 		{name: "snapshot id", mutate: func(view *PassEconomicProfileView) { view.ExternalState.SnapshotID = repeatHex("aa", 32) }},
 		{name: "system state id", mutate: func(view *PassEconomicProfileView) { view.ExternalState.SystemStateID = repeatHex("bb", 32) }},
-		{name: "stable lag", mutate: func(view *PassEconomicProfileView) { view.ExternalState.StableLag++ }},
+		{name: "legacy stable lag", mutate: func(view *PassEconomicProfileView) { view.ExternalState.StableLag = 5 }},
 		{name: "pass id", mutate: func(view *PassEconomicProfileView) { view.Pass.PassID = repeatHex("cc", 32) + "i7" }},
 		{name: "incomplete external state", mutate: func(view *PassEconomicProfileView) { view.ExternalState.LocalStateCommit = "" }},
 		{name: "non-canonical activation registry id", mutate: func(view *PassEconomicProfileView) { view.ExternalState.ActivationRegistryID = repeatHex("AA", 32) }},

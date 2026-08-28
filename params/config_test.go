@@ -26,7 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-const testBTCActivationRegistryID = "596728fd8ccca69c9421a13083e39e953d082e7b031f1f3731481a200c330aa9"
+const testBTCActivationRegistryID = "bfd8c7e41ab4035db64e52eb9ea55050c08211c2ae4c2a88d8b2fc17ae1718b0"
 
 func TestCheckCompatible(t *testing.T) {
 	type test struct {

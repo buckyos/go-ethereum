@@ -17,12 +17,12 @@ const (
 	btcActivationRegistrySchemaV2   = "uip-0008-btc-activation-registry:v2"
 
 	// BTCMainnetActivationRegistryIDV1 is generated from btc-mainnet.json.
-	BTCMainnetActivationRegistryIDV1 = "cc47923f4cdff1875f89771d08e1b89fa22295c92bb816073c3271dc53c54c1c"
+	BTCMainnetActivationRegistryIDV1 = "a6350cd6a68755ea64edf537f35c1eca4421a970e2ecfd67aaa29075aae57224"
 	// BTCRegtestActivationRegistryIDV1 is generated from btc-regtest.json.
-	BTCRegtestActivationRegistryIDV1 = "596728fd8ccca69c9421a13083e39e953d082e7b031f1f3731481a200c330aa9"
+	BTCRegtestActivationRegistryIDV1 = "bfd8c7e41ab4035db64e52eb9ea55050c08211c2ae4c2a88d8b2fc17ae1718b0"
 	// BTCRegtestActivationRegistryIDRevision2 is the staged append-only regtest
 	// revision used to exercise registry rollout without activating a new formula.
-	BTCRegtestActivationRegistryIDRevision2 = "cdde4da47ce5748a27ff307c4d8cadc22ef59f636f0ead5d31cf310f6dc33497"
+	BTCRegtestActivationRegistryIDRevision2 = "adcca18bb4eccd4715bb0d6ec69c7b3d5e09065fac0cb33b145db7b621f59fba"
 )
 
 var (
