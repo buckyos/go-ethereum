@@ -18,6 +18,7 @@ from mock_bootstrap_indexer import (  # noqa: E402
     REGISTRY_ID,
     SNAPSHOT_ID,
     SYSTEM_STATE_ID,
+    build_miner_candidate,
     build_pass_profile,
     build_system_state,
 )
@@ -43,6 +44,13 @@ def profile_params() -> list[dict]:
             },
         }
     ]
+
+
+def candidate_params() -> list[dict]:
+    params = profile_params()
+    params[0].pop("pass_id")
+    params[0]["usdb_main"] = DEFAULT_USDB_MAIN
+    return params
 
 
 class MockBootstrapIndexerTest(unittest.TestCase):
@@ -93,6 +101,17 @@ class MockBootstrapIndexerTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unexpected system_state_id"):
             build_pass_profile(PASS_ID, params)
+
+    def test_candidate_resolves_profile_by_usdb_main(self) -> None:
+        candidate = build_miner_candidate(PASS_ID, candidate_params())
+
+        self.assertEqual(candidate["pass"]["pass_id"], PASS_ID)
+        self.assertEqual(candidate["pass"]["usdb_main"], DEFAULT_USDB_MAIN)
+        self.assertEqual(candidate["matching_candidate_count"], 1)
+        self.assertEqual(
+            candidate["selection_rule"],
+            "uip-0006:effective-energy-desc-pass-id-asc:v1",
+        )
 
 
 if __name__ == "__main__":

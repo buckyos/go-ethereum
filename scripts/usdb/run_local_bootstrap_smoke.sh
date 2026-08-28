@@ -83,6 +83,7 @@ start_mock_indexer() {
   python3 "$ROOT_DIR/scripts/usdb/mock_bootstrap_indexer.py" \
     --port "$USDB_BOOTSTRAP_INDEXER_PORT" \
     --pass-id "$USDB_BOOTSTRAP_PASS_ID" \
+    --usdb-main "$USDB_CHAIN_MINER_ADDRESS" \
     >"$MOCK_INDEXER_LOG" 2>&1 &
   MOCK_INDEXER_PID=$!
 
@@ -158,7 +159,6 @@ echo "Starting local USDB geth node"
     --nodiscover \
     --maxpeers 0 \
     "${POW_ARGS[@]}" \
-    --miner.usdb.passid "$USDB_BOOTSTRAP_PASS_ID" \
     --miner.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL" \
     --ethash.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL" \
     --mine \

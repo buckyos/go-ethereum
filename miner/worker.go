@@ -264,7 +264,7 @@ type worker struct {
 type profileSelectorBuilder interface {
 	// BuildCurrentPayload fetches the current USDB state and returns the encoded
 	// payload and reward recipient for the candidate block.
-	BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte) (*usdb.BuiltProfileSelector, error)
+	BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (*usdb.BuiltProfileSelector, error)
 	// Close releases any builder-owned resources such as RPC connections.
 	Close()
 }
@@ -293,17 +293,17 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		startCh:            make(chan struct{}, 1),
 		resubmitIntervalCh: make(chan time.Duration),
 		resubmitAdjustCh:   make(chan *intervalAdjust, resubmitAdjustChanSize),
+		coinbase:           config.Etherbase,
 	}
 	if chainConfig.HasUSDBConsensus() {
-		if config.USDB.PassID == "" {
+		if config.USDB.IndexerRPCURL == "" {
 			// Validator-only nodes do not need a miner-side RPC connection. Keep a
 			// deterministic error so any later attempt to assemble a block still
 			// fails instead of falling back to static extra-data.
-			worker.usdbPayloadBuilderErr = errors.New("usdb selected pass is not configured")
+			worker.usdbPayloadBuilderErr = errors.New("usdb-indexer RPC URL is not configured for mining")
 		} else {
 			builder, err := usdb.NewRPCPayloadBuilder(
 				config.USDB.IndexerRPCURL,
-				config.USDB.PassID,
 				chainConfig,
 				config.USDB.IndexerQueryTimeout,
 			)
@@ -1038,6 +1038,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	config := *w.config
 	builder := w.usdbPayloadBuilder
 	builderErr := w.usdbPayloadBuilderErr
+	configuredCoinbase := w.coinbase
 	staticExtra := common.CopyBytes(w.extra)
 	w.mu.RUnlock()
 
@@ -1069,6 +1070,13 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 	}
 	var usdbPolicy *params.USDBConsensusVersions
 	if !genParams.noExtra || w.chainConfig.HasUSDBConsensus() {
+		usdbMain := genParams.coinbase
+		if usdbMain == (common.Address{}) {
+			// The worker initializes pending work before mining starts. Resolve its
+			// selector from the configured etherbase until a request supplies an
+			// explicit fee recipient.
+			usdbMain = configuredCoinbase
+		}
 		built, policy, err := w.resolveHeaderProfile(
 			context.Background(),
 			builder,
@@ -1076,6 +1084,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 			staticExtra,
 			header.Number,
 			parent.Extra(),
+			usdbMain,
 		)
 		if err != nil {
 			return nil, err
@@ -1150,6 +1159,7 @@ func (w *worker) resolveHeaderProfile(
 	staticExtra []byte,
 	blockNumber *big.Int,
 	parentExtra []byte,
+	usdbMain common.Address,
 ) (*usdb.BuiltProfileSelector, *params.USDBConsensusVersions, error) {
 	if blockNumber == nil || !blockNumber.IsUint64() {
 		return nil, nil, fmt.Errorf("invalid candidate block number %v", blockNumber)
@@ -1162,7 +1172,7 @@ func (w *worker) resolveHeaderProfile(
 		return &usdb.BuiltProfileSelector{Payload: staticExtra}, nil, nil
 	}
 	if builder != nil {
-		built, err := builder.BuildCurrentPayload(ctx, blockNumber.Uint64(), parentExtra)
+		built, err := builder.BuildCurrentPayload(ctx, blockNumber.Uint64(), parentExtra, usdbMain)
 		if err != nil {
 			return nil, nil, err
 		}

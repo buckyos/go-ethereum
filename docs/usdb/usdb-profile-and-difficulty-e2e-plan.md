@@ -20,10 +20,10 @@ collaboration efficiency, and UIP-0013 fixed price at version `1`.
 `quote_policy_version = 0` and `aux_pool_policy_version = 0` explicitly disable
 UIP-0014 and UIP-0015. Unknown non-zero versions fail closed.
 
-Runtime CLI flags only provide companion-service access and the selected pass:
+Runtime CLI flags only provide the stable miner reward identity and companion-service access:
 
+- `--miner.etherbase` (`usdb_main`)
 - `--miner.usdb-indexer.rpcurl`
-- `--miner.usdb.passid`
 - `--miner.usdb-indexer.timeout`
 - `--ethash.usdb-indexer.rpcurl`
 - `--ethash.usdb-indexer.timeout`
@@ -31,6 +31,8 @@ Runtime CLI flags only provide companion-service access and the selected pass:
 USDB-chain activation checkpoints and expected versions come only from
 `params.ChainConfig.USDB`. The bound BTC registry revision supplies the
 payload-height BTC-side version set; it does not activate USDB-chain policies.
+The builder resolves the concrete pass atomically by `usdb_main`; the encoded
+selector and validator replay still use the returned explicit pass ID.
 
 ## Shared Flow
 

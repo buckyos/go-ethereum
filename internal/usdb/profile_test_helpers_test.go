@@ -4,15 +4,38 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type stubProfileClient struct {
-	system     *SystemStateInfo
-	profile    *PassEconomicProfileView
-	systemErr  error
-	profileErr error
-	lastPassID PassID
-	lastQuery  QueryContext
+	system       *SystemStateInfo
+	profile      *PassEconomicProfileView
+	systemErr    error
+	profileErr   error
+	candidateErr error
+	lastPassID   PassID
+	lastUSDBMain common.Address
+	lastQuery    QueryContext
+}
+
+func (s *stubProfileClient) ResolveMinerCandidate(_ context.Context, usdbMain common.Address, query QueryContext) (*MinerCandidateProfileView, error) {
+	s.lastUSDBMain = usdbMain
+	s.lastQuery = query
+	if s.candidateErr != nil {
+		return nil, s.candidateErr
+	}
+	if s.profile == nil {
+		return nil, nil
+	}
+	return &MinerCandidateProfileView{
+		ViewVersion:            s.profile.ViewVersion,
+		ExternalState:          s.profile.ExternalState,
+		SelectionRule:          MinerCandidateSelectionRuleV1,
+		MatchingCandidateCount: 1,
+		Pass:                   s.profile.Pass,
+		MinerAggregate:         s.profile.MinerAggregate,
+	}, nil
 }
 
 func (s *stubProfileClient) GetSystemStateInfo(context.Context) (*SystemStateInfo, error) {

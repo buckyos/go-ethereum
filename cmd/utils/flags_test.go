@@ -91,18 +91,14 @@ func newCLIContext(t *testing.T, flagsList []cli.Flag, args ...string) *cli.Cont
 func TestSetMinerAppliesUSDBFlags(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
 		MinerUSDBIndexerRPCURLFlag,
-		MinerUSDBPassIDFlag,
 		MinerUSDBIndexerTimeoutFlag,
-	}, "--miner.usdb-indexer.rpcurl", "http://127.0.0.1:8548", "--miner.usdb.passid", "abc123i7", "--miner.usdb-indexer.timeout", "4s")
+	}, "--miner.usdb-indexer.rpcurl", "http://127.0.0.1:8548", "--miner.usdb-indexer.timeout", "4s")
 
 	cfg := ethconfig.Defaults.Miner
 	setMiner(ctx, &cfg)
 
 	if cfg.USDB.IndexerRPCURL != "http://127.0.0.1:8548" {
 		t.Fatalf("unexpected miner usdb-indexer rpc url: %s", cfg.USDB.IndexerRPCURL)
-	}
-	if cfg.USDB.PassID != "abc123i7" {
-		t.Fatalf("unexpected miner usdb pass id: %s", cfg.USDB.PassID)
 	}
 	if cfg.USDB.IndexerQueryTimeout != 4*time.Second {
 		t.Fatalf("unexpected miner usdb-indexer timeout: %s", cfg.USDB.IndexerQueryTimeout)

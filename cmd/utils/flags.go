@@ -583,11 +583,6 @@ var (
 		Usage:    "Local usdb-indexer JSON-RPC endpoint used to build header reward payloads",
 		Category: flags.MinerCategory,
 	}
-	MinerUSDBPassIDFlag = &cli.StringFlag{
-		Name:     "miner.usdb.passid",
-		Usage:    "Configured USDB pass id whose historical state is committed into header extra-data",
-		Category: flags.MinerCategory,
-	}
 	MinerUSDBIndexerTimeoutFlag = &cli.DurationFlag{
 		Name:     "miner.usdb-indexer.timeout",
 		Usage:    "Timeout for one usdb-indexer reward payload build query",
@@ -1729,9 +1724,6 @@ func setMiner(ctx *cli.Context, cfg *miner.Config) {
 	}
 	if ctx.IsSet(MinerUSDBIndexerRPCURLFlag.Name) {
 		cfg.USDB.IndexerRPCURL = ctx.String(MinerUSDBIndexerRPCURLFlag.Name)
-	}
-	if ctx.IsSet(MinerUSDBPassIDFlag.Name) {
-		cfg.USDB.PassID = ctx.String(MinerUSDBPassIDFlag.Name)
 	}
 	if ctx.IsSet(MinerUSDBIndexerTimeoutFlag.Name) {
 		cfg.USDB.IndexerQueryTimeout = ctx.Duration(MinerUSDBIndexerTimeoutFlag.Name)

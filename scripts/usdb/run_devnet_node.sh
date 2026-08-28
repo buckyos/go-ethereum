@@ -20,7 +20,6 @@ P2P_PORT=${P2P_PORT:-31303}
 AUTHRPC_PORT=${AUTHRPC_PORT:-28551}
 USDB_CHAIN_MINER_ADDRESS=${USDB_CHAIN_MINER_ADDRESS:-0x0000000000000000000000000000000000001003}
 USDB_INDEXER_RPC_URL=${USDB_INDEXER_RPC_URL:-}
-USDB_PASS_ID=${USDB_PASS_ID:-}
 USDB_QUERY_TIMEOUT=${USDB_QUERY_TIMEOUT:-5s}
 RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-45}
 KEEP_RUNNING=${KEEP_RUNNING:-1}
@@ -99,10 +98,6 @@ if [[ -z "$USDB_INDEXER_RPC_URL" ]]; then
   echo "USDB_INDEXER_RPC_URL is required for USDB consensus verification" >&2
   exit 1
 fi
-if [[ "$NODE_ROLE" == "miner" && -z "$USDB_PASS_ID" ]]; then
-  echo "USDB_PASS_ID is required when NODE_ROLE=miner" >&2
-  exit 1
-fi
 
 mkdir -p "$WORK_DIR"
 mkdir -p "$DATADIR"
@@ -143,7 +138,6 @@ case "$NODE_ROLE" in
       --mine
       --miner.threads 1
       --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS"
-      --miner.usdb.passid "$USDB_PASS_ID"
       --miner.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL"
       --miner.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT"
       --maxpeers 25

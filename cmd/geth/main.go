@@ -136,7 +136,6 @@ var (
 		utils.MinerRecommitIntervalFlag,
 		utils.MinerNoVerifyFlag,
 		utils.MinerUSDBIndexerRPCURLFlag,
-		utils.MinerUSDBPassIDFlag,
 		utils.MinerUSDBIndexerTimeoutFlag,
 		utils.NATFlag,
 		utils.NoDiscoverFlag,

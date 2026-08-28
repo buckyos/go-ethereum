@@ -6,6 +6,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type stubJSONRPCClient struct {
@@ -202,6 +204,50 @@ func TestRPCClientCallsPassEconomicProfileContract(t *testing.T) {
 	}
 }
 
+func TestRPCClientCallsMinerCandidateResolutionContract(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	profile := newTestProfileView(t, selector, "1000000", "500000")
+	want := &MinerCandidateProfileView{
+		ViewVersion:            profile.ViewVersion,
+		ExternalState:          profile.ExternalState,
+		SelectionRule:          MinerCandidateSelectionRuleV1,
+		MatchingCandidateCount: 2,
+		Pass:                   profile.Pass,
+		MinerAggregate:         profile.MinerAggregate,
+	}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("failed to encode candidate response: %v", err)
+	}
+	transport := &stubJSONRPCClient{response: raw}
+	client := &RPCClient{client: transport}
+	query := QueryContext{
+		RequestedHeight: selector.BTCHeight,
+		ExpectedState: QueryExpectedState{
+			SnapshotID:    selector.SnapshotIDHex(),
+			SystemStateID: selector.SystemStateIDHex(),
+		},
+	}
+	usdbMain := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	got, err := client.ResolveMinerCandidate(context.Background(), usdbMain, query)
+	if err != nil {
+		t.Fatalf("candidate RPC failed: %v", err)
+	}
+	if transport.method != "resolve_miner_candidate" || len(transport.args) != 1 {
+		t.Fatalf("unexpected RPC call: method=%q args=%+v", transport.method, transport.args)
+	}
+	params, ok := transport.args[0].(resolveMinerCandidateParams)
+	if !ok {
+		t.Fatalf("unexpected params type: %T", transport.args[0])
+	}
+	if params.ViewVersion != EconomicStateViewVersionV1 || params.USDBMain != usdbMain.Hex() || params.BlockHeight != selector.BTCHeight {
+		t.Fatalf("unexpected candidate params: %+v", params)
+	}
+	if got.MatchingCandidateCount != 2 || got.Pass.PassID != selector.PassID.String() || !reflect.DeepEqual(got.ExternalState, want.ExternalState) {
+		t.Fatalf("unexpected decoded candidate: have %+v want %+v", got, want)
+	}
+}
+
 func TestRPCClientPropagatesProfileCallErrorsAndNull(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	query := QueryContext{RequestedHeight: selector.BTCHeight}
@@ -226,6 +272,7 @@ func TestRPCClientMapsConsensusErrors(t *testing.T) {
 	}{
 		{code: rpcErrPassNotFound, kind: ErrPassNotFound},
 		{code: rpcErrInternalInvariantBroken, kind: ErrInternalInvariantBroken},
+		{code: rpcErrMinerCandidateNotFound, kind: ErrMinerCandidateNotFound},
 		{code: rpcErrHeightNotSynced, kind: ErrHeightNotSynced},
 		{code: rpcErrSnapshotNotReady, kind: ErrSnapshotNotReady},
 		{code: rpcErrSnapshotIDMismatch, kind: ErrSnapshotIDMismatch},

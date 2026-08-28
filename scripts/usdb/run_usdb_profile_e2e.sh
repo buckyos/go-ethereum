@@ -264,7 +264,6 @@ usdb_chain_start_node() {
       --miner.threads "$USDB_CHAIN_MINER_THREADS" \
       --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
       --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
-      --miner.usdb.passid "$pass_id" \
       --miner.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
       --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
       --ethash.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT"

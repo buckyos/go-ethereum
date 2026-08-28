@@ -61,8 +61,6 @@ type Config struct {
 type USDBConfig struct {
 	// IndexerRPCURL points to the local usdb-indexer JSON-RPC endpoint used by the miner.
 	IndexerRPCURL string `toml:",omitempty"`
-	// PassID selects the pass committed as selected_pass in header.Extra.
-	PassID string `toml:",omitempty"`
 	// IndexerQueryTimeout bounds one current-state payload build against usdb-indexer.
 	IndexerQueryTimeout time.Duration `toml:",omitempty"`
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	gethrpc "github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -15,9 +16,12 @@ const (
 	DefaultQueryTimeout = 3 * time.Second
 	// EconomicStateViewVersionV1 is the frozen UIP-0006 profile response contract.
 	EconomicStateViewVersionV1 = "uip-0006-usdb-economic-state-view:v1"
+	// MinerCandidateSelectionRuleV1 deterministically selects among passes sharing one usdb_main.
+	MinerCandidateSelectionRuleV1 = "uip-0006:effective-energy-desc-pass-id-asc:v1"
 
 	rpcErrPassNotFound             = -32011
 	rpcErrInternalInvariantBroken  = -32017
+	rpcErrMinerCandidateNotFound   = -32018
 	rpcErrHeightNotSynced          = -32040
 	rpcErrSnapshotNotReady         = -32041
 	rpcErrSnapshotIDMismatch       = -32042
@@ -40,6 +44,7 @@ const (
 var (
 	ErrPassNotFound             = errors.New("usdb pass not found")
 	ErrInternalInvariantBroken  = errors.New("usdb internal invariant broken")
+	ErrMinerCandidateNotFound   = errors.New("usdb miner candidate not found")
 	ErrHeightNotSynced          = errors.New("usdb height not synced")
 	ErrSnapshotNotReady         = errors.New("usdb snapshot not ready")
 	ErrSnapshotIDMismatch       = errors.New("usdb snapshot id mismatch")
@@ -152,9 +157,26 @@ type PassEconomicProfileView struct {
 	MinerAggregate MinerEconomicAggregate `json:"miner_aggregate"`
 }
 
+// MinerCandidateProfileView is one atomically selected pass profile for a stable usdb_main.
+type MinerCandidateProfileView struct {
+	ViewVersion            string                 `json:"view_version"`
+	ExternalState          EconomicExternalState  `json:"external_state"`
+	SelectionRule          string                 `json:"selection_rule"`
+	MatchingCandidateCount uint64                 `json:"matching_candidate_count"`
+	Pass                   PassEconomicProfile    `json:"pass"`
+	MinerAggregate         MinerEconomicAggregate `json:"miner_aggregate"`
+}
+
 type passEconomicProfileParams struct {
 	ViewVersion string       `json:"view_version"`
 	PassID      string       `json:"pass_id"`
+	BlockHeight uint32       `json:"block_height"`
+	Context     QueryContext `json:"context"`
+}
+
+type resolveMinerCandidateParams struct {
+	ViewVersion string       `json:"view_version"`
+	USDBMain    string       `json:"usdb_main"`
 	BlockHeight uint32       `json:"block_height"`
 	Context     QueryContext `json:"context"`
 }
@@ -163,6 +185,7 @@ type passEconomicProfileParams struct {
 type Client interface {
 	GetSystemStateInfo(ctx context.Context) (*SystemStateInfo, error)
 	GetPassEconomicProfile(ctx context.Context, passID PassID, query QueryContext) (*PassEconomicProfileView, error)
+	ResolveMinerCandidate(ctx context.Context, usdbMain common.Address, query QueryContext) (*MinerCandidateProfileView, error)
 	Close()
 }
 
@@ -230,6 +253,28 @@ func (c *RPCClient) GetPassEconomicProfile(ctx context.Context, passID PassID, q
 	return &profile, nil
 }
 
+// ResolveMinerCandidate atomically selects one active standard pass and profile by usdb_main.
+func (c *RPCClient) ResolveMinerCandidate(ctx context.Context, usdbMain common.Address, query QueryContext) (*MinerCandidateProfileView, error) {
+	var raw json.RawMessage
+	params := resolveMinerCandidateParams{
+		ViewVersion: EconomicStateViewVersionV1,
+		USDBMain:    usdbMain.Hex(),
+		BlockHeight: query.RequestedHeight,
+		Context:     query,
+	}
+	if err := c.client.CallContext(ctx, &raw, "resolve_miner_candidate", params); err != nil {
+		return nil, fmt.Errorf("failed to call resolve_miner_candidate: %w", mapRPCError(err))
+	}
+	if isNullJSON(raw) {
+		return nil, nil
+	}
+	var candidate MinerCandidateProfileView
+	if err := json.Unmarshal(raw, &candidate); err != nil {
+		return nil, fmt.Errorf("failed to decode resolve_miner_candidate result: %w", err)
+	}
+	return &candidate, nil
+}
+
 func isNullJSON(raw json.RawMessage) bool {
 	return len(raw) == 0 || string(raw) == "null"
 }
@@ -258,6 +303,8 @@ func rpcErrorKind(code int) error {
 		return ErrPassNotFound
 	case rpcErrInternalInvariantBroken:
 		return ErrInternalInvariantBroken
+	case rpcErrMinerCandidateNotFound:
+		return ErrMinerCandidateNotFound
 	case rpcErrHeightNotSynced:
 		return ErrHeightNotSynced
 	case rpcErrSnapshotNotReady:

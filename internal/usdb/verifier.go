@@ -132,6 +132,10 @@ func resolveConsensusProfile(ctx context.Context, client Client, btcRegistry *bt
 	if view == nil {
 		return nil, fmt.Errorf("%w: pass %s", ErrProfileNotFound, selector.PassID.String())
 	}
+	return resolveConsensusProfileView(btcRegistry, selector, view)
+}
+
+func resolveConsensusProfileView(btcRegistry *btcActivationRegistry, selector ProfileSelectorPayload, view *PassEconomicProfileView) (*ResolvedConsensusProfile, error) {
 	activation, err := validateProfileIdentity(selector, view, btcRegistry)
 	if err != nil {
 		return nil, err

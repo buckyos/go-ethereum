@@ -315,7 +315,6 @@ EOF
       --miner.threads 1 \
       --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
       --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
-      --miner.usdb.passid "$pass_id" \
       --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
   ) >"$GETH_LOG_FILE" 2>&1 &
   GETH_PID=$!

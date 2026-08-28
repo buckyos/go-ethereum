@@ -71,12 +71,10 @@ fi
 
 if [[ "${role}" == "miner" ]]; then
   miner_address="${USDB_MINER_ADDRESS:?USDB_MINER_ADDRESS is required for miner role}"
-  pass_id="${USDB_PASS_ID:?USDB_PASS_ID is required for miner role}"
   args+=(
     --mine
     --miner.threads "${USDB_MINER_THREADS:-1}"
     --miner.etherbase "${miner_address}"
-    --miner.usdb.passid "${pass_id}"
     --miner.usdb-indexer.rpcurl "${indexer_url}"
     --miner.usdb-indexer.timeout "${USDB_INDEXER_QUERY_TIMEOUT:-5s}"
   )

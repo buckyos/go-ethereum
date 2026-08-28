@@ -282,7 +282,7 @@ testnet/mainnet release 一并评审。
 - [run_devnet_node.sh](/home/bucky/work/go-ethereum/scripts/usdb/run_devnet_node.sh)
   - 在任意机器上按角色启动一个 USDB devnet 节点
   - 所有角色必须通过 `USDB_INDEXER_RPC_URL` 配置可用的 `usdb-indexer`
-  - `NODE_ROLE=miner` 还必须通过 `USDB_PASS_ID` 选择用于组块的 active standard pass
+  - `NODE_ROLE=miner` 使用 `USDB_CHAIN_MINER_ADDRESS` 作为稳定 `usdb_main`，由 indexer 原子选择具体 active standard pass
   - 支持：
     - `NODE_ROLE=bootnode`
     - `NODE_ROLE=miner`
@@ -316,7 +316,7 @@ KEEP_RUNNING=1 \
 NODE_ROLE=miner \
 BOOTNODES_FILE=/tmp/usdb-bootnodes/bootnodes.txt \
 USDB_INDEXER_RPC_URL=http://127.0.0.1:8080 \
-USDB_PASS_ID=<active-standard-pass-id> \
+USDB_CHAIN_MINER_ADDRESS=<active-standard-pass-usdb-main> \
 KEEP_RUNNING=1 \
 ./scripts/usdb/run_devnet_node.sh
 ```

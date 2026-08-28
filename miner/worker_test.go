@@ -215,11 +215,13 @@ type stubPayloadBuilder struct {
 	err         error
 	blockNumber uint64
 	parentExtra []byte
+	usdbMain    common.Address
 }
 
-func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber uint64, parentExtra []byte) (*usdb.BuiltProfileSelector, error) {
+func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (*usdb.BuiltProfileSelector, error) {
 	s.blockNumber = blockNumber
 	s.parentExtra = append([]byte(nil), parentExtra...)
+	s.usdbMain = usdbMain
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -279,6 +281,32 @@ func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
 	if len(builder.parentExtra) != 0 {
 		t.Fatalf("builder received unexpected genesis parent extra: %x", builder.parentExtra)
 	}
+	if builder.usdbMain != testBankAddress {
+		t.Fatalf("builder received usdb_main %s, want %s", builder.usdbMain, testBankAddress)
+	}
+}
+
+func TestPrepareInitialUSDBWorkUsesConfiguredEtherbase(t *testing.T) {
+	chainConfig := testWorkerUSDBChainConfig()
+	engine := ethash.NewFaker()
+	backend := newTestWorkerBackend(t, chainConfig, engine, rawdb.NewMemoryDatabase(), 0)
+	config := *testConfig
+	config.Etherbase = testBankAddress
+	w := newWorker(&config, chainConfig, engine, backend, new(event.TypeMux), nil, false)
+	defer w.close()
+
+	builder := &stubPayloadBuilder{payload: bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size)}
+	w.usdbPayloadBuilder = builder
+	env, err := w.prepareWork(&generateParams{
+		timestamp: uint64(time.Now().Unix()) + 1,
+	})
+	if err != nil {
+		t.Fatalf("prepare initial USDB work failed: %v", err)
+	}
+	defer env.discard()
+	if builder.usdbMain != testBankAddress {
+		t.Fatalf("initial work used usdb_main %s, want configured etherbase %s", builder.usdbMain, testBankAddress)
+	}
 }
 
 func TestResolveHeaderProfileForwardsParentSelector(t *testing.T) {
@@ -294,6 +322,7 @@ func TestResolveHeaderProfileForwardsParentSelector(t *testing.T) {
 		nil,
 		big.NewInt(2),
 		parentExtra,
+		testBankAddress,
 	); err != nil {
 		t.Fatalf("resolve profile: %v", err)
 	}

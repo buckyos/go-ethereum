@@ -18,13 +18,12 @@ type BuiltProfileSelector struct {
 // PayloadBuilder creates the current UIP-0007 selector used by miner/header assembly.
 type PayloadBuilder struct {
 	client       Client
-	passID       PassID
 	chainConfig  *params.ChainConfig
 	queryTimeout time.Duration
 }
 
 // NewPayloadBuilder constructs a builder from an already-configured USDB client.
-func NewPayloadBuilder(client Client, passID string, chainConfig *params.ChainConfig, queryTimeout time.Duration) (*PayloadBuilder, error) {
+func NewPayloadBuilder(client Client, chainConfig *params.ChainConfig, queryTimeout time.Duration) (*PayloadBuilder, error) {
 	if client == nil {
 		return nil, fmt.Errorf("nil usdb client")
 	}
@@ -34,23 +33,18 @@ func NewPayloadBuilder(client Client, passID string, chainConfig *params.ChainCo
 	if !chainConfig.HasUSDBConsensus() {
 		return nil, fmt.Errorf("chain config has no usdb consensus configuration")
 	}
-	parsedPassID, err := ParsePassID(passID)
-	if err != nil {
-		return nil, err
-	}
 	if queryTimeout <= 0 {
 		queryTimeout = DefaultQueryTimeout
 	}
 	return &PayloadBuilder{
 		client:       client,
-		passID:       parsedPassID,
 		chainConfig:  chainConfig,
 		queryTimeout: queryTimeout,
 	}, nil
 }
 
 // NewRPCPayloadBuilder dials one usdb-indexer endpoint and uses it to generate current selectors.
-func NewRPCPayloadBuilder(endpoint, passID string, chainConfig *params.ChainConfig, queryTimeout time.Duration) (*PayloadBuilder, error) {
+func NewRPCPayloadBuilder(endpoint string, chainConfig *params.ChainConfig, queryTimeout time.Duration) (*PayloadBuilder, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeout)
 	defer cancel()
 
@@ -58,7 +52,7 @@ func NewRPCPayloadBuilder(endpoint, passID string, chainConfig *params.ChainConf
 	if err != nil {
 		return nil, err
 	}
-	builder, err := NewPayloadBuilder(client, passID, chainConfig, queryTimeout)
+	builder, err := NewPayloadBuilder(client, chainConfig, queryTimeout)
 	if err != nil {
 		client.Close()
 		return nil, err
@@ -74,15 +68,18 @@ func (b *PayloadBuilder) Close() {
 }
 
 // BuildCurrentPayload emits a selector for blockNumber only after resolving its
-// consensus policy, deriving its age from parentExtra, and validating the
-// configured pass in current state.
-func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte) (*BuiltProfileSelector, error) {
+// consensus policy, resolving a pass for usdbMain, deriving its age from
+// parentExtra, and validating the selected profile in current state.
+func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (*BuiltProfileSelector, error) {
 	activation, err := b.chainConfig.USDBActivationAt(blockNumber)
 	if err != nil {
 		return nil, err
 	}
 	if activation == nil {
 		return nil, fmt.Errorf("usdb consensus is not active at block %d", blockNumber)
+	}
+	if usdbMain == (common.Address{}) {
+		return nil, fmt.Errorf("usdb miner address is not configured")
 	}
 	policy := &activation.Versions
 	if policy.PayloadVersion != ProfileSelectorPayloadVersionV1 {
@@ -116,13 +113,40 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	); err != nil {
 		return nil, fmt.Errorf("invalid current usdb activation identity: %w", err)
 	}
+	expectedActivation, err := btcRegistry.lookup(systemState.LocalSyncedBlockHeight)
+	if err != nil {
+		return nil, err
+	}
+	query := QueryContext{
+		RequestedHeight: systemState.LocalSyncedBlockHeight,
+		ExpectedState: QueryExpectedState{
+			SnapshotID:           systemState.UpstreamSnapshotID,
+			ActivationRegistryID: btcRegistry.ActivationRegistryID,
+			ActiveVersionSetID:   expectedActivation.ActiveVersionSetID,
+			SystemStateID:        systemState.SystemStateID,
+		},
+	}
+	candidate, err := b.client.ResolveMinerCandidate(queryCtx, usdbMain, query)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve miner candidate for usdb_main %s: %w", usdbMain, err)
+	}
+	if candidate == nil {
+		return nil, fmt.Errorf("%w: usdb_main %s", ErrMinerCandidateNotFound, usdbMain)
+	}
+	if candidate.SelectionRule != MinerCandidateSelectionRuleV1 || candidate.MatchingCandidateCount == 0 {
+		return nil, fmt.Errorf(
+			"invalid miner candidate selection metadata: rule=%q matching_candidate_count=%d",
+			candidate.SelectionRule,
+			candidate.MatchingCandidateCount,
+		)
+	}
 	payload, err := NewProfileSelectorPayload(
 		policy.DifficultyPolicyVersion,
 		systemState.LocalSyncedBlockHeight,
 		0,
 		systemState.UpstreamSnapshotID,
 		systemState.SystemStateID,
-		b.passID.String(),
+		candidate.Pass.PassID,
 	)
 	if err != nil {
 		return nil, err
@@ -136,12 +160,25 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if err != nil {
 		return nil, fmt.Errorf("cannot extend parent BTC anchor: %w", err)
 	}
-	profile, err := resolveConsensusProfile(queryCtx, b.client, btcRegistry, *payload)
+	view := &PassEconomicProfileView{
+		ViewVersion:    candidate.ViewVersion,
+		ExternalState:  candidate.ExternalState,
+		Pass:           candidate.Pass,
+		MinerAggregate: candidate.MinerAggregate,
+	}
+	profile, err := resolveConsensusProfileView(btcRegistry, *payload, view)
 	if err != nil {
-		return nil, fmt.Errorf("configured pass %s is not valid in current usdb state: %w", b.passID.String(), err)
+		return nil, fmt.Errorf("resolved pass %s is not valid in current usdb state: %w", candidate.Pass.PassID, err)
 	}
 	if profile.View.ExternalState.ActiveVersionSetID != systemState.ActiveVersionSetID {
 		return nil, fmt.Errorf("current usdb activation identity changed while building payload")
+	}
+	if profile.RewardRecipient != usdbMain {
+		return nil, fmt.Errorf(
+			"resolved pass reward recipient %s does not match configured usdb_main %s",
+			profile.RewardRecipient,
+			usdbMain,
+		)
 	}
 	encoded, err := payload.MarshalBinary()
 	if err != nil {

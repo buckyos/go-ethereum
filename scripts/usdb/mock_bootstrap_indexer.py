@@ -110,6 +110,35 @@ def build_pass_profile(
     }
 
 
+def build_miner_candidate(
+    pass_id: str,
+    raw_params: Any,
+    usdb_main: str = DEFAULT_USDB_MAIN,
+    total_miner_btc_sats: str = DEFAULT_TOTAL_MINER_BTC_SATS,
+    collab_contribution: str = DEFAULT_COLLAB_CONTRIBUTION,
+) -> dict[str, Any]:
+    if not isinstance(raw_params, list) or len(raw_params) != 1:
+        raise ValueError("resolve_miner_candidate requires one parameter object")
+    params = raw_params[0]
+    if not isinstance(params, dict):
+        raise ValueError("candidate parameter must be an object")
+    requested_usdb_main = params.get("usdb_main")
+    if not isinstance(requested_usdb_main, str) or requested_usdb_main.lower() != usdb_main.lower():
+        raise ValueError(f"unexpected usdb_main {requested_usdb_main!r}")
+    profile_params = dict(params)
+    profile_params["pass_id"] = pass_id
+    profile = build_pass_profile(
+        pass_id,
+        [profile_params],
+        usdb_main,
+        total_miner_btc_sats,
+        collab_contribution,
+    )
+    profile["selection_rule"] = "uip-0006:effective-energy-desc-pass-id-asc:v1"
+    profile["matching_candidate_count"] = 1
+    return profile
+
+
 class BootstrapIndexerHandler(BaseHTTPRequestHandler):
     server: "BootstrapIndexerServer"
 
@@ -137,6 +166,8 @@ class BootstrapIndexerHandler(BaseHTTPRequestHandler):
                 result = self.server.system_state()
             elif method == "get_pass_economic_profile":
                 result = self.server.pass_profile(request.get("params"))
+            elif method == "resolve_miner_candidate":
+                result = self.server.miner_candidate(request.get("params"))
             else:
                 self.write_response(
                     {
@@ -189,6 +220,15 @@ class BootstrapIndexerServer(ThreadingHTTPServer):
 
     def pass_profile(self, raw_params: Any) -> dict[str, Any]:
         return build_pass_profile(
+            self.pass_id,
+            raw_params,
+            self.usdb_main,
+            self.total_miner_btc_sats,
+            self.collab_contribution,
+        )
+
+    def miner_candidate(self, raw_params: Any) -> dict[str, Any]:
+        return build_miner_candidate(
             self.pass_id,
             raw_params,
             self.usdb_main,
