@@ -37,13 +37,13 @@ manifest 和相应签名/验收流程确定。revision lock 只证明某个源�
 
 ## 文件结构
 
-当前 schema 为 `usdb-ci-revisions:v1`，包含以下字段：
+当前 schema 为 `usdb-ci-revisions:v2`，包含以下字段：
 
 | 字段 | 含义 |
 | --- | --- |
 | `schema_version` | revision lock schema 版本 |
-| `coordinator` | 负责读取 lock 并协调跨仓库 CI 的仓库，当前为 `go_ethereum` |
-| `repositories` | 三仓固定 repository identity、checkout 目录和完整 commit SHA |
+| `coordinator` | Go coordinator 的固定 repository identity 和 checkout 目录，不包含自引用 revision |
+| `dependencies` | `usdb`、`SourceDAO` 的固定 identity、checkout 目录和完整 commit SHA |
 | `toolchains` | Fast CI 共享 runner、Go、Python、Rust、Node 和 npm 版本 |
 
 repository revision 必须为 40 字符小写完整 commit SHA，不能使用 `main`、
@@ -65,9 +65,9 @@ repository revision 必须为 40 字符小写完整 commit SHA，不能使用 `m
 3. 校验器要求两个 sibling 精确匹配；
 4. golden generator 使用该固定 `usdb` revision 校验当前 Go artifact。
 
-因此，lock 中的 `go_ethereum.revision` 是最近一次已验证 coordinator baseline，
-不是对当前 commit 的自引用。当前 `go-ethereum` checkout 可以在 baseline 之上继续
-开发；sibling revision 不允许隐式漂移。
+Go revision 由当前 workflow checkout 或 release annotated tag target 确定，不写入其自身
+管理的 lock。校验器检查 coordinator checkout 存在，并要求两个 dependency checkout 与
+lock 完全一致。
 
 ## 更新策略
 
@@ -103,20 +103,34 @@ cross-repository job 会持续使用旧 sibling，跨仓库集成漂移可能积
 
 ## 标准更新流程
 
-由于 commit 无法在自身内容中预先写入自己的最终 SHA，coordinator revision 采用
-“已验证前一提交”模型。标准流程如下：
+v2 不保存 coordinator revision，因此不再需要“已验证前一提交”的自引用模型。标准流程如下：
 
 1. 在 `usdb` 和/或 `SourceDAO` 完成修改、repo-local gate 和独立提交；
 2. 将新的 sibling 完整 SHA 写入 `ci-revisions.json`；
-3. 在 `go-ethereum` 完成对应实现和 CI 主提交，记为 `G1`；
-4. 使用 `G1 + locked usdb + locked SourceDAO` 运行 revision verify 和跨仓库
+3. 在 `go-ethereum` 完成对应实现并运行 repo-local gate；
+4. 使用当前 Go commit、locked USDB 和 locked SourceDAO 运行 revision verify 与跨仓库
    golden/integration checks；
-5. 将 `go_ethereum.revision` 更新为已验证的 `G1`；
-6. 创建只包含该 revision 更新的 lock-only 提交，记为 `G2`。
+5. release 时由 Go annotated tag 固定实际 coordinator revision，并写入 release manifest。
 
-在 `G2` 上，当前 checkout 为 `G2`，validated baseline 为 `G1`，这是预期状态，
-不是 lock 落后或校验漏洞。若要求 lock 指向当前 `G2`，会再次产生新的提交并形成无限
-自引用链。
+发布协调工具可以从当前 `go-ethereum` checkout 自动推导 sibling workspace：
+
+```bash
+# 默认 dry-run；要求 USDB HEAD 已 push 且与 origin/master 完全一致。
+python3 scripts/usdb/prepare_release.py sync-lock
+
+# 写入 lock、创建 Go commit，并显式 push。
+python3 scripts/usdb/prepare_release.py sync-lock --commit --push
+
+# 两仓 Fast CI 通过后先预检，再创建和推送同名 annotated tag。
+python3 scripts/usdb/prepare_release.py tag --release-id usdb-testnet-v0-r1
+python3 scripts/usdb/prepare_release.py tag \
+  --release-id usdb-testnet-v0-r1 --create --push
+```
+
+默认 workspace root 是承载当前 `go-ethereum` checkout 的上级目录。非标准布局可在子命令前
+显式提供 `--workspace-root /path/to/workspace`。工具会校验三仓目录、Git top-level、GitHub
+origin、主分支、clean worktree、published HEAD、lock 和 tag 可用性；不会执行 `git pull`、
+rebase、tag 覆盖或远端 tag 删除。
 
 ## 本地校验命令
 
@@ -132,8 +146,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/usdb/ci_revisions.py validate
 ```bash
 PYTHONDONTWRITEBYTECODE=1 \
 python3 scripts/usdb/ci_revisions.py verify \
-  --workspace-root /path/to/workspace \
-  --current-repository go_ethereum
+  --workspace-root /path/to/workspace
 ```
 
 校验 Rust-to-Go frozen artifact：

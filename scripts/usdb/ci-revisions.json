@@ -1,16 +1,14 @@
 {
-  "schema_version": "usdb-ci-revisions:v1",
-  "coordinator": "go_ethereum",
-  "repositories": {
-    "go_ethereum": {
-      "repository": "buckyos/go-ethereum",
-      "directory": "go-ethereum",
-      "revision": "70cb00d3fa6305bf72db1b1df072b23bf07164bd"
-    },
+  "schema_version": "usdb-ci-revisions:v2",
+  "coordinator": {
+    "repository": "buckyos/go-ethereum",
+    "directory": "go-ethereum"
+  },
+  "dependencies": {
     "usdb": {
       "repository": "buckyos/usdb",
       "directory": "usdb",
-      "revision": "a374dd3aac5a95ee52156f1c7c44d9a53c1e881a"
+      "revision": "80df00b5a6ef77e1cb3bbeab1959ab8253add355"
     },
     "source_dao": {
       "repository": "buckyos/SourceDAO",

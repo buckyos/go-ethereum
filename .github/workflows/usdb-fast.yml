@@ -45,6 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/usdb/test_ci_revisions.py
+          python3 scripts/usdb/test_prepare_release.py
           python3 scripts/usdb/ci_revisions.py validate
           python3 scripts/usdb/ci_revisions.py github-output >>"$GITHUB_OUTPUT"
 
@@ -134,7 +135,6 @@ jobs:
         run: >-
           python3 go-ethereum/scripts/usdb/ci_revisions.py verify
           --workspace-root "$GITHUB_WORKSPACE"
-          --current-repository go_ethereum
 
       - name: Check frozen Rust-to-Go artifacts
         env:

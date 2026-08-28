@@ -19,14 +19,12 @@ SPEC.loader.exec_module(ci_revisions)
 
 def valid_lock() -> dict:
     return {
-        "schema_version": "usdb-ci-revisions:v1",
-        "coordinator": "go_ethereum",
-        "repositories": {
-            "go_ethereum": {
-                "repository": "buckyos/go-ethereum",
-                "directory": "go-ethereum",
-                "revision": "1" * 40,
-            },
+        "schema_version": "usdb-ci-revisions:v2",
+        "coordinator": {
+            "repository": "buckyos/go-ethereum",
+            "directory": "go-ethereum",
+        },
+        "dependencies": {
             "usdb": {
                 "repository": "buckyos/usdb",
                 "directory": "usdb",
@@ -79,12 +77,12 @@ class CIRevisionsTests(unittest.TestCase):
 
     def test_rejects_floating_or_wrong_repository_values(self) -> None:
         floating = valid_lock()
-        floating["repositories"]["usdb"]["revision"] = "main"
+        floating["dependencies"]["usdb"]["revision"] = "main"
         with self.assertRaisesRegex(ValueError, "full lowercase SHA"):
             ci_revisions.load_lock(self.write_lock(floating))
 
         wrong_repo = valid_lock()
-        wrong_repo["repositories"]["source_dao"]["repository"] = "fork/SourceDAO"
+        wrong_repo["dependencies"]["source_dao"]["repository"] = "fork/SourceDAO"
         with self.assertRaisesRegex(ValueError, "must be 'buckyos/SourceDAO'"):
             ci_revisions.load_lock(self.write_lock(wrong_repo))
 
@@ -94,7 +92,7 @@ class CIRevisionsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fixed numeric version"):
             ci_revisions.load_lock(self.write_lock(lock))
 
-    def test_verify_allows_only_current_checkout_to_drift(self) -> None:
+    def test_verify_checks_only_external_dependency_revisions(self) -> None:
         lock = valid_lock()
         with tempfile.TemporaryDirectory() as temp_dir:
             root = pathlib.Path(temp_dir)
@@ -103,11 +101,16 @@ class CIRevisionsTests(unittest.TestCase):
                 "usdb": "b" * 40,
                 "source_dao": "c" * 40,
             }
-            for name, entry in lock["repositories"].items():
+            entries = {
+                "go_ethereum": lock["coordinator"],
+                **lock["dependencies"],
+            }
+            for name, entry in entries.items():
                 repo = root / entry["directory"]
                 repo.mkdir()
                 (repo / ".git").mkdir()
-                lock["repositories"][name]["revision"] = heads[name]
+                if name != "go_ethereum":
+                    lock["dependencies"][name]["revision"] = heads[name]
 
             original_run = subprocess.run
 
@@ -115,18 +118,23 @@ class CIRevisionsTests(unittest.TestCase):
                 directory = pathlib.Path(command[2]).name
                 name = next(
                     key
-                    for key, entry in lock["repositories"].items()
+                    for key, entry in entries.items()
                     if entry["directory"] == directory
                 )
-                head = "d" * 40 if name == "go_ethereum" else heads[name]
+                head = heads[name]
                 return subprocess.CompletedProcess(command, 0, stdout=head + "\n", stderr="")
 
             subprocess.run = fake_run
             self.addCleanup(setattr, subprocess, "run", original_run)
             with contextlib.redirect_stdout(io.StringIO()):
-                ci_revisions.verify_worktrees(lock, root, "go_ethereum")
-                with self.assertRaisesRegex(ValueError, "go_ethereum revision mismatch"):
-                    ci_revisions.verify_worktrees(lock, root, None)
+                ci_revisions.verify_worktrees(lock, root)
+
+    def test_updates_only_supported_dependency_revision(self) -> None:
+        lock = valid_lock()
+        ci_revisions.set_dependency_revision(lock, "usdb", "d" * 40)
+        self.assertEqual(lock["dependencies"]["usdb"]["revision"], "d" * 40)
+        with self.assertRaisesRegex(ValueError, "unsupported dependency"):
+            ci_revisions.set_dependency_revision(lock, "go_ethereum", "e" * 40)
 
 
 if __name__ == "__main__":

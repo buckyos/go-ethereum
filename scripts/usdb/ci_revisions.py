@@ -12,10 +12,10 @@ import sys
 from typing import Any
 
 
-SCHEMA_VERSION = "usdb-ci-revisions:v1"
-REPOSITORY_KEYS = ("go_ethereum", "usdb", "source_dao")
-EXPECTED_REPOSITORIES = {
-    "go_ethereum": ("buckyos/go-ethereum", "go-ethereum"),
+SCHEMA_VERSION = "usdb-ci-revisions:v2"
+DEPENDENCY_KEYS = ("usdb", "source_dao")
+EXPECTED_COORDINATOR = ("buckyos/go-ethereum", "go-ethereum")
+EXPECTED_DEPENDENCIES = {
     "usdb": ("buckyos/usdb", "usdb"),
     "source_dao": ("buckyos/SourceDAO", "SourceDAO"),
 }
@@ -53,6 +53,31 @@ def _require_exact_keys(value: dict[str, Any], expected: set[str], context: str)
         raise ValueError(f"{context} keys mismatch: missing={missing}, unknown={unknown}")
 
 
+def _require_repository_entry(
+    entry: Any,
+    *,
+    context: str,
+    expected_repository: str,
+    expected_directory: str,
+    require_revision: bool,
+) -> None:
+    if not isinstance(entry, dict):
+        raise ValueError(f"{context} must be an object")
+    expected_keys = {"repository", "directory"}
+    if require_revision:
+        expected_keys.add("revision")
+    _require_exact_keys(entry, expected_keys, context)
+    if entry["repository"] != expected_repository:
+        raise ValueError(f"{context}.repository must be {expected_repository!r}")
+    if entry["directory"] != expected_directory:
+        raise ValueError(f"{context}.directory must be {expected_directory!r}")
+    if require_revision and (
+        not isinstance(entry["revision"], str)
+        or not GIT_REVISION_RE.fullmatch(entry["revision"])
+    ):
+        raise ValueError(f"{context}.revision must be a full lowercase SHA")
+
+
 def load_lock(path: pathlib.Path) -> dict[str, Any]:
     data = json.loads(
         path.read_text(encoding="utf-8"),
@@ -63,36 +88,32 @@ def load_lock(path: pathlib.Path) -> dict[str, Any]:
         raise ValueError("CI revision lock must be a JSON object")
     _require_exact_keys(
         data,
-        {"schema_version", "coordinator", "repositories", "toolchains"},
+        {"schema_version", "coordinator", "dependencies", "toolchains"},
         "top-level",
     )
     if data["schema_version"] != SCHEMA_VERSION:
         raise ValueError(f"unsupported schema_version: {data['schema_version']!r}")
-    if data["coordinator"] != "go_ethereum":
-        raise ValueError("coordinator must be go_ethereum")
+    _require_repository_entry(
+        data["coordinator"],
+        context="coordinator",
+        expected_repository=EXPECTED_COORDINATOR[0],
+        expected_directory=EXPECTED_COORDINATOR[1],
+        require_revision=False,
+    )
 
-    repositories = data["repositories"]
-    if not isinstance(repositories, dict):
-        raise ValueError("repositories must be an object")
-    _require_exact_keys(repositories, set(REPOSITORY_KEYS), "repositories")
-    for name in REPOSITORY_KEYS:
-        entry = repositories[name]
-        if not isinstance(entry, dict):
-            raise ValueError(f"repositories.{name} must be an object")
-        _require_exact_keys(entry, {"repository", "directory", "revision"}, name)
-        expected_repository, expected_directory = EXPECTED_REPOSITORIES[name]
-        if entry["repository"] != expected_repository:
-            raise ValueError(
-                f"repositories.{name}.repository must be {expected_repository!r}"
-            )
-        if entry["directory"] != expected_directory:
-            raise ValueError(
-                f"repositories.{name}.directory must be {expected_directory!r}"
-            )
-        if not isinstance(entry["revision"], str) or not GIT_REVISION_RE.fullmatch(
-            entry["revision"]
-        ):
-            raise ValueError(f"repositories.{name}.revision must be a full lowercase SHA")
+    dependencies = data["dependencies"]
+    if not isinstance(dependencies, dict):
+        raise ValueError("dependencies must be an object")
+    _require_exact_keys(dependencies, set(DEPENDENCY_KEYS), "dependencies")
+    for name in DEPENDENCY_KEYS:
+        expected_repository, expected_directory = EXPECTED_DEPENDENCIES[name]
+        _require_repository_entry(
+            dependencies[name],
+            context=f"dependencies.{name}",
+            expected_repository=expected_repository,
+            expected_directory=expected_directory,
+            require_revision=True,
+        )
 
     toolchains = data["toolchains"]
     if not isinstance(toolchains, dict):
@@ -109,8 +130,8 @@ def load_lock(path: pathlib.Path) -> dict[str, Any]:
 
 def github_outputs(lock: dict[str, Any]) -> list[str]:
     outputs: list[str] = []
-    for name in REPOSITORY_KEYS:
-        entry = lock["repositories"][name]
+    for name in DEPENDENCY_KEYS:
+        entry = lock["dependencies"][name]
         outputs.extend(
             (
                 f"{name}_repository={entry['repository']}",
@@ -135,25 +156,32 @@ def _git_head(path: pathlib.Path) -> str:
 
 
 def verify_worktrees(
-    lock: dict[str, Any], workspace_root: pathlib.Path, current_repository: str | None
+    lock: dict[str, Any], workspace_root: pathlib.Path
 ) -> None:
-    if current_repository is not None and current_repository not in REPOSITORY_KEYS:
-        raise ValueError(f"unsupported current repository: {current_repository}")
-    for name in REPOSITORY_KEYS:
-        entry = lock["repositories"][name]
+    coordinator = lock["coordinator"]
+    coordinator_head = _git_head(workspace_root / coordinator["directory"])
+    print(f"current coordinator go_ethereum: {coordinator_head}")
+    for name in DEPENDENCY_KEYS:
+        entry = lock["dependencies"][name]
         path = workspace_root / entry["directory"]
         head = _git_head(path)
-        if name == current_repository:
-            print(
-                f"current checkout {name}: head={head}, "
-                f"validated_baseline={entry['revision']}"
-            )
-            continue
         if head != entry["revision"]:
             raise ValueError(
                 f"{name} revision mismatch: expected {entry['revision']}, have {head}"
             )
         print(f"verified {name}: {head}")
+
+
+def set_dependency_revision(lock: dict[str, Any], name: str, revision: str) -> None:
+    if name not in DEPENDENCY_KEYS:
+        raise ValueError(f"unsupported dependency: {name}")
+    if GIT_REVISION_RE.fullmatch(revision) is None:
+        raise ValueError("dependency revision must be a full lowercase SHA")
+    lock["dependencies"][name]["revision"] = revision
+
+
+def write_lock(path: pathlib.Path, lock: dict[str, Any]) -> None:
+    path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -168,7 +196,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("github-output", help="emit values for GITHUB_OUTPUT")
     verify = subparsers.add_parser("verify", help="verify checked-out repository heads")
     verify.add_argument("--workspace-root", type=pathlib.Path, required=True)
-    verify.add_argument("--current-repository", choices=REPOSITORY_KEYS)
+    update = subparsers.add_parser("set-dependency", help="update one pinned dependency")
+    update.add_argument("--name", choices=DEPENDENCY_KEYS, required=True)
+    update.add_argument("--revision", required=True)
     return parser
 
 
@@ -179,7 +209,11 @@ def main() -> int:
         if args.command == "github-output":
             print("\n".join(github_outputs(lock)))
         elif args.command == "verify":
-            verify_worktrees(lock, args.workspace_root, args.current_repository)
+            verify_worktrees(lock, args.workspace_root)
+        elif args.command == "set-dependency":
+            set_dependency_revision(lock, args.name, args.revision)
+            write_lock(args.lock, lock)
+            print(f"updated {args.name} revision in {args.lock}")
         else:
             print(f"validated {args.lock}")
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

@@ -124,8 +124,9 @@ Rust 同时由 `usdb/src/btc/rust-toolchain.toml` 固定；SourceDAO 自行维�
 固定文件。第三方 GitHub Actions 使用完整不可变 commit SHA，旁边保留经 review
 的 release tag 注释。
 
-`scripts/usdb/ci-revisions.json` 记录三仓最近一次联合验证通过的 revision 和共享
-工具链版本。它不是“每次提交自动追随 HEAD”的文件，也不是 release manifest。
+`scripts/usdb/ci-revisions.json` 记录两个外部 dependency 最近一次联合验证通过的 revision 和共享
+工具链版本；当前 Go revision 由 workflow checkout 或 release tag 确定。它不是“每次提交自动追随
+HEAD”的文件，也不是 release manifest。
 详细语义、更新条件和提交流程见
 [USDB CI 跨仓库 Revision Lock 规范](./usdb-ci-revision-lock.md)。
 
