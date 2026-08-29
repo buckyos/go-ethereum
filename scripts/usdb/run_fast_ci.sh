@@ -175,6 +175,7 @@ run_go_checks() {
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_configure_usdb_pow_calibration_genesis.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_configure_usdb_anchor_max_age_genesis.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_p2p_defaults.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_release_three_node_e2e.py"
 }
 
 run_rust_checks() {
