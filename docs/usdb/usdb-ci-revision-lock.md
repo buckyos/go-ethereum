@@ -118,8 +118,12 @@ v2 不保存 coordinator revision，因此不再需要“已验证前一提交�
 # 默认 dry-run；要求 USDB HEAD 已 push 且与 origin/master 完全一致。
 python3 scripts/usdb/prepare_release.py sync-lock
 
-# 写入 lock、创建 Go commit，并显式 push。
+# 一次性写入 lock、创建 Go commit，并显式 push。
 python3 scripts/usdb/prepare_release.py sync-lock --commit --push
+
+# 也可以分两步执行；第二条只允许续推恰好一个且仅修改 lock 的本地 commit。
+python3 scripts/usdb/prepare_release.py sync-lock --commit
+python3 scripts/usdb/prepare_release.py sync-lock --push
 
 # 两仓 Fast CI 通过后先预检，再创建和推送同名 annotated tag。
 python3 scripts/usdb/prepare_release.py tag --release-id usdb-testnet-v0-r1

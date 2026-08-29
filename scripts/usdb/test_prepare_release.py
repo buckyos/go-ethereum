@@ -168,6 +168,60 @@ class PrepareReleaseTests(unittest.TestCase):
             self.run_git(self.go_remote, "show-ref", "--tags"),
         )
 
+    def test_sync_lock_commit_can_resume_push(self) -> None:
+        remote_before = self.run_git(self.go, "rev-parse", "origin/master")
+        PREPARE.sync_lock(
+            self.repositories,
+            commit=True,
+            push=False,
+            fetch=False,
+        )
+        local_head = self.run_git(self.go, "rev-parse", "HEAD")
+        self.assertNotEqual(local_head, remote_before)
+        self.assertEqual(
+            self.run_git(self.go_remote, "rev-parse", "refs/heads/master"),
+            remote_before,
+        )
+
+        PREPARE.sync_lock(
+            self.repositories,
+            commit=False,
+            push=True,
+            fetch=False,
+        )
+        self.assertEqual(
+            self.run_git(self.go_remote, "rev-parse", "refs/heads/master"),
+            local_head,
+        )
+
+    def test_resume_push_rejects_additional_changes(self) -> None:
+        PREPARE.sync_lock(
+            self.repositories,
+            commit=True,
+            push=False,
+            fetch=False,
+        )
+        (self.go / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+        self.run_git(self.go, "add", "unrelated.txt")
+        self.run_git(self.go, "commit", "--amend", "--no-edit")
+
+        with self.assertRaisesRegex(PREPARE.ReleasePreparationError, "change only"):
+            PREPARE.sync_lock(
+                self.repositories,
+                commit=False,
+                push=True,
+                fetch=False,
+            )
+
+    def test_resume_push_rejects_stale_lock(self) -> None:
+        with self.assertRaisesRegex(PREPARE.ReleasePreparationError, "does not pin"):
+            PREPARE.sync_lock(
+                self.repositories,
+                commit=False,
+                push=True,
+                fetch=False,
+            )
+
     def test_invalid_release_id_and_workspace_are_rejected(self) -> None:
         with self.assertRaisesRegex(PREPARE.ReleasePreparationError, "release ID"):
             PREPARE.create_release_tags(
@@ -186,14 +240,7 @@ class PrepareReleaseTests(unittest.TestCase):
                 strict_remotes=False,
             )
 
-    def test_push_requires_explicit_local_mutation_flag(self) -> None:
-        with self.assertRaisesRegex(PREPARE.ReleasePreparationError, "--commit"):
-            PREPARE.sync_lock(
-                self.repositories,
-                commit=False,
-                push=True,
-                fetch=False,
-            )
+    def test_tag_push_requires_explicit_local_mutation_flag(self) -> None:
         with self.assertRaisesRegex(PREPARE.ReleasePreparationError, "--create"):
             PREPARE.create_release_tags(
                 self.repositories,

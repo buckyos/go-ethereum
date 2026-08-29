@@ -204,6 +204,56 @@ def _ensure_source_dao_matches_lock(
     return head
 
 
+def _push_existing_lock_commit(
+    go_repository: Repository,
+    lock_path: pathlib.Path,
+) -> None:
+    """Safely push one previously created, lock-only Go commit."""
+
+    branch = go_repository.output("branch", "--show-current")
+    if branch != go_repository.branch:
+        raise ReleasePreparationError(
+            f"go_ethereum must be on {go_repository.branch}, "
+            f"have {branch or 'detached HEAD'}"
+        )
+    head = go_repository.head()
+    remote_ref = f"refs/remotes/origin/{go_repository.branch}"
+    remote_head = go_repository.output("rev-parse", remote_ref)
+    if head == remote_head:
+        print("go_ethereum lock commit is already published")
+        return
+
+    counts = go_repository.output(
+        "rev-list", "--left-right", "--count", f"{remote_ref}...{head}"
+    ).split()
+    if len(counts) != 2:
+        raise ReleasePreparationError(
+            f"cannot determine go_ethereum ahead/behind state: {' '.join(counts)}"
+        )
+    behind, ahead = (int(value) for value in counts)
+    if behind != 0 or ahead != 1:
+        raise ReleasePreparationError(
+            "resume push requires go_ethereum HEAD to be exactly one commit ahead of "
+            f"origin/{go_repository.branch}: behind={behind}, ahead={ahead}"
+        )
+
+    relative_lock = str(lock_path.relative_to(go_repository.path))
+    changed_paths = go_repository.output(
+        "diff", "--name-only", f"{remote_ref}..{head}"
+    ).splitlines()
+    if changed_paths != [relative_lock]:
+        detail = ", ".join(changed_paths) or "no files"
+        raise ReleasePreparationError(
+            "resume push requires the pending Go commit to change only "
+            f"{relative_lock}; changed: {detail}"
+        )
+    go_repository.git("diff", "--check", f"{remote_ref}..{head}", "--", relative_lock)
+    go_repository.git(
+        "push", "origin", f"{head}:refs/heads/{go_repository.branch}"
+    )
+    print(f"pushed_go_ethereum_revision={head}")
+
+
 def sync_lock(
     repositories: dict[str, Repository],
     *,
@@ -211,17 +261,14 @@ def sync_lock(
     push: bool,
     fetch: bool,
 ) -> None:
-    """Pin the published USDB HEAD and optionally commit and push the lock update."""
+    """Pin the published USDB HEAD and optionally commit or resume-push the update."""
 
-    if push and not commit:
-        raise ReleasePreparationError("--push requires --commit")
     _fetch_repositories(repositories, fetch)
     for repository in repositories.values():
         repository.ensure_clean()
 
     go_repository = repositories["go_ethereum"]
     usdb_repository = repositories["usdb"]
-    go_repository.ensure_published_head()
     usdb_revision = usdb_repository.ensure_published_head()
     lock_path, lock = _load_workspace_lock(repositories)
     source_dao_revision = _ensure_source_dao_matches_lock(repositories, lock)
@@ -233,6 +280,16 @@ def sync_lock(
     print(f"source_dao_revision={source_dao_revision}")
     print(f"locked_usdb_revision={previous}")
 
+    if push and not commit:
+        if previous != usdb_revision:
+            raise ReleasePreparationError(
+                "--push can only resume an existing lock commit, but the lock does not "
+                "pin the published USDB HEAD; use --commit --push"
+            )
+        _push_existing_lock_commit(go_repository, lock_path)
+        return
+
+    go_repository.ensure_published_head()
     if previous == usdb_revision:
         print("compatibility lock already pins the published USDB HEAD")
         return
@@ -398,8 +455,18 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--fetch", action="store_true", help="refresh origin refs first")
 
     sync = subparsers.add_parser("sync-lock", help="pin the published USDB HEAD")
-    sync.add_argument("--commit", action="store_true", help="write and commit the lock update")
-    sync.add_argument("--push", action="store_true", help="push the new Go commit to origin/master")
+    sync.add_argument(
+        "--commit",
+        action="store_true",
+        help="write the lock update and create a new Go commit in this invocation",
+    )
+    sync.add_argument(
+        "--push",
+        action="store_true",
+        help=(
+            "push the lock commit created now, or safely resume one prior --commit run"
+        ),
+    )
     sync.add_argument("--no-fetch", action="store_true", help="use existing origin refs")
 
     tag = subparsers.add_parser("tag", help="create coordinated immutable release tags")
