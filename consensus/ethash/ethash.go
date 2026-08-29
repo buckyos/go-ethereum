@@ -517,6 +517,9 @@ func NewWithChainConfig(config Config, chainConfig *params.ChainConfig, notify [
 		hashrate: metrics.NewMeterForced(),
 	}
 	if chainConfig.HasUSDBConsensus() {
+		logUSDBConsensusIdentity(config.Log, chainConfig)
+		endpoint := usdb.RPCEndpointForLog(config.USDBIndexer.RPCURL)
+		queryTimeout := usdb.EffectiveQueryTimeout(config.USDBIndexer.QueryTimeout)
 		verifier, err := usdb.NewRPCVerifier(
 			config.USDBIndexer.RPCURL,
 			chainConfig,
@@ -524,9 +527,10 @@ func NewWithChainConfig(config Config, chainConfig *params.ChainConfig, notify [
 		)
 		if err != nil {
 			ethash.usdbProfileResolverErr = fmt.Errorf("failed to initialize usdb profile resolver: %w", err)
-			config.Log.Error("Failed to initialize USDB profile resolver", "err", err)
+			config.Log.Error("Failed to initialize USDB profile resolver", "endpoint", endpoint, "query_timeout", queryTimeout, "err", err)
 		} else {
 			ethash.usdbProfileResolver = verifier
+			config.Log.Info("USDB profile resolver initialized", "endpoint", endpoint, "query_timeout", queryTimeout)
 		}
 	}
 	if config.PowMode == ModeShared {
@@ -534,6 +538,40 @@ func NewWithChainConfig(config Config, chainConfig *params.ChainConfig, notify [
 	}
 	ethash.remote = startRemoteSealer(ethash, notify, noverify)
 	return ethash
+}
+
+func logUSDBConsensusIdentity(logger log.Logger, chainConfig *params.ChainConfig) {
+	chainID := "<unset>"
+	if chainConfig.ChainID != nil {
+		chainID = chainConfig.ChainID.String()
+	}
+	logger.Info(
+		"USDB consensus configuration loaded",
+		"chain_id", chainID,
+		"btc_network", chainConfig.USDB.BTCNetworkID,
+		"btc_index_origin", chainConfig.USDB.BTCIndexOriginHeight,
+		"activation_count", len(chainConfig.USDB.Activations),
+	)
+	for index, activation := range chainConfig.USDB.Activations {
+		versions := activation.Versions
+		logger.Info(
+			"USDB consensus activation configured",
+			"index", index,
+			"block", activation.Block,
+			"btc_registry", activation.BTCActivationRegistryID,
+			"btc_anchor_max_age", activation.BTCAnchorMaxAgeBlocks,
+			"payload", versions.PayloadVersion,
+			"btc_anchor", versions.BTCAnchorPolicyVersion,
+			"difficulty", versions.DifficultyPolicyVersion,
+			"reward", versions.RewardRuleVersion,
+			"emission", versions.CoinbaseEmissionPolicyVersion,
+			"fee_split", versions.FeeSplitPolicyVersion,
+			"collab_efficiency", versions.CollaborationEfficiencyPolicyVersion,
+			"price", versions.PricePolicyVersion,
+			"quote", versions.QuotePolicyVersion,
+			"aux_pool", versions.AuxPoolPolicyVersion,
+		)
+	}
 }
 
 // NewTester creates a small sized ethash PoW scheme useful only for testing

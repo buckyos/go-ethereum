@@ -37,13 +37,10 @@ func NewPayloadBuilder(client Client, chainConfig *params.ChainConfig, queryTime
 	if !chainConfig.HasUSDBConsensus() {
 		return nil, fmt.Errorf("chain config has no usdb consensus configuration")
 	}
-	if queryTimeout <= 0 {
-		queryTimeout = DefaultQueryTimeout
-	}
 	return &PayloadBuilder{
 		client:       client,
 		chainConfig:  chainConfig,
-		queryTimeout: queryTimeout,
+		queryTimeout: EffectiveQueryTimeout(queryTimeout),
 	}, nil
 }
 

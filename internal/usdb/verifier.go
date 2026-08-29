@@ -55,12 +55,9 @@ func NewVerifier(client Client, queryTimeout time.Duration) (*Verifier, error) {
 	if client == nil {
 		return nil, fmt.Errorf("nil usdb client")
 	}
-	if queryTimeout <= 0 {
-		queryTimeout = DefaultQueryTimeout
-	}
 	return &Verifier{
 		client:       client,
-		queryTimeout: queryTimeout,
+		queryTimeout: EffectiveQueryTimeout(queryTimeout),
 	}, nil
 }
 

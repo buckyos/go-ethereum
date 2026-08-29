@@ -22,6 +22,7 @@ import (
 	"errors"
 	"math/big"
 	"math/rand"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -440,6 +441,59 @@ func TestUSDBWorkFailureRequestsRetryUntilRecovery(t *testing.T) {
 	atomic.StoreInt32(&nonUSDBWorker.newTxs, 1)
 	if !nonUSDBWorker.shouldRecommitWork() {
 		t.Fatal("new transactions no longer request recommit")
+	}
+}
+
+func TestUSDBWorkFailureTrackerSamplesAndReportsRecovery(t *testing.T) {
+	var tracker usdbWorkFailureTracker
+	startedAt := time.Unix(1_700_000_000, 0)
+	wantLogs := map[uint64]bool{1: true, 2: true, 3: true, 4: true, 8: true}
+	for attempt := uint64(1); attempt <= 9; attempt++ {
+		report := tracker.recordFailure(startedAt.Add(time.Duration(attempt-1) * time.Second))
+		if report.attempts != attempt || report.log != wantLogs[attempt] {
+			t.Fatalf("unexpected failure report at attempt %d: %+v", attempt, report)
+		}
+	}
+	if !tracker.shouldRetry() {
+		t.Fatal("failure tracker did not request retry")
+	}
+
+	reminderAt := startedAt.Add(usdbWorkFailureReminderInterval + 8*time.Second)
+	reminder := tracker.recordFailure(reminderAt)
+	if reminder.attempts != 10 || !reminder.log {
+		t.Fatalf("prolonged outage did not emit reminder: %+v", reminder)
+	}
+	recoveryAt := reminderAt.Add(2 * time.Second)
+	recovery, ok := tracker.recordSuccess(recoveryAt)
+	if !ok || recovery.attempts != 10 || recovery.unavailableFor != usdbWorkFailureReminderInterval+10*time.Second {
+		t.Fatalf("unexpected recovery report: ok=%v report=%+v", ok, recovery)
+	}
+	if tracker.shouldRetry() {
+		t.Fatal("recovery did not clear retry state")
+	}
+	if _, ok := tracker.recordSuccess(recoveryAt); ok {
+		t.Fatal("duplicate success reported a second recovery")
+	}
+}
+
+func TestUSDBWorkFailureTrackerIsConcurrent(t *testing.T) {
+	var (
+		tracker usdbWorkFailureTracker
+		wg      sync.WaitGroup
+	)
+	now := time.Unix(1_700_000_000, 0)
+	const failures = 128
+	wg.Add(failures)
+	for i := 0; i < failures; i++ {
+		go func() {
+			defer wg.Done()
+			tracker.recordFailure(now)
+		}()
+	}
+	wg.Wait()
+	recovery, ok := tracker.recordSuccess(now)
+	if !ok || recovery.attempts != failures {
+		t.Fatalf("concurrent failures were not counted exactly: ok=%v report=%+v", ok, recovery)
 	}
 }
 

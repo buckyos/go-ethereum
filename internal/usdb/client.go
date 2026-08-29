@@ -5,6 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -40,6 +45,14 @@ const (
 	rpcErrActiveVersionSetMismatch = -32056
 	rpcErrCommitProtocolMismatch   = -32057
 )
+
+// EffectiveQueryTimeout returns the timeout enforced by USDB RPC consumers.
+func EffectiveQueryTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return DefaultQueryTimeout
+	}
+	return timeout
+}
 
 var (
 	ErrPassNotFound             = errors.New("usdb pass not found")
@@ -196,16 +209,40 @@ type jsonRPCClient interface {
 
 // RPCClient is a small JSON-RPC adapter over usdb-indexer.
 type RPCClient struct {
-	client jsonRPCClient
+	client   jsonRPCClient
+	endpoint string
+}
+
+// RPCEndpointForLog returns a credential-free endpoint identity for logs and
+// errors. Network paths and query strings are omitted because deployments may
+// carry bearer tokens outside URL userinfo.
+func RPCEndpointForLog(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "<unset>"
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "<invalid>"
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme == "" {
+		return "ipc://<local>"
+	}
+	if parsed.Host == "" {
+		return scheme + ":<redacted>"
+	}
+	return scheme + "://" + parsed.Host
 }
 
 // DialRPC establishes a reusable client to one usdb-indexer RPC endpoint.
 func DialRPC(ctx context.Context, endpoint string) (*RPCClient, error) {
+	logEndpoint := RPCEndpointForLog(endpoint)
 	client, err := gethrpc.DialContext(ctx, endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial usdb-indexer rpc %q: %w", endpoint, err)
+		return nil, &rpcTransportError{operation: "dial", endpoint: logEndpoint, cause: err}
 	}
-	return &RPCClient{client: client}, nil
+	return &RPCClient{client: client, endpoint: logEndpoint}, nil
 }
 
 // Close releases the underlying JSON-RPC connection.
@@ -219,7 +256,7 @@ func (c *RPCClient) Close() {
 func (c *RPCClient) GetSystemStateInfo(ctx context.Context) (*SystemStateInfo, error) {
 	var raw json.RawMessage
 	if err := c.client.CallContext(ctx, &raw, "get_system_state_info"); err != nil {
-		return nil, fmt.Errorf("failed to call get_system_state_info: %w", mapRPCError(err))
+		return nil, fmt.Errorf("failed to call get_system_state_info: %w", c.mapCallError("get_system_state_info", err))
 	}
 	if isNullJSON(raw) {
 		return nil, nil
@@ -241,7 +278,7 @@ func (c *RPCClient) GetPassEconomicProfile(ctx context.Context, passID PassID, q
 		Context:     query,
 	}
 	if err := c.client.CallContext(ctx, &raw, "get_pass_economic_profile", params); err != nil {
-		return nil, fmt.Errorf("failed to call get_pass_economic_profile: %w", mapRPCError(err))
+		return nil, fmt.Errorf("failed to call get_pass_economic_profile: %w", c.mapCallError("get_pass_economic_profile", err))
 	}
 	if isNullJSON(raw) {
 		return nil, nil
@@ -263,7 +300,7 @@ func (c *RPCClient) ResolveMinerCandidate(ctx context.Context, usdbMain common.A
 		Context:     query,
 	}
 	if err := c.client.CallContext(ctx, &raw, "resolve_miner_candidate", params); err != nil {
-		return nil, fmt.Errorf("failed to call resolve_miner_candidate: %w", mapRPCError(err))
+		return nil, fmt.Errorf("failed to call resolve_miner_candidate: %w", c.mapCallError("resolve_miner_candidate", err))
 	}
 	if isNullJSON(raw) {
 		return nil, nil
@@ -277,6 +314,60 @@ func (c *RPCClient) ResolveMinerCandidate(ctx context.Context, usdbMain common.A
 
 func isNullJSON(raw json.RawMessage) bool {
 	return len(raw) == 0 || string(raw) == "null"
+}
+
+type rpcTransportError struct {
+	operation string
+	endpoint  string
+	cause     error
+}
+
+func (e *rpcTransportError) Error() string {
+	return fmt.Sprintf("usdb-indexer rpc %s failed for %q: %s", e.operation, e.endpoint, rpcTransportErrorCategory(e.cause))
+}
+
+func rpcTransportErrorCategory(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "request canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "request timed out"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "connection refused"
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return "connection reset"
+	}
+	if errors.Is(err, io.EOF) {
+		return "connection closed"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "name resolution failed"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "network timeout"
+	}
+	return "transport error"
+}
+
+func (e *rpcTransportError) Unwrap() error {
+	return e.cause
+}
+
+func (c *RPCClient) mapCallError(operation string, err error) error {
+	mapped := mapRPCError(err)
+	var rpcErr *RPCError
+	if errors.As(mapped, &rpcErr) {
+		return mapped
+	}
+	endpoint := c.endpoint
+	if endpoint == "" {
+		endpoint = "<unknown>"
+	}
+	return &rpcTransportError{operation: operation, endpoint: endpoint, cause: mapped}
 }
 
 func mapRPCError(err error) error {

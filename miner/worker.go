@@ -67,6 +67,9 @@ const (
 	// any newly arrived transactions.
 	maxRecommitInterval = 15 * time.Second
 
+	// usdbWorkFailureReminderInterval bounds silence during a prolonged external-state outage.
+	usdbWorkFailureReminderInterval = 5 * time.Minute
+
 	// intervalAdjustRatio is the impact a single interval adjustment has on sealing work
 	// resubmitting interval.
 	intervalAdjustRatio = 0.1
@@ -182,6 +185,71 @@ type intervalAdjust struct {
 	inc   bool
 }
 
+type usdbWorkFailureReport struct {
+	attempts       uint64
+	unavailableFor time.Duration
+	log            bool
+}
+
+// usdbWorkFailureTracker keeps retry state and outage accounting in one lock.
+// Build failures and system-state polling run on different goroutines.
+type usdbWorkFailureTracker struct {
+	mu        sync.Mutex
+	retry     uint32
+	attempts  uint64
+	startedAt time.Time
+	lastLogAt time.Time
+}
+
+func (t *usdbWorkFailureTracker) recordFailure(now time.Time) usdbWorkFailureReport {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.attempts == 0 {
+		t.startedAt = now
+	}
+	t.attempts++
+	atomic.StoreUint32(&t.retry, 1)
+	shouldLog := t.attempts <= 3 || t.attempts&(t.attempts-1) == 0 ||
+		(!t.lastLogAt.IsZero() && now.Sub(t.lastLogAt) >= usdbWorkFailureReminderInterval)
+	if shouldLog {
+		t.lastLogAt = now
+	}
+	return usdbWorkFailureReport{
+		attempts:       t.attempts,
+		unavailableFor: nonNegativeDuration(now.Sub(t.startedAt)),
+		log:            shouldLog,
+	}
+}
+
+func (t *usdbWorkFailureTracker) recordSuccess(now time.Time) (usdbWorkFailureReport, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if atomic.SwapUint32(&t.retry, 0) == 0 {
+		return usdbWorkFailureReport{}, false
+	}
+	report := usdbWorkFailureReport{
+		attempts:       t.attempts,
+		unavailableFor: nonNegativeDuration(now.Sub(t.startedAt)),
+	}
+	t.attempts = 0
+	t.startedAt = time.Time{}
+	t.lastLogAt = time.Time{}
+	return report, true
+}
+
+func (t *usdbWorkFailureTracker) shouldRetry() bool {
+	return atomic.LoadUint32(&t.retry) != 0
+}
+
+func nonNegativeDuration(duration time.Duration) time.Duration {
+	if duration < 0 {
+		return 0
+	}
+	return duration
+}
+
 // worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
 type worker struct {
@@ -233,9 +301,11 @@ type worker struct {
 	snapshotState    *state.StateDB
 
 	// atomic status counters
-	running       int32  // The indicator whether the consensus engine is running or not.
-	newTxs        int32  // New arrival transaction count since last sealing work submitting.
-	usdbWorkRetry uint32 // A failed USDB work build must poll external state until it recovers.
+	running int32 // The indicator whether the consensus engine is running or not.
+	newTxs  int32 // New arrival transaction count since last sealing work submitting.
+
+	// A failed USDB work build must poll external state until it recovers.
+	usdbWorkFailure usdbWorkFailureTracker
 
 	// noempty is the flag used to control whether the feature of pre-seal empty
 	// block is enabled. The default value is false(pre-seal is enabled by default).
@@ -303,11 +373,14 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 		coinbase:           config.Etherbase,
 	}
 	if chainConfig.HasUSDBConsensus() {
+		endpoint := usdb.RPCEndpointForLog(config.USDB.IndexerRPCURL)
+		queryTimeout := usdb.EffectiveQueryTimeout(config.USDB.IndexerQueryTimeout)
 		if config.USDB.IndexerRPCURL == "" {
 			// Validator-only nodes do not need a miner-side RPC connection. Keep a
 			// deterministic error so any later attempt to assemble a block still
 			// fails instead of falling back to static extra-data.
 			worker.usdbPayloadBuilderErr = errors.New("usdb-indexer RPC URL is not configured for mining")
+			log.Info("USDB miner profile builder not configured", "endpoint", endpoint, "query_timeout", queryTimeout, "reason", "indexer RPC URL is unset")
 		} else {
 			builder, err := usdb.NewRPCPayloadBuilder(
 				config.USDB.IndexerRPCURL,
@@ -316,8 +389,10 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 			)
 			if err != nil {
 				worker.usdbPayloadBuilderErr = fmt.Errorf("failed to initialize usdb payload builder: %w", err)
+				log.Warn("USDB miner profile builder unavailable", "endpoint", endpoint, "query_timeout", queryTimeout, "err", worker.usdbPayloadBuilderErr)
 			} else {
 				worker.usdbPayloadBuilder = builder
+				log.Info("USDB miner profile builder initialized", "endpoint", endpoint, "query_timeout", queryTimeout)
 			}
 		}
 	}
@@ -616,21 +691,27 @@ func (w *worker) requestUSDBStateRefresh() {
 }
 
 func (w *worker) shouldRecommitWork() bool {
-	return atomic.LoadInt32(&w.newTxs) != 0 || atomic.LoadUint32(&w.usdbWorkRetry) != 0
+	return atomic.LoadInt32(&w.newTxs) != 0 || w.usdbWorkFailure.shouldRetry()
 }
 
 func (w *worker) markUSDBWorkBuildFailure(err error) {
 	if !w.chainConfig.HasUSDBConsensus() {
 		return
 	}
-	if atomic.CompareAndSwapUint32(&w.usdbWorkRetry, 0, 1) {
-		log.Warn("USDB sealing work unavailable; retrying on recommit interval", "err", err)
+	report := w.usdbWorkFailure.recordFailure(time.Now())
+	if report.log {
+		log.Warn(
+			"USDB sealing work unavailable; retrying on recommit interval",
+			"attempts", report.attempts,
+			"unavailable_for", report.unavailableFor,
+			"err", err,
+		)
 	}
 }
 
 func (w *worker) markUSDBWorkBuildSuccess() {
-	if atomic.SwapUint32(&w.usdbWorkRetry, 0) != 0 {
-		log.Info("USDB sealing work recovered")
+	if report, recovered := w.usdbWorkFailure.recordSuccess(time.Now()); recovered {
+		log.Info("USDB sealing work recovered", "attempts", report.attempts, "unavailable_for", report.unavailableFor)
 	}
 }
 

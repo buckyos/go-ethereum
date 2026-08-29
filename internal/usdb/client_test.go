@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -43,6 +44,63 @@ func (s *stubJSONRPCClient) CallContext(_ context.Context, result interface{}, m
 
 func (s *stubJSONRPCClient) Close() {
 	s.closed = true
+}
+
+func TestRPCEndpointForLogRedactsCredentialsAndRequestTarget(t *testing.T) {
+	tests := []struct {
+		endpoint string
+		want     string
+	}{
+		{endpoint: "http://alice:secret@127.0.0.1:18548/rpc/private?token=secret#fragment", want: "http://127.0.0.1:18548"},
+		{endpoint: "wss://indexer.example:443/private/token", want: "wss://indexer.example:443"},
+		{endpoint: "/tmp/usdb-indexer.ipc", want: "ipc://<local>"},
+		{endpoint: "stdio:", want: "stdio:<redacted>"},
+		{endpoint: "", want: "<unset>"},
+		{endpoint: "http://%zz", want: "<invalid>"},
+	}
+	for _, test := range tests {
+		if got := RPCEndpointForLog(test.endpoint); got != test.want {
+			t.Fatalf("endpoint %q sanitized to %q, want %q", test.endpoint, got, test.want)
+		}
+	}
+}
+
+func TestDialRPCErrorDoesNotExposeEndpointSecrets(t *testing.T) {
+	endpoint := "secret://alice:password@indexer.example/private-token?api_key=query-secret"
+	_, err := DialRPC(context.Background(), endpoint)
+	if err == nil {
+		t.Fatal("expected unsupported transport to fail")
+	}
+	message := err.Error()
+	for _, secret := range []string{"alice", "password", "private-token", "query-secret"} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("dial error exposed %q: %s", secret, message)
+		}
+	}
+	if !strings.Contains(message, "secret://indexer.example") {
+		t.Fatalf("dial error omitted safe endpoint identity: %s", message)
+	}
+}
+
+func TestRPCTransportErrorDoesNotExposeEndpointSecrets(t *testing.T) {
+	wantErr := errors.New("request to http://alice:password@indexer.example/private-token?api_key=query-secret failed")
+	client := &RPCClient{
+		client:   &stubJSONRPCClient{err: wantErr},
+		endpoint: RPCEndpointForLog("http://alice:password@indexer.example/private-token?api_key=query-secret"),
+	}
+	_, err := client.GetSystemStateInfo(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("transport cause was not preserved: %v", err)
+	}
+	message := err.Error()
+	for _, secret := range []string{"alice", "password", "private-token", "query-secret"} {
+		if strings.Contains(message, secret) {
+			t.Fatalf("RPC error exposed %q: %s", secret, message)
+		}
+	}
+	if !strings.Contains(message, "http://indexer.example") {
+		t.Fatalf("RPC error omitted safe endpoint identity: %s", message)
+	}
 }
 
 func TestPassEconomicProfileViewDecodesCurrentRPCContract(t *testing.T) {
