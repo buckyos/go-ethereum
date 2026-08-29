@@ -27,6 +27,7 @@ ACTIVATION_CONFORMANCE_BLOCK=${ACTIVATION_CONFORMANCE_BLOCK:-}
 ECONOMIC_CONFORMANCE_V2_BLOCK=${ECONOMIC_CONFORMANCE_V2_BLOCK:-}
 ECONOMIC_CONFORMANCE_V3_BLOCK=${ECONOMIC_CONFORMANCE_V3_BLOCK:-}
 INDEXER_OUTAGE_CHECK=${INDEXER_OUTAGE_CHECK:-0}
+MINER_LIVE_STATE_CHECK=${MINER_LIVE_STATE_CHECK:-0}
 SELECTOR_TAMPER_CHECK=${SELECTOR_TAMPER_CHECK:-0}
 ACTIVATION_FRESH_VALIDATOR_CHECK=${ACTIVATION_FRESH_VALIDATOR_CHECK:-0}
 ANCHOR_BOUNDARY_CHECK=${ANCHOR_BOUNDARY_CHECK:-0}
@@ -427,6 +428,129 @@ usdb_chain_wait_log_pattern() {
   return 1
 }
 
+usdb_chain_log_pattern_count() {
+  local pattern="$1"
+  if [[ ! -f "$GETH_LOG_FILE" ]]; then
+    printf '0\n'
+    return
+  fi
+  grep -Fc "$pattern" "$GETH_LOG_FILE" || true
+}
+
+usdb_chain_wait_log_pattern_count() {
+  local pattern="$1"
+  local minimum_count="$2"
+  local deadline=$((SECONDS + RPC_WAIT_SECONDS))
+  local count
+
+  while (( SECONDS < deadline )); do
+    count="$(usdb_chain_log_pattern_count "$pattern")"
+    if (( count >= minimum_count )); then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for geth log pattern count: pattern=${pattern}, minimum=${minimum_count}" >&2
+  return 1
+}
+
+usdb_chain_miner_start_identity() {
+  local pid="$1"
+  ps -o lstart= -p "$pid" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+usdb_chain_assert_miner_process() {
+  local expected_pid="$1"
+  local expected_start_identity="$2"
+  local actual_start_identity
+
+  if [[ -z "$expected_pid" ]] || ! kill -0 "$expected_pid" 2>/dev/null; then
+    echo "USDB miner process exited unexpectedly: pid=${expected_pid:-missing}" >&2
+    return 1
+  fi
+  actual_start_identity="$(usdb_chain_miner_start_identity "$expected_pid")"
+  if [[ -z "$actual_start_identity" || "$actual_start_identity" != "$expected_start_identity" ]]; then
+    echo "USDB miner process identity changed: pid=${expected_pid}, have=${actual_start_identity:-missing}, want=${expected_start_identity}" >&2
+    return 1
+  fi
+}
+
+usdb_chain_latest_selector_summary() {
+  local response
+  response="$(usdb_chain_rpc_call "eth_getBlockByNumber" '["latest", false]')"
+  printf '%s' "$response" | python3 -c '
+import json
+import sys
+
+envelope = json.load(sys.stdin)
+if envelope.get("error"):
+    raise SystemExit("eth_getBlockByNumber failed: " + json.dumps(envelope["error"], sort_keys=True))
+block = envelope.get("result")
+if block is None:
+    raise SystemExit("latest USDB block is unavailable")
+payload = bytes.fromhex((block.get("extraData") or "0x")[2:])
+if len(payload) != 111:
+    raise SystemExit(f"unexpected USDB selector size: {len(payload)}")
+number = int(block["number"], 16)
+btc_height = int.from_bytes(payload[3:7], "big")
+system_state_id = payload[43:75].hex()
+pass_index = int.from_bytes(payload[107:111], "big")
+pass_id = f"{payload[75:107].hex()}i{pass_index}"
+print(f"{number}|{btc_height}|{system_state_id}|{pass_id}")'
+}
+
+usdb_chain_wait_selector() {
+  local expected_pass_id="$1"
+  local expected_system_state_id="$2"
+  local minimum_block_height="$3"
+  local miner_pid="$4"
+  local miner_start_identity="$5"
+  local deadline=$((SECONDS + BLOCK_WAIT_SECONDS))
+  local summary block_height btc_height system_state_id pass_id
+
+  while (( SECONDS < deadline )); do
+    usdb_chain_assert_miner_process "$miner_pid" "$miner_start_identity"
+    summary="$(usdb_chain_latest_selector_summary || true)"
+    IFS='|' read -r block_height btc_height system_state_id pass_id <<<"$summary"
+    if [[ "$block_height" =~ ^[0-9]+$ ]] &&
+      (( block_height >= minimum_block_height )) &&
+      [[ "$pass_id" == "$expected_pass_id" ]] &&
+      [[ "$system_state_id" == "$expected_system_state_id" ]]; then
+      usdb_chain_log "Observed selector transition at USDB block=${block_height}, BTC height=${btc_height}, pass_id=${pass_id}" >&2
+      printf '%s\n' "$block_height"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for selector pass=${expected_pass_id}, system_state_id=${expected_system_state_id}, minimum_block=${minimum_block_height}" >&2
+  return 1
+}
+
+usdb_chain_wait_mining_stalled() {
+  local stable_seconds="$1"
+  local miner_pid="$2"
+  local miner_start_identity="$3"
+  local deadline=$((SECONDS + BLOCK_WAIT_SECONDS))
+  local last_height=-1
+  local unchanged_since=$SECONDS
+  local current_height
+
+  while (( SECONDS < deadline )); do
+    usdb_chain_assert_miner_process "$miner_pid" "$miner_start_identity"
+    current_height="$(usdb_chain_current_height)"
+    if (( current_height != last_height )); then
+      last_height="$current_height"
+      unchanged_since=$SECONDS
+    elif (( SECONDS - unchanged_since >= stable_seconds )); then
+      printf '%s\n' "$current_height"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for USDB mining to remain stalled for ${stable_seconds}s" >&2
+  return 1
+}
+
 usdb_chain_block_summary() {
   local block_height="$1"
   local response
@@ -688,6 +812,9 @@ verify_profile_blocks() {
       --economic-conformance-v3-block "$ECONOMIC_CONFORMANCE_V3_BLOCK"
     )
   fi
+  if [[ -n "$expected_pass_id" ]]; then
+    activation_args+=(--expected-pass-id "$expected_pass_id")
+  fi
 
   python3 "$ROOT_DIR/scripts/usdb/verify_usdb_profile_e2e.py" \
     --blocks "$blocks_file" \
@@ -695,9 +822,125 @@ verify_profile_blocks() {
     --balance-hex "$balance_hex" \
     --usdb-chain-rpc-url "http://${HTTP_ADDR}:${HTTP_PORT}" \
     --usdb-indexer-rpc-url "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
-    --expected-pass-id "$expected_pass_id" \
     --btc-anchor-max-age-blocks "$BTC_ANCHOR_MAX_AGE_BLOCKS" \
     "${activation_args[@]}"
+}
+
+run_miner_live_state_check() {
+  local miner_btc_address="$1"
+  local remint_owner_address="$2"
+  local old_pass_id="$3"
+  local miner_pid="$GETH_PID"
+  local miner_start_identity initial_chain_height initial_system_resp initial_system_state_id
+  local pre_transition_height remint_content_file new_pass_id current_btc_tip_height
+  local current_context_height new_system_resp new_system_state_id new_profile_resp
+  local selector_transition_height failure_count recovery_count stalled_height resumed_height
+
+  miner_start_identity="$(usdb_chain_miner_start_identity "$miner_pid")"
+  if [[ -z "$miner_start_identity" ]]; then
+    echo "Unable to capture initial USDB miner process identity: pid=${miner_pid}" >&2
+    return 1
+  fi
+  usdb_chain_assert_miner_process "$miner_pid" "$miner_start_identity"
+
+  initial_chain_height="$(usdb_chain_wait_block_height 2)"
+  initial_system_resp="$(regtest_rpc_call_usdb_indexer "get_system_state_info" "[]")"
+  regtest_assert_json_expr "$initial_system_resp" "data.get('error') is None" "True"
+  initial_system_state_id="$(regtest_json_expr "$initial_system_resp" "((data.get('result') or {}).get('system_state_id', ''))")"
+  if [[ -z "$initial_system_state_id" ]]; then
+    echo "Initial USDB system_state_id is empty" >&2
+    return 1
+  fi
+  usdb_chain_wait_selector \
+    "$old_pass_id" \
+    "$initial_system_state_id" \
+    1 \
+    "$miner_pid" \
+    "$miner_start_identity" >/dev/null
+  pre_transition_height="$(usdb_chain_current_height)"
+
+  regtest_log "Transferring active pass=${old_pass_id} to remint owner=${remint_owner_address} while geth pid=${miner_pid} remains running"
+  regtest_ord_send_inscription "$ORD_WALLET_NAME" "$remint_owner_address" "$old_pass_id" >/dev/null
+  regtest_mine_blocks "$TRANSFER_CONFIRM_BLOCKS" "$miner_btc_address"
+  regtest_wait_until_ord_server_synced_to_bitcoind
+  regtest_wait_until_ord_wallet_has_inscription "$ORD_WALLET_NAME_B" "$old_pass_id"
+
+  remint_content_file="$WORK_DIR/usdb_profile_live_remint.json"
+  cat >"$remint_content_file" <<EOF
+{"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":["${old_pass_id}"]}
+EOF
+  new_pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME_B" "$remint_content_file" "$remint_owner_address")"
+  regtest_mine_blocks "$REMINT_CONFIRM_BLOCKS" "$miner_btc_address"
+  if (( BTC_STABLE_LAG_BLOCKS > 0 )); then
+    regtest_log "Mining ${BTC_STABLE_LAG_BLOCKS} blocks so consume/remint reaches the stable frontier"
+    regtest_mine_blocks "$BTC_STABLE_LAG_BLOCKS" "$miner_btc_address"
+  fi
+  regtest_wait_until_ord_server_synced_to_bitcoind
+  current_btc_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
+  current_context_height=$((current_btc_tip_height - BTC_STABLE_LAG_BLOCKS))
+  regtest_wait_until_balance_history_synced_eq "$current_context_height"
+  regtest_wait_balance_history_consensus_ready
+  regtest_wait_until_usdb_synced_eq "$current_context_height"
+  regtest_wait_usdb_consensus_ready
+
+  regtest_assert_usdb_pass_snapshot_state "$old_pass_id" "$current_context_height" "consumed"
+  regtest_assert_usdb_pass_energy_state "$old_pass_id" "$current_context_height" "at_or_before" "consumed" "0"
+  regtest_assert_usdb_pass_snapshot_state "$new_pass_id" "$current_context_height" "active"
+  regtest_assert_usdb_pass_energy_state "$new_pass_id" "$current_context_height" "at_or_before" "active"
+
+  new_system_resp="$(regtest_rpc_call_usdb_indexer "get_system_state_info" "[]")"
+  regtest_assert_json_expr "$new_system_resp" "data.get('error') is None" "True"
+  new_system_state_id="$(regtest_json_expr "$new_system_resp" "((data.get('result') or {}).get('system_state_id', ''))")"
+  if [[ -z "$new_system_state_id" || "$new_system_state_id" == "$initial_system_state_id" ]]; then
+    echo "consume/remint did not change system_state_id: before=${initial_system_state_id}, after=${new_system_state_id:-missing}" >&2
+    return 1
+  fi
+  new_profile_resp="$(regtest_get_pass_economic_profile_response "$new_pass_id" "$current_context_height")"
+  regtest_assert_json_expr "$new_profile_resp" "data.get('error') is None" "True"
+  regtest_assert_json_expr "$new_profile_resp" "(data.get('result') or {}).get('pass', {}).get('pass_id')" "$new_pass_id"
+  regtest_assert_json_expr "$new_profile_resp" "(data.get('result') or {}).get('pass', {}).get('state')" "active"
+  regtest_assert_json_expr "$new_profile_resp" "(data.get('result') or {}).get('pass', {}).get('usdb_main')" "$MINER_PASS_USDB_MAIN"
+
+  selector_transition_height="$(usdb_chain_wait_selector \
+    "$new_pass_id" \
+    "$new_system_state_id" \
+    "$((pre_transition_height + 1))" \
+    "$miner_pid" \
+    "$miner_start_identity")"
+  usdb_chain_assert_miner_process "$miner_pid" "$miner_start_identity"
+
+  failure_count="$(usdb_chain_log_pattern_count "USDB sealing work unavailable; retrying on recommit interval")"
+  regtest_log "Stopping usdb-indexer while geth pid=${miner_pid} keeps mining"
+  regtest_stop_usdb_indexer
+  usdb_chain_wait_log_pattern_count \
+    "USDB sealing work unavailable; retrying on recommit interval" \
+    "$((failure_count + 1))"
+  stalled_height="$(usdb_chain_wait_mining_stalled \
+    "$OUTAGE_OBSERVE_SECONDS" \
+    "$miner_pid" \
+    "$miner_start_identity")"
+  usdb_chain_assert_miner_process "$miner_pid" "$miner_start_identity"
+
+  recovery_count="$(usdb_chain_log_pattern_count "USDB sealing work recovered")"
+  regtest_log "Restarting usdb-indexer without restarting or toggling geth mining"
+  regtest_start_usdb_indexer
+  regtest_wait_usdb_rpc_ready
+  regtest_wait_until_usdb_synced_eq "$current_context_height"
+  regtest_wait_usdb_consensus_ready
+  resumed_height="$(usdb_chain_wait_block_height "$((stalled_height + 2))")"
+  usdb_chain_wait_log_pattern_count "USDB sealing work recovered" "$((recovery_count + 1))"
+  usdb_chain_wait_selector \
+    "$new_pass_id" \
+    "$new_system_state_id" \
+    "$resumed_height" \
+    "$miner_pid" \
+    "$miner_start_identity" >/dev/null
+  usdb_chain_assert_miner_process "$miner_pid" "$miner_start_identity"
+
+  MINER_LIVE_FINAL_PASS_ID="$new_pass_id"
+  MINER_LIVE_FINAL_HEIGHT="$resumed_height"
+  MINER_LIVE_SELECTOR_TRANSITION_HEIGHT="$selector_transition_height"
+  usdb_chain_log "Persistent miner transition succeeded: pid=${miner_pid}, initial_height=${initial_chain_height}, old_pass=${old_pass_id}, new_pass=${new_pass_id}, selector_transition_height=${selector_transition_height}, stalled_height=${stalled_height}, resumed_height=${resumed_height}"
 }
 
 run_indexer_outage_recovery_check() {
@@ -901,6 +1144,7 @@ main() {
   fi
   for check_name in \
     INDEXER_OUTAGE_CHECK \
+    MINER_LIVE_STATE_CHECK \
     SELECTOR_TAMPER_CHECK \
     ACTIVATION_FRESH_VALIDATOR_CHECK \
     ANCHOR_BOUNDARY_CHECK; do
@@ -940,6 +1184,17 @@ main() {
     echo "INDEXER_OUTAGE_CHECK cannot be combined with activation conformance" >&2
     exit 1
   fi
+  if [[ "$MINER_LIVE_STATE_CHECK" == "1" ]] &&
+    { [[ "$INDEXER_OUTAGE_CHECK" == "1" ]] ||
+      [[ "$SELECTOR_TAMPER_CHECK" == "1" ]] ||
+      [[ "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]] ||
+      [[ "$ANCHOR_BOUNDARY_CHECK" == "1" ]] ||
+      [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]] ||
+      usdb_chain_economic_conformance_enabled ||
+      [[ -n "$POW_CALIBRATION_PROFILE" ]]; }; then
+    echo "MINER_LIVE_STATE_CHECK must run without other conformance, failure, anchor, or calibration modes" >&2
+    exit 1
+  fi
   if [[ "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]] &&
     [[ -z "$ACTIVATION_CONFORMANCE_BLOCK" ]] &&
     ! usdb_chain_economic_conformance_enabled; then
@@ -966,10 +1221,11 @@ main() {
   regtest_start_bitcoind
   regtest_ensure_wallet
 
-  local miner_btc_address ord_receive_address mint_content_file pass_id
+  local miner_btc_address ord_receive_address ord_receive_address_b mint_content_file pass_id
   local current_btc_tip_height current_context_height
   local snapshot_info_resp system_state_resp pass_profile_resp
   local final_block_height balance_resp blocks_file latest_balance_hex current_energy
+  local expected_verify_pass_id
 
   miner_btc_address="$(regtest_get_new_address)"
   regtest_log "Premining ${PREMINE_BLOCKS} BTC blocks to address=${miner_btc_address}"
@@ -981,6 +1237,11 @@ main() {
 
   ord_receive_address="$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")"
   regtest_fund_address "$ord_receive_address" "$FUND_ORD_AMOUNT_BTC"
+  ord_receive_address_b=""
+  if [[ "$MINER_LIVE_STATE_CHECK" == "1" ]]; then
+    ord_receive_address_b="$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME_B")"
+    regtest_fund_address "$ord_receive_address_b" "$FUND_ORD_AMOUNT_BTC"
+  fi
   regtest_mine_blocks "$FUND_CONFIRM_BLOCKS" "$miner_btc_address"
   regtest_wait_until_ord_server_synced_to_bitcoind
 
@@ -1154,6 +1415,9 @@ EOF
   if [[ "$ANCHOR_BOUNDARY_CHECK" == "1" ]]; then
     run_anchor_boundary_check "$miner_btc_address" "$current_context_height"
     final_block_height="$ANCHOR_BOUNDARY_FINAL_HEIGHT"
+  elif [[ "$MINER_LIVE_STATE_CHECK" == "1" ]]; then
+    run_miner_live_state_check "$miner_btc_address" "$ord_receive_address_b" "$pass_id"
+    final_block_height="$MINER_LIVE_FINAL_HEIGHT"
   elif [[ "$INDEXER_OUTAGE_CHECK" == "1" ]]; then
     usdb_chain_wait_block_height 1 >/dev/null
     run_indexer_outage_recovery_check
@@ -1209,7 +1473,11 @@ with open(output_path, "w", encoding="utf-8") as f:
 PY
 
   usdb_chain_log "Verifying payloads and reward totals across ${final_block_height} mined blocks"
-  verify_profile_blocks "$blocks_file" "$USDB_CHAIN_MINER_ADDRESS" "$latest_balance_hex" "$pass_id"
+  expected_verify_pass_id="$pass_id"
+  if [[ "$MINER_LIVE_STATE_CHECK" == "1" ]]; then
+    expected_verify_pass_id=""
+  fi
+  verify_profile_blocks "$blocks_file" "$USDB_CHAIN_MINER_ADDRESS" "$latest_balance_hex" "$expected_verify_pass_id"
 
   if [[ "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]]; then
     run_activation_fresh_validator_check "$final_block_height"
@@ -1220,7 +1488,11 @@ PY
   run_pow_calibration "$final_block_height"
 
   usdb_chain_log "USDB-chain profile/difficulty E2E succeeded."
-  usdb_chain_log "pass_id=${pass_id}, coinbase=${USDB_CHAIN_MINER_ADDRESS}, blocks=${final_block_height}, balance=${latest_balance_hex}"
+  if [[ "$MINER_LIVE_STATE_CHECK" == "1" ]]; then
+    usdb_chain_log "old_pass_id=${pass_id}, final_pass_id=${MINER_LIVE_FINAL_PASS_ID}, selector_transition_height=${MINER_LIVE_SELECTOR_TRANSITION_HEIGHT}, coinbase=${USDB_CHAIN_MINER_ADDRESS}, blocks=${final_block_height}, balance=${latest_balance_hex}"
+  else
+    usdb_chain_log "pass_id=${pass_id}, coinbase=${USDB_CHAIN_MINER_ADDRESS}, blocks=${final_block_height}, balance=${latest_balance_hex}"
+  fi
 }
 
 main "$@"

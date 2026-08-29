@@ -114,6 +114,26 @@ For every mined block the common validator checks:
 - Confirms both stages independently satisfy the profile/difficulty formula.
 - Confirms reward and issued-supply transitions use each selector-bound profile.
 
+### Persistent Miner State Refresh
+
+`scripts/usdb/run_usdb_miner_live_state_e2e.sh`
+
+- Starts one geth miner and records both its PID/start identity and the initial
+  pass selector.
+- Transfers the active pass and creates a real `remint(prev)` with the same
+  `usdb_main` while geth keeps mining.
+- Waits for the BTC state to cross the configured stable-lag frontier, then
+  requires the old pass to be `Consumed`, the replacement pass to be `Active`,
+  and `system_state_id` to change.
+- Requires the same miner process to rebuild work and select the replacement
+  pass without `miner_stop`, `miner_start`, or a geth restart.
+- Stops usdb-indexer while that miner remains running, requires sealing to fail
+  closed after any in-flight work drains, then restarts only usdb-indexer and
+  requires mining to recover automatically.
+- Replays every pre-remint and post-remint block against its selector-bound
+  historical profile and independently checks difficulty, reward, and system
+  storage transitions.
+
 ### Historical Replay and Fresh Validator
 
 `scripts/usdb/run_usdb_profile_historical_stability_e2e.sh`
