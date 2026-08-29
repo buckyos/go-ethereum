@@ -250,7 +250,7 @@ cleanup() {
     print_failure_diagnostics "node1" "$NODE1_LOG_FILE"
     print_failure_diagnostics "node2" "$NODE2_LOG_FILE"
   fi
-  regtest_cleanup
+  regtest_cleanup "$exit_code"
 }
 
 collect_usdb_blocks() {

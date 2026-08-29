@@ -90,6 +90,8 @@ run_go_checks() {
 
     local -a vet_packages=(
       ./internal/usdb
+      ./internal/usdbacceptance
+      ./internal/usdbrelease
       ./core/usdbstate
       ./core
       ./params
@@ -105,7 +107,13 @@ run_go_checks() {
     (
       cd "$ROOT_DIR"
       usdb_go vet "${vet_packages[@]}"
-      usdb_go_with_geth_linker_compat test ./internal/usdb ./core/usdbstate ./params
+      usdb_go_with_geth_linker_compat test \
+        ./internal/usdb \
+        ./internal/usdbacceptance \
+        ./internal/usdbrelease \
+        ./core/usdbstate \
+        ./params
+      usdb_go_with_geth_linker_compat test ./core/forkid
       usdb_go_with_geth_linker_compat test ./core -run 'USDB|Usdb'
       usdb_go_with_geth_linker_compat test ./consensus/ethash -run "$consensus_tests"
       usdb_go_with_geth_linker_compat test ./miner -run "$miner_tests"
@@ -138,7 +146,10 @@ run_go_checks() {
       log "running modern Go compatibility build and focused tests"
       (
         cd "$ROOT_DIR"
-        usdb_go_with_geth_linker_compat test ./internal/usdb
+        usdb_go_with_geth_linker_compat test \
+          ./internal/usdb \
+          ./internal/usdbacceptance \
+          ./internal/usdbrelease
         usdb_go_with_geth_linker_compat test ./cmd/geth \
           -run 'USDB|Usdb|Acceptance|CanonicalPositiveBigInt|ChainCommand.*USDB'
         usdb_go_with_geth_linker_compat test ./cmd/usdb-genesis-hash

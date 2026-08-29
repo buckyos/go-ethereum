@@ -669,7 +669,7 @@ cleanup() {
   if [[ "$exit_code" -ne 0 ]]; then
     eth_print_failure_diagnostics
   fi
-  regtest_cleanup
+  regtest_cleanup "$exit_code"
 }
 
 verify_profile_blocks() {

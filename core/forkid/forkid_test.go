@@ -70,8 +70,19 @@ func TestCreation(t *testing.T) {
 				{13772999, ID{Hash: checksumToBytes(0xb715077d), Next: 13773000}}, // Last London block
 				{13773000, ID{Hash: checksumToBytes(0x20c327fc), Next: 15050000}}, // First Arrow Glacier block
 				{15049999, ID{Hash: checksumToBytes(0x20c327fc), Next: 15050000}}, // Last Arrow Glacier block
-				{15050000, ID{Hash: checksumToBytes(0xf0afd0e3), Next: 0xf42400}}, // First Gray Glacier block
-				{20000000, ID{Hash: checksumToBytes(0x20e53762), Next: 0}},        // Future Gray Glacier block
+				{15050000, ID{Hash: checksumToBytes(0xf0afd0e3), Next: 15537394}}, // First Gray Glacier block
+				{15537393, ID{Hash: checksumToBytes(0xf0afd0e3), Next: 15537394}}, // Last pre-EthPoW fork block
+				{15537394, ID{Hash: checksumToBytes(0xbfe70a5e), Next: 0}},        // First EthPoW fork block
+				{20000000, ID{Hash: checksumToBytes(0xbfe70a5e), Next: 0}},        // Future EthPoW block
+			},
+		},
+		// USDB development network test cases
+		{
+			params.USDBChainConfig,
+			params.USDBGenesisHash,
+			[]testcase{
+				{0, ID{Hash: checksumToBytes(0xbf2474b1), Next: 0}},        // Genesis rules are active from block zero
+				{20000000, ID{Hash: checksumToBytes(0xbf2474b1), Next: 0}}, // No later execution fork is scheduled
 			},
 		},
 		// Ropsten test cases
@@ -177,9 +188,12 @@ func TestCreation(t *testing.T) {
 				{13772999, ID{Hash: checksumToBytes(0xb715077d), Next: 13773000}}, // Last London block
 				{13773000, ID{Hash: checksumToBytes(0x20c327fc), Next: 15050000}}, // First Arrow Glacier block
 				{15049999, ID{Hash: checksumToBytes(0x20c327fc), Next: 15050000}}, // Last Arrow Glacier block
-				{15050000, ID{Hash: checksumToBytes(0xf0afd0e3), Next: 0xf42400}}, // First Gray Glacier block
-				{18000000, ID{Hash: checksumToBytes(0x3118e3fc), Next: 0}},        // First Merge Start block
-				{20000000, ID{Hash: checksumToBytes(0x3118e3fc), Next: 0}},        // Future Merge Start block
+				{15050000, ID{Hash: checksumToBytes(0xf0afd0e3), Next: 15537394}}, // First Gray Glacier block
+				{15537393, ID{Hash: checksumToBytes(0xf0afd0e3), Next: 15537394}}, // Last pre-EthPoW fork block
+				{15537394, ID{Hash: checksumToBytes(0xbfe70a5e), Next: 18000000}}, // First EthPoW fork block
+				{17999999, ID{Hash: checksumToBytes(0xbfe70a5e), Next: 18000000}}, // Last pre-Merge Start block
+				{18000000, ID{Hash: checksumToBytes(0x34507096), Next: 0}},        // First Merge Start block
+				{20000000, ID{Hash: checksumToBytes(0x34507096), Next: 0}},        // Future Merge Start block
 			},
 		},
 	}
