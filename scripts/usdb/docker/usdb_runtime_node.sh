@@ -9,8 +9,10 @@ network_id="${USDB_NETWORK_ID:?USDB_NETWORK_ID is required}"
 indexer_url="${USDB_INDEXER_RPC_URL:?USDB_INDEXER_RPC_URL is required}"
 role="${USDB_NODE_ROLE:-full}"
 marker_path="${data_dir}/bootstrap/usdb-init.done.json"
+genesis_validator="${USDB_GENESIS_VALIDATOR:-/opt/usdb/scripts/validate_usdb_genesis.py}"
+geth_bin="${USDB_GETH_BIN:-geth}"
 
-/opt/usdb/scripts/validate_usdb_genesis.py \
+"${genesis_validator}" \
   --genesis "${genesis_file}" \
   --manifest "${manifest_file}" \
   --chain-id "${chain_id}" \
@@ -86,4 +88,74 @@ if [[ -n "${USDB_CHAIN_EXTRA_ARGS:-}" ]]; then
 fi
 
 echo "Starting USDB node role=${role}, chain_id=${chain_id}, network_id=${network_id}"
-exec geth "${args[@]}"
+if [[ "${USDB_DEEP_REORG_GUARD_ENABLED:-0}" != "1" ]]; then
+  exec "${geth_bin}" "${args[@]}"
+fi
+
+guard_script="${USDB_DEEP_REORG_GUARD_SCRIPT:-/opt/usdb/scripts/usdb_deep_reorg_guard.py}"
+guard_state_dir="${USDB_DEEP_REORG_GUARD_STATE_DIR:-${data_dir}/recovery/deep-btc-reorg}"
+guard_poll_interval="${USDB_DEEP_REORG_GUARD_POLL_INTERVAL_SECS:-5}"
+guard_request_timeout="${USDB_DEEP_REORG_GUARD_REQUEST_TIMEOUT_SECS:-5}"
+guard_max_errors="${USDB_DEEP_REORG_GUARD_MAX_CONSECUTIVE_ERRORS:-3}"
+guard_args=(
+  --state-dir "${guard_state_dir}"
+  --indexer-rpc-url "${indexer_url}"
+  --chain-rpc-url "http://127.0.0.1:${USDB_HTTP_PORT:-8545}"
+  --poll-interval-secs "${guard_poll_interval}"
+  --request-timeout-secs "${guard_request_timeout}"
+  --max-consecutive-errors "${guard_max_errors}"
+)
+
+hold_halted() {
+  echo "USDB node remains halted; preserve ${guard_state_dir} and replace this network generation before clearing chain data" >&2
+  trap 'exit 0' TERM INT
+  while true; do
+    sleep 3600 &
+    wait $! || true
+  done
+}
+
+if ! python3 "${guard_script}" check "${guard_args[@]}"; then
+  hold_halted
+fi
+
+geth_pid=""
+guard_pid=""
+# shellcheck disable=SC2317  # Invoked indirectly by the signal trap below.
+stop_children() {
+  if [[ -n "${guard_pid}" ]] && kill -0 "${guard_pid}" 2>/dev/null; then
+    kill -TERM "${guard_pid}" 2>/dev/null || true
+  fi
+  if [[ -n "${geth_pid}" ]] && kill -0 "${geth_pid}" 2>/dev/null; then
+    kill -TERM "${geth_pid}" 2>/dev/null || true
+  fi
+}
+trap 'stop_children; wait || true; exit 0' TERM INT
+
+"${geth_bin}" "${args[@]}" &
+geth_pid=$!
+python3 "${guard_script}" watch "${guard_args[@]}" &
+guard_pid=$!
+
+while kill -0 "${geth_pid}" 2>/dev/null && kill -0 "${guard_pid}" 2>/dev/null; do
+  sleep 1
+done
+
+if ! kill -0 "${guard_pid}" 2>/dev/null; then
+  set +e
+  wait "${guard_pid}"
+  guard_status=$?
+  set -e
+  echo "USDB deep-reorg guard stopped the chain process: status=${guard_status}" >&2
+  kill -TERM "${geth_pid}" 2>/dev/null || true
+  wait "${geth_pid}" 2>/dev/null || true
+  hold_halted
+fi
+
+set +e
+wait "${geth_pid}"
+geth_status=$?
+set -e
+kill -TERM "${guard_pid}" 2>/dev/null || true
+wait "${guard_pid}" 2>/dev/null || true
+exit "${geth_status}"
