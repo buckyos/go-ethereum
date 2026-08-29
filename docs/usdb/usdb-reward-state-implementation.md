@@ -96,6 +96,12 @@ v1 constant 编译进 policy implementation。未来调整 fixed price 必须激
 - reward recipient mismatch 原子失败。
 - uncle header/body/finalization 拒绝。
 - parent-root reorg 后 balance、issued、K 和 price range 恢复。
+- 独立 producer/validator 数据库通过 `BlockChain.InsertChain` 重放 reward；profile
+  reward aggregate 不一致时由 importer 的 state-root 校验拒绝且不移动 canonical head。
+- 真实签名 legacy/dynamic-fee 交易覆盖 policy/gate、base fee + tip、SSTORE refund、
+  Dividend readiness fail-closed、逐笔 rounding 和 fee 总量守恒。
+- 独立 50,405-step oracle 从空窗口跨过完整 warmup，并逐步交叉校验 K 公式、
+  sum/count/cursor、ring 覆盖和 last audit slots。
 - selector-bound real regtest reward smoke。
 - fee gate、Dividend ledger sync、restart、fresh joiner 和 historical state-root live E2E。
 - BTC same-height replacement 后 stale selector chain 拒绝。
