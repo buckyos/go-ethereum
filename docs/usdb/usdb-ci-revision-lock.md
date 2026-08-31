@@ -65,6 +65,11 @@ repository revision 必须为 40 字符小写完整 commit SHA，不能使用 `m
 3. 校验器要求两个 sibling 精确匹配；
 4. golden generator 使用该固定 `usdb` revision 校验当前 Go artifact。
 
+普通 Go push/PR 始终运行 revision-lock schema 校验和 Go canonical/compatibility lane。昂贵的
+cross-repository golden lane 只在 revision lock、frozen golden、golden runner/workflow 发生变化时
+运行；手工 dispatch 和 release workflow 的 reusable call 显式强制运行。首次 push、无法读取 diff
+base 等无法可靠判定变更范围的情况也强制运行，不能以路径过滤掩盖未知状态。
+
 Go revision 由当前 workflow checkout 或 release annotated tag target 确定，不写入其自身
 管理的 lock。校验器检查 coordinator checkout 存在，并要求两个 dependency checkout 与
 lock 完全一致。

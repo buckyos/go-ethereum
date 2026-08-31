@@ -170,6 +170,7 @@ run_go_checks() {
     "$ROOT_DIR"/scripts/usdb/lib/*.sh
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_verify_usdb_profile_e2e.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_ci_revisions.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_ci_change_scope.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_prepare_release.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_calibrate_pow_difficulty.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_configure_usdb_pow_calibration_genesis.py"

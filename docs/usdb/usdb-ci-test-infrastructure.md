@@ -4,8 +4,8 @@
 
 三个关联仓库已经实现最小正式 GitHub Actions Fast CI：
 
-- `go-ethereum/.github/workflows/usdb-fast.yml`：运行 Go canonical、
-  compatibility 两条 lane，并协调跨仓库 golden artifact 校验；
+- `go-ethereum/.github/workflows/usdb-fast.yml`：每次运行 Go canonical、
+  compatibility 两条 lane，并按变更范围协调跨仓库 golden artifact 校验；
 - `usdb/.github/workflows/usdb-fast.yml`：运行 Rust workspace、ShellCheck 和
   world simulator；
 - `SourceDAO/.github/workflows/usdb-fast.yml`：运行合约测试、USDB 定向构建和
@@ -13,6 +13,9 @@
 
 每次提交的 blocking gate 只包含确定性、无外部服务依赖的 Fast CI。跨进程 E2E、
 容量、reorg 和 soak 测试不进入当前 fast workflow，后续由独立 nightly 层承载。
+Go repo 的普通提交不会重复 checkout/编译 pinned Rust dependency；只有 revision lock、两个 frozen
+golden 或相关 runner/workflow 改变时运行 cross-repository lane。手工运行和 release tag gate 不使用
+该优化，始终执行完整 cross-repository 校验。
 
 本地统一入口为：
 

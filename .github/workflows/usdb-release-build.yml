@@ -59,6 +59,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/usdb-fast.yml
+    with:
+      run_cross_repo_golden: true
 
   publish_chain_image:
     name: Publish USDB chain image

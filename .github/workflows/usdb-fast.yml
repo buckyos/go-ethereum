@@ -2,6 +2,12 @@ name: USDB Fast
 
 on:
   workflow_call:
+    inputs:
+      run_cross_repo_golden:
+        description: Always run the pinned cross-repository golden gate
+        required: false
+        type: boolean
+        default: false
   pull_request:
   push:
     branches:
@@ -29,6 +35,7 @@ jobs:
       usdb_revision: ${{ steps.lock.outputs.usdb_revision }}
       source_dao_repository: ${{ steps.lock.outputs.source_dao_repository }}
       source_dao_revision: ${{ steps.lock.outputs.source_dao_revision }}
+      cross_repo_golden: ${{ steps.scope.outputs.required }}
     steps:
       - name: Check out go-ethereum
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,6 +55,53 @@ jobs:
           python3 scripts/usdb/test_prepare_release.py
           python3 scripts/usdb/ci_revisions.py validate
           python3 scripts/usdb/ci_revisions.py github-output >>"$GITHUB_OUTPUT"
+
+      - name: Resolve cross-repository test scope
+        id: scope
+        shell: bash
+        env:
+          FORCE_CROSS_REPO: ${{ github.event_name == 'workflow_dispatch' || inputs.run_cross_repo_golden }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$FORCE_CROSS_REPO" == "true" ]]; then
+            python3 scripts/usdb/ci_change_scope.py \
+              --force --github-output "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) base_sha="$PR_BASE_SHA" ;;
+            push) base_sha="$PUSH_BEFORE_SHA" ;;
+            *)
+              python3 scripts/usdb/ci_change_scope.py \
+                --force --github-output "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+
+          if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ || "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
+            python3 scripts/usdb/ci_change_scope.py \
+              --force --github-output "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$base_sha" || {
+              python3 scripts/usdb/ci_change_scope.py \
+                --force --github-output "$GITHUB_OUTPUT"
+              exit 0
+            }
+          fi
+          changed_paths_file="$(mktemp)"
+          if ! git diff --name-only -z "$base_sha" "$GITHUB_SHA" >"$changed_paths_file"; then
+            python3 scripts/usdb/ci_change_scope.py \
+              --force --github-output "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mapfile -d '' changed_paths <"$changed_paths_file"
+          python3 scripts/usdb/ci_change_scope.py \
+            --github-output "$GITHUB_OUTPUT" "${changed_paths[@]}"
 
   go_fast:
     name: Go canonical and compatibility
@@ -96,6 +150,7 @@ jobs:
   cross_repo_golden:
     name: Cross-repository golden artifacts
     needs: revision_lock
+    if: needs.revision_lock.outputs.cross_repo_golden == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
