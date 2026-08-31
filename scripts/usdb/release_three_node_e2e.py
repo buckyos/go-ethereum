@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = "usdb-release-manifest:v3"
+SCHEMA_VERSION = "usdb-release-manifest:v4"
 IMAGE_SPECS = {
     "usdb_services": {
         "canonical_name": "ghcr.io/buckyos/usdb-services",
@@ -171,6 +171,31 @@ def build_plan(manifest_path: Path, mirror: str | None) -> dict[str, Any]:
         isinstance(genesis_hash, str) and re.fullmatch(r"0x[0-9a-f]{64}", genesis_hash) is not None,
         "network bundle genesis block hash is invalid",
     )
+    snapshot = manifest.get("snapshot")
+    require(isinstance(snapshot, dict), "release manifest snapshot binding is required")
+    require(snapshot.get("status") == "available", "three-node E2E requires an available release snapshot")
+    snapshot_record = snapshot.get("record")
+    require(isinstance(snapshot_record, dict), "release snapshot record binding is required")
+    record_sha256 = snapshot_record.get("sha256")
+    require(
+        isinstance(record_sha256, str) and re.fullmatch(r"[0-9a-f]{64}", record_sha256) is not None,
+        "release snapshot record SHA-256 is invalid",
+    )
+    require(
+        isinstance(snapshot_record.get("url"), str)
+        and snapshot_record["url"].startswith("https://")
+        and snapshot_record["url"].endswith(f"/{record_sha256}.json"),
+        "release snapshot record URL is invalid",
+    )
+    snapshot_release_id = snapshot.get("snapshot_release_id")
+    require(
+        isinstance(snapshot_release_id, str) and bool(snapshot_release_id),
+        "release snapshot ID is invalid",
+    )
+    require(
+        isinstance(snapshot.get("height"), int) and snapshot["height"] >= 0,
+        "release snapshot height is invalid",
+    )
     return {
         "schema_version": "usdb-three-node-release-e2e-plan:v1",
         "release_id": release_id,
@@ -182,6 +207,12 @@ def build_plan(manifest_path: Path, mirror: str | None) -> dict[str, Any]:
             "chain_id": chain_id,
             "network_id": network_id,
             "genesis_block_hash": genesis_hash,
+        },
+        "snapshot": {
+            "release_id": snapshot_release_id,
+            "height": snapshot["height"],
+            "record_url": snapshot_record["url"],
+            "record_sha256": record_sha256,
         },
         "images": planned_images,
     }

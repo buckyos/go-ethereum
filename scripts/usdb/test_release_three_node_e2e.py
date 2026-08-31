@@ -31,7 +31,7 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
         go_revision = "a" * 40
         usdb_revision = "b" * 40
         return {
-            "schema_version": "usdb-release-manifest:v3",
+            "schema_version": "usdb-release-manifest:v4",
             "release_id": "usdb-testnet-v0-r1",
             "stage": "candidate",
             "repositories": {
@@ -59,6 +59,17 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
                 "network_id": 202608250,
                 "genesis_block_hash": "0x" + "1" * 64,
             },
+            "snapshot": {
+                "status": "available",
+                "record": {
+                    "url": "https://snapshots.example.test/snapshot-records/v2/"
+                    + "2" * 64
+                    + ".json",
+                    "sha256": "2" * 64,
+                },
+                "snapshot_release_id": "balance-history-bitcoin-h963800-0123456789abcdef",
+                "height": 963800,
+            },
         }
 
     def test_plan_preserves_canonical_refs_without_mirror(self) -> None:
@@ -66,6 +77,7 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
         image = plan["images"]["usdb_chain"]
         self.assertEqual(image["canonical_reference"], image["execution_reference"])
         self.assertEqual(plan["network"]["chain_id"], 202608250)
+        self.assertEqual(plan["snapshot"]["height"], 963800)
 
     def test_local_mirror_changes_only_transport_registry(self) -> None:
         plan = E2E.build_plan(self.manifest_path, "127.0.0.1:5000")
@@ -87,6 +99,13 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
         manifest["images"]["usdb_chain"]["source_revision"] = "9" * 40
         self.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "source revision mismatch"):
+            E2E.build_plan(self.manifest_path, None)
+
+    def test_snapshot_record_digest_mismatch_is_rejected(self) -> None:
+        manifest = self.manifest()
+        manifest["snapshot"]["record"]["sha256"] = "3" * 64
+        self.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "record URL is invalid"):
             E2E.build_plan(self.manifest_path, None)
 
     def test_duplicate_manifest_key_is_rejected(self) -> None:
