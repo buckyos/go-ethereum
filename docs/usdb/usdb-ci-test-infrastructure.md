@@ -12,7 +12,7 @@
   bytecode audit。
 
 每次提交的 blocking gate 只包含确定性、无外部服务依赖的 Fast CI。跨进程 E2E、
-容量、reorg 和 soak 测试不进入当前 fast workflow，后续由独立 nightly 层承载。
+容量、reorg 和 soak 测试由 Go coordinator 的 Nightly / Weekly 层承载，不阻塞普通提交。
 Go repo 的普通提交不会重复 checkout/编译 pinned Rust dependency；只有 revision lock、两个 frozen
 golden 或相关 runner/workflow 改变时运行 cross-repository lane。手工运行和 release tag gate 不使用
 该优化，始终执行完整 cross-repository 校验。
@@ -70,6 +70,42 @@ USDB_FAST_SCOPE=sourcedao scripts/usdb/run_fast_ci.sh
 
 默认要求 `../usdb` 和 `../SourceDAO` 为 sibling checkout。必要时可通过
 `USDB_REPO_DIR` 和 `SOURCE_DAO_REPO_DIR` 覆盖路径。
+
+## Nightly 与 Weekly
+
+中央入口位于 Go 仓库：
+
+| Workflow | 默认触发 | 内容 |
+| --- | --- | --- |
+| `usdb-nightly.yml` | 每日 `08:37 UTC`，也可手工运行 | profile、activation/bootstrap、balance-history、indexer protocol/reorg/validator |
+| `usdb-weekly.yml` | 每周日 `09:23 UTC`，也可手工运行 | 完整 Nightly，加 world soak、economic capacity、balance-history extended、public release E2E |
+| `usdb-integration.yml` | reusable only | 校验 lock、准备固定 regtest 工具、按 shard 执行和归档 |
+
+Nightly / Weekly 始终以触发 workflow 的 Go SHA 为 coordinator，并按
+`scripts/usdb/ci-revisions.json` checkout 精确的 USDB 与 SourceDAO revision。Bitcoin Core 28.1 archive
+checksum 和 ord 0.23.3 commit 固定在 `prepare_regtest_tools.sh`，每次 run 只构建一次工具 artifact。
+
+各 shard 由统一入口运行：
+
+```bash
+scripts/usdb/run_long_ci.sh nightly --list
+scripts/usdb/run_long_ci.sh weekly --list
+scripts/usdb/run_long_ci.sh nightly go-profile
+```
+
+每个 shard 使用独立工作目录；stdout/stderr、JSON report 和有限大小的诊断文件分别保留 14 天和 30 天。
+Weekly 是 Nightly 的超集，因此一次成功 Weekly run 同时证明基础 Nightly 分片和 Weekly 扩展分片通过。
+
+需要给 release tag 生成更高资格证据时，必须在该 tag 上手工运行，不能借用默认分支其他 SHA 的定时结果：
+
+```bash
+gh workflow run usdb-nightly.yml \
+  --repo buckyos/go-ethereum \
+  --ref usdb-testnet-v0-r1
+```
+
+Fast、Nightly、Weekly 只表示证据等级，不改变 GitHub Release 的完整性。Fast-qualified testnet release
+仍包含 manifest、node kit 和 release-bound installer；资格由 manifest 冻结，已发布 release 不原地升级。
 
 ### Go 检查范围
 
@@ -155,9 +191,8 @@ repo-local Fast CI；具体运行结果以各仓库 Actions 页面为准。
 
 ## 后续 CI 工作
 
-1. 增加 central nightly workflow，按锁定的三仓基线运行 deterministic regtest、
-   activation/reorg、bootstrap/public-release、capacity 和 soak shards。
-2. 将 build/service logs 和 JSON reports 作为 nightly artifacts 保留。
-3. 升级或移除继承的 `memsize` runtime 依赖，删除现代 Go compatibility linker
+1. 在 GitHub-hosted runner 上观察 Nightly / Weekly 的真实耗时、磁盘峰值和 flake，按证据调整 shard timeout
+   与并发；容量超出 hosted runner 时再评估隔离的 self-hosted runner。
+2. 升级或移除继承的 `memsize` runtime 依赖，删除现代 Go compatibility linker
    workaround。
-4. 若迁移到 self-hosted runner，重新确认 Actions 对 runner 的最低版本要求。
+3. 若迁移到 self-hosted runner，重新定义 runner hardening、secret/attestation 边界和最低版本要求。

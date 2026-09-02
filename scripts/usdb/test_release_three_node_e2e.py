@@ -31,9 +31,14 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
         go_revision = "a" * 40
         usdb_revision = "b" * 40
         return {
-            "schema_version": "usdb-release-manifest:v4",
+            "schema_version": "usdb-release-manifest:v6",
             "release_id": "usdb-testnet-v0-r1",
             "stage": "candidate",
+            "qualification": {
+                "schema_version": "usdb-ci-qualification:v1",
+                "level": "fast",
+                "evidence": [{"run_id": 1}],
+            },
             "repositories": {
                 "go_ethereum": {"revision": go_revision},
                 "usdb": {"revision": usdb_revision},
@@ -78,6 +83,7 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
         self.assertEqual(image["canonical_reference"], image["execution_reference"])
         self.assertEqual(plan["network"]["chain_id"], 202608250)
         self.assertEqual(plan["snapshot"]["height"], 963800)
+        self.assertEqual(plan["qualification_level"], "fast")
 
     def test_local_mirror_changes_only_transport_registry(self) -> None:
         plan = E2E.build_plan(self.manifest_path, "127.0.0.1:5000")
@@ -113,6 +119,13 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
             '{"schema_version":"a","schema_version":"b"}', encoding="utf-8"
         )
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+            E2E.build_plan(self.manifest_path, None)
+
+    def test_missing_qualification_is_rejected(self) -> None:
+        manifest = self.manifest()
+        del manifest["qualification"]
+        self.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "qualification is required"):
             E2E.build_plan(self.manifest_path, None)
 
     def test_node_env_must_use_manifest_canonical_refs(self) -> None:

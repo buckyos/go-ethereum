@@ -1,0 +1,21 @@
+name: USDB Nightly
+run-name: USDB nightly ${{ github.sha }}
+
+on:
+  schedule:
+    - cron: '37 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: usdb-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Deterministic nightly matrix
+    uses: ./.github/workflows/usdb-integration.yml
+    with:
+      tier: nightly

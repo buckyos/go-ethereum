@@ -70,6 +70,10 @@ cross-repository golden lane 只在 revision lock、frozen golden、golden runne
 运行；手工 dispatch 和 release workflow 的 reusable call 显式强制运行。首次 push、无法读取 diff
 base 等无法可靠判定变更范围的情况也强制运行，不能以路径过滤掩盖未知状态。
 
+中央 Nightly / Weekly 使用当前 Go workflow SHA 和 lock 中两个 dependency SHA 组成唯一测试基线。
+定时运行验证默认分支当时的基线；release candidate 只接受 `head_sha` 等于所选 Go tag target 的成功
+run。因而 lock 前进后，旧长测结果不会被新候选继承；需要在 release tag 上重新手工 dispatch。
+
 Go revision 由当前 workflow checkout 或 release annotated tag target 确定，不写入其自身
 管理的 lock。校验器检查 coordinator checkout 存在，并要求两个 dependency checkout 与
 lock 完全一致。
@@ -115,7 +119,8 @@ v2 不保存 coordinator revision，因此不再需要“已验证前一提交�
 3. 在 `go-ethereum` 完成对应实现并运行 repo-local gate；
 4. 使用当前 Go commit、locked USDB 和 locked SourceDAO 运行 revision verify 与跨仓库
    golden/integration checks；
-5. release 时由 Go annotated tag 固定实际 coordinator revision，并写入 release manifest。
+5. 需要 Nightly / Weekly 资格时，在最终 Go revision 或同名 annotated tag 上运行对应中央 workflow；
+6. release 时由 Go annotated tag 固定实际 coordinator revision，并把资格和 run evidence 写入 release manifest。
 
 发布协调工具可以从当前 `go-ethereum` checkout 自动推导 sibling workspace：
 

@@ -1,0 +1,267 @@
+name: USDB Long Integration
+
+on:
+  workflow_call:
+    inputs:
+      tier:
+        description: Long-test tier to execute
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  revision_lock:
+    name: Resolve revision lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      go_release: ${{ steps.lock.outputs.go_release_version }}
+      node: ${{ steps.lock.outputs.node_version }}
+      python: ${{ steps.lock.outputs.python_version }}
+      rust: ${{ steps.lock.outputs.rust_version }}
+      usdb_repository: ${{ steps.lock.outputs.usdb_repository }}
+      usdb_revision: ${{ steps.lock.outputs.usdb_revision }}
+      source_dao_repository: ${{ steps.lock.outputs.source_dao_repository }}
+      source_dao_revision: ${{ steps.lock.outputs.source_dao_revision }}
+    steps:
+      - name: Check out go-ethereum
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate tier and revision lock
+        id: lock
+        shell: bash
+        env:
+          TIER: ${{ inputs.tier }}
+        run: |
+          set -euo pipefail
+          [[ "$TIER" == "nightly" || "$TIER" == "weekly" ]] || {
+            echo "unsupported long-test tier: $TIER" >&2
+            exit 2
+          }
+          python3 scripts/usdb/ci_revisions.py validate
+          python3 scripts/usdb/ci_revisions.py github-output >>"$GITHUB_OUTPUT"
+
+  regtest_tools:
+    name: Prepare pinned regtest tools
+    needs: revision_lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out go-ethereum
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust for ord
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.89.0 --profile minimal
+          rustup default 1.89.0
+
+      - name: Prepare Bitcoin Core and ord
+        run: scripts/usdb/prepare_regtest_tools.sh --output "${{ runner.temp }}/regtest-tools"
+
+      - name: Upload pinned regtest tools
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: usdb-regtest-tools-${{ github.sha }}
+          path: ${{ runner.temp }}/regtest-tools/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 6
+
+  nightly:
+    name: Nightly ${{ matrix.shard }}
+    needs:
+      - revision_lock
+      - regtest_tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - go-profile
+          - go-activation
+          - balance-history
+          - indexer-protocol
+          - indexer-reorg
+          - indexer-validator
+    steps:
+      - name: Check out go-ethereum
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: go-ethereum
+
+      - name: Check out pinned usdb
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.revision_lock.outputs.usdb_repository }}
+          ref: ${{ needs.revision_lock.outputs.usdb_revision }}
+          path: usdb
+
+      - name: Check out pinned SourceDAO
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.revision_lock.outputs.source_dao_repository }}
+          ref: ${{ needs.revision_lock.outputs.source_dao_revision }}
+          path: SourceDAO
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ needs.revision_lock.outputs.python }}
+          check-latest: false
+
+      - name: Set up canonical Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.revision_lock.outputs.go_release }}
+          check-latest: false
+          cache: false
+
+      - name: Set up Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${{ needs.revision_lock.outputs.rust }}" --profile minimal
+          rustup default "${{ needs.revision_lock.outputs.rust }}"
+
+      - name: Set up Node for bootstrap shard
+        if: matrix.shard == 'go-activation'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ needs.revision_lock.outputs.node }}
+          check-latest: false
+          cache: npm
+          cache-dependency-path: SourceDAO/package-lock.json
+
+      - name: Install SourceDAO dependencies
+        if: matrix.shard == 'go-activation'
+        working-directory: SourceDAO
+        run: npm ci
+
+      - name: Download pinned regtest tools
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: usdb-regtest-tools-${{ github.sha }}
+          path: ${{ runner.temp }}/regtest-tools
+
+      - name: Run nightly shard
+        env:
+          BITCOIN_BIN_DIR: ${{ runner.temp }}/regtest-tools/bitcoin/bin
+          ORD_BIN: ${{ runner.temp }}/regtest-tools/ord/ord
+          USDB_LONG_CI_OUTPUT_DIR: ${{ runner.temp }}/long-ci-output
+          USDB_LONG_CI_WORK_DIR: ${{ runner.temp }}/long-ci-work
+          USDB_WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
+          go-ethereum/scripts/usdb/run_long_ci.sh nightly "${{ matrix.shard }}"
+
+      - name: Upload nightly logs and reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: usdb-nightly-${{ matrix.shard }}-${{ github.sha }}
+          path: ${{ runner.temp }}/long-ci-output/
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 6
+
+  weekly:
+    name: Weekly ${{ matrix.shard }}
+    if: inputs.tier == 'weekly'
+    needs:
+      - revision_lock
+      - regtest_tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - world-soak
+          - economic-capacity
+          - balance-history-extended
+          - release-e2e
+    steps:
+      - name: Check out go-ethereum
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: go-ethereum
+
+      - name: Check out pinned usdb
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.revision_lock.outputs.usdb_repository }}
+          ref: ${{ needs.revision_lock.outputs.usdb_revision }}
+          path: usdb
+
+      - name: Check out pinned SourceDAO
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.revision_lock.outputs.source_dao_repository }}
+          ref: ${{ needs.revision_lock.outputs.source_dao_revision }}
+          path: SourceDAO
+
+      - name: Set up canonical toolchains
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.revision_lock.outputs.go_release }}
+          check-latest: false
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ needs.revision_lock.outputs.python }}
+          check-latest: false
+
+      - name: Set up Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${{ needs.revision_lock.outputs.rust }}" --profile minimal
+          rustup default "${{ needs.revision_lock.outputs.rust }}"
+
+      - name: Set up Node for release shard
+        if: matrix.shard == 'release-e2e'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ needs.revision_lock.outputs.node }}
+          check-latest: false
+          cache: npm
+          cache-dependency-path: SourceDAO/package-lock.json
+
+      - name: Install SourceDAO dependencies
+        if: matrix.shard == 'release-e2e'
+        working-directory: SourceDAO
+        run: npm ci
+
+      - name: Download pinned regtest tools
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: usdb-regtest-tools-${{ github.sha }}
+          path: ${{ runner.temp }}/regtest-tools
+
+      - name: Run weekly shard
+        env:
+          BITCOIN_BIN_DIR: ${{ runner.temp }}/regtest-tools/bitcoin/bin
+          ORD_BIN: ${{ runner.temp }}/regtest-tools/ord/ord
+          USDB_LONG_CI_OUTPUT_DIR: ${{ runner.temp }}/long-ci-output
+          USDB_LONG_CI_WORK_DIR: ${{ runner.temp }}/long-ci-work
+          USDB_WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
+          go-ethereum/scripts/usdb/run_long_ci.sh weekly "${{ matrix.shard }}"
+
+      - name: Upload weekly logs and reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: usdb-weekly-${{ matrix.shard }}-${{ github.sha }}
+          path: ${{ runner.temp }}/long-ci-output/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6

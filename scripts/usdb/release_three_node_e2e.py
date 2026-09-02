@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = "usdb-release-manifest:v4"
+SCHEMA_VERSION = "usdb-release-manifest:v6"
+QUALIFICATION_SCHEMA_VERSION = "usdb-ci-qualification:v1"
+QUALIFICATION_LEVELS = {"fast", "nightly", "weekly"}
 IMAGE_SPECS = {
     "usdb_services": {
         "canonical_name": "ghcr.io/buckyos/usdb-services",
@@ -130,6 +132,22 @@ def build_plan(manifest_path: Path, mirror: str | None) -> dict[str, Any]:
     require(manifest.get("stage") == "candidate", "three-node E2E requires a candidate manifest")
     release_id = manifest.get("release_id")
     require(isinstance(release_id, str) and release_id, "release manifest ID is required")
+    qualification = manifest.get("qualification")
+    require(isinstance(qualification, dict), "release manifest qualification is required")
+    require(
+        qualification.get("schema_version") == QUALIFICATION_SCHEMA_VERSION,
+        "unsupported release qualification schema",
+    )
+    qualification_level = qualification.get("level")
+    require(
+        qualification_level in QUALIFICATION_LEVELS,
+        "release qualification level is invalid",
+    )
+    require(
+        isinstance(qualification.get("evidence"), list)
+        and bool(qualification["evidence"]),
+        "release qualification evidence is required",
+    )
 
     repositories = manifest.get("repositories")
     require(isinstance(repositories, dict), "release manifest repositories are required")
@@ -201,6 +219,7 @@ def build_plan(manifest_path: Path, mirror: str | None) -> dict[str, Any]:
         "release_id": release_id,
         "manifest_path": str(manifest_path.resolve()),
         "manifest_sha256": sha256(manifest_path),
+        "qualification_level": qualification_level,
         "image_mirror": mirror or "",
         "network": {
             "bundle_id": network.get("bundle_id"),

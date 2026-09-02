@@ -1,0 +1,21 @@
+name: USDB Weekly
+run-name: USDB weekly ${{ github.sha }}
+
+on:
+  schedule:
+    - cron: '23 9 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: usdb-weekly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: Full weekly matrix
+    uses: ./.github/workflows/usdb-integration.yml
+    with:
+      tier: weekly
