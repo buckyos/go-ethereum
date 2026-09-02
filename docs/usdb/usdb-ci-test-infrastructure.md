@@ -76,10 +76,12 @@ USDB_FAST_SCOPE=sourcedao scripts/usdb/run_fast_ci.sh
 - 共享 Go 工具链策略单元测试；
 - 维护范围内的 gofmt 检查；
 - USDB package vet 和聚焦测试；
+- `cmd/utils` CLI 参数绑定与 `eth/ethconfig` 共识引擎配置测试；
 - activation、economic conformance build-tag 测试；
 - Go 1.18.5 canonical geth 构建；
 - 可选的现代 Go compatibility 测试和 geth 构建；
-- ShellCheck 及 Python verifier/configuration 测试。
+- ShellCheck 及 Python verifier/configuration、bootstrap fixture、deep-reorg
+  guard/runtime 测试。
 
 gofmt gate 排除 `crypto/secp256k1/libsecp256k1/**`。其中被跟踪的
 `dummy.go` 是上游 vendoring workaround，旧 gofmt 会对其产生无意义机械改写。
@@ -89,8 +91,10 @@ gofmt gate 排除 `crypto/secp256k1/libsecp256k1/**`。其中被跟踪的
 - workspace `cargo fmt`；
 - workspace Clippy，并以 `-D warnings` 拒绝 warning；
 - workspace tests；
-- 全部 indexer shell scripts 的 ShellCheck；
+- 全部 indexer 和 balance-history shell scripts 的 ShellCheck；
 - world simulator Python tests；
+- balance-history oracle/Core UTXO audit、snapshot distribution/release wrapper
+  的纯 Python 测试；
 - BTC activation 和 cross-chain release manifest 的 Rust-to-Go golden check。
 
 依赖外部 bitcoind、ord 或 electrs 的测试必须明确标为 ignored/manual live test，
@@ -146,8 +150,8 @@ HEAD”的文件，也不是 release manifest。
 Node 24.12.0/npm 11.6.2 重新运行 repo-local gate，其中 SourceDAO 包含 clean
 `npm ci`。Go 双工具链和跨仓库 golden lane 同样通过。
 
-workflow 和 revision lock 已提交到三个本地分支。截至 2026-08-22，这批提交尚未
-push，因此还没有实际 GitHub-hosted runner 执行记录。
+workflow 和 revision lock 已提交并推送到三个仓库，当前由 GitHub Actions 执行
+repo-local Fast CI；具体运行结果以各仓库 Actions 页面为准。
 
 ## 后续 CI 工作
 

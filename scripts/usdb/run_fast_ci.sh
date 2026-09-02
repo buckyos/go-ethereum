@@ -97,6 +97,8 @@ run_go_checks() {
       ./params
       ./consensus/ethash
       ./miner
+      ./eth/ethconfig
+      ./cmd/utils
       ./cmd/geth
       ./cmd/usdb-genesis-hash
     )
@@ -117,6 +119,7 @@ run_go_checks() {
       usdb_go_with_geth_linker_compat test ./core -run 'USDB|Usdb'
       usdb_go_with_geth_linker_compat test ./consensus/ethash -run "$consensus_tests"
       usdb_go_with_geth_linker_compat test ./miner -run "$miner_tests"
+      usdb_go_with_geth_linker_compat test ./eth/ethconfig ./cmd/utils
       usdb_go_with_geth_linker_compat test ./cmd/geth -run "$geth_tests"
       usdb_go_with_geth_linker_compat test ./cmd/usdb-genesis-hash
       usdb_go_with_geth_linker_compat test \
@@ -150,6 +153,7 @@ run_go_checks() {
           ./internal/usdb \
           ./internal/usdbacceptance \
           ./internal/usdbrelease
+        usdb_go_with_geth_linker_compat test ./eth/ethconfig ./cmd/utils
         usdb_go_with_geth_linker_compat test ./cmd/geth \
           -run 'USDB|Usdb|Acceptance|CanonicalPositiveBigInt|ChainCommand.*USDB'
         usdb_go_with_geth_linker_compat test ./cmd/usdb-genesis-hash
@@ -177,6 +181,9 @@ run_go_checks() {
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_configure_usdb_anchor_max_age_genesis.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_p2p_defaults.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_release_three_node_e2e.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_mock_bootstrap_indexer.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_usdb_deep_reorg_guard.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_usdb_runtime_deep_reorg.py"
 }
 
 run_rust_checks() {
