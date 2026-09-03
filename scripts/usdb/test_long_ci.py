@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
+import tempfile
 import unittest
 
 
@@ -14,13 +16,25 @@ WORKFLOWS = REPOSITORY / ".github" / "workflows"
 
 
 class LongCiRunnerTests(unittest.TestCase):
-    def run_script(self, script: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
+    def run_script(
+        self,
+        script: pathlib.Path,
+        *args: str,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["bash", str(script), *args],
             check=False,
             capture_output=True,
             text=True,
+            env=env,
         )
+
+    def missing_checkout_environment(self, root: str) -> dict[str, str]:
+        env = os.environ.copy()
+        env["USDB_REPO_DIR"] = str(pathlib.Path(root) / "missing-usdb")
+        env["SOURCE_DAO_REPO"] = str(pathlib.Path(root) / "missing-sourcedao")
+        return env
 
     def test_lists_frozen_nightly_shards(self) -> None:
         result = self.run_script(RUNNER, "nightly", "--list")
@@ -53,9 +67,34 @@ class LongCiRunnerTests(unittest.TestCase):
     def test_rejects_unknown_tier_and_shard(self) -> None:
         result = self.run_script(RUNNER, "monthly", "--list")
         self.assertEqual(result.returncode, 2)
-        result = self.run_script(RUNNER, "nightly", "unknown")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("Unknown nightly shard", result.stderr)
+        with tempfile.TemporaryDirectory() as root:
+            result = self.run_script(
+                RUNNER,
+                "nightly",
+                "unknown",
+                env=self.missing_checkout_environment(root),
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Unknown nightly shard", result.stderr)
+            result = self.run_script(
+                RUNNER,
+                "weekly",
+                "unknown",
+                env=self.missing_checkout_environment(root),
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Unknown weekly shard", result.stderr)
+
+    def test_valid_shard_checks_external_repositories(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            result = self.run_script(
+                RUNNER,
+                "nightly",
+                "go-profile",
+                env=self.missing_checkout_environment(root),
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Missing usdb checkout", result.stderr)
 
     def test_tool_preparer_requires_output_without_network_access(self) -> None:
         result = self.run_script(TOOLS)

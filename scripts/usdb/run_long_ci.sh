@@ -41,6 +41,35 @@ list_shards() {
   esac
 }
 
+has_shard() {
+  local expected="$1"
+  shift
+  local candidate
+  for candidate in "$@"; do
+    [[ "$candidate" == "$expected" ]] && return 0
+  done
+  return 1
+}
+
+validate_shard() {
+  local tier="$1"
+  local shard="$2"
+  case "$tier" in
+    nightly)
+      has_shard "$shard" "${NIGHTLY_SHARDS[@]}" || {
+        echo "Unknown nightly shard: $shard" >&2
+        return 2
+      }
+      ;;
+    weekly)
+      has_shard "$shard" "${WEEKLY_SHARDS[@]}" || {
+        echo "Unknown weekly shard: $shard" >&2
+        return 2
+      }
+      ;;
+  esac
+}
+
 require_directory() {
   local path="$1"
   local label="$2"
@@ -233,6 +262,7 @@ main() {
     usage >&2
     exit 2
   }
+  validate_shard "$tier" "$shard"
 
   require_directory "$USDB_REPO_DIR" usdb
   require_directory "$SOURCE_DAO_REPO" SourceDAO
