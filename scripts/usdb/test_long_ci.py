@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -120,6 +121,42 @@ class LongCiRunnerTests(unittest.TestCase):
         self.assertIn("needs.revision_lock.outputs.source_dao_revision", integration)
         self.assertIn("scripts/usdb/prepare_regtest_tools.sh", integration)
         self.assertIn("go-ethereum/scripts/usdb/run_long_ci.sh", integration)
+        self.assertIn("USDB_LONG_CI_ARTIFACT_NAME", integration)
+
+    def test_runner_prebuilds_services_before_readiness_bound_cases(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("prepare_usdb_service_binaries \"$tier\" \"$shard\"", runner)
+        self.assertIn("cargo build --locked", runner)
+        self.assertIn("-p balance-history", runner)
+        self.assertIn("-p usdb-indexer", runner)
+
+    def test_run_case_reports_the_command_failure_before_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            summary = pathlib.Path(root) / "summary.md"
+            command = "\n".join(
+                [
+                    f"source {shlex.quote(str(RUNNER))}",
+                    f"OUTPUT_ROOT={shlex.quote(root)}",
+                    f"GITHUB_STEP_SUMMARY={shlex.quote(str(summary))}",
+                    "GITHUB_ACTIONS=true",
+                    "USDB_LONG_CI_ARTIFACT_NAME=test-artifact",
+                    "run_case failing-case bash -c 'echo root-cause-line; exit 7'",
+                ]
+            )
+            result = subprocess.run(
+                ["bash", "-c", command],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 7, result.stderr)
+            combined = result.stdout + result.stderr
+            self.assertIn("root-cause-line", combined)
+            self.assertIn("FAIL failing-case: command_exit=7", combined)
+            self.assertIn("::error title=USDB long CI case failed::", combined)
+            self.assertIn("`failing-case`", summary.read_text(encoding="utf-8"))
+            self.assertIn("`test-artifact`", summary.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

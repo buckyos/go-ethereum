@@ -94,9 +94,63 @@ run_case() {
   local name="$1"
   shift
   local log_file="$OUTPUT_ROOT/${name}.log"
+  local command_status tee_status exit_code
+  local -a pipeline_status
+
   echo "[usdb-long-ci] START ${name}"
-  "$@" 2>&1 | tee "$log_file"
-  echo "[usdb-long-ci] PASS ${name}"
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    echo "::group::USDB long CI: ${name}"
+  fi
+  if "$@" 2>&1 | tee "$log_file"; then
+    if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+      echo "::endgroup::"
+    fi
+    echo "[usdb-long-ci] PASS ${name}"
+    return 0
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+    command_status="${pipeline_status[0]}"
+    tee_status="${pipeline_status[1]}"
+  fi
+
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    echo "::endgroup::"
+  fi
+  exit_code="$command_status"
+  if (( tee_status != 0 )); then
+    exit_code="$tee_status"
+  fi
+  echo "[usdb-long-ci] FAIL ${name}: command_exit=${command_status}, tee_exit=${tee_status}, log=${log_file}" >&2
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    echo "::error title=USDB long CI case failed::case=${name}, command_exit=${command_status}, log=${log_file}, diagnostics=${OUTPUT_ROOT}/diagnostics"
+  fi
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+      echo "### USDB long CI failure"
+      echo
+      echo "- Case: \`${name}\`"
+      echo "- Command exit: \`${command_status}\`"
+      echo "- Primary log in uploaded artifact: \`${name}.log\`"
+      echo "- Service diagnostics in uploaded artifact: \`diagnostics/\`"
+      echo "- Artifact: \`${USDB_LONG_CI_ARTIFACT_NAME:-not configured}\`"
+    } >>"$GITHUB_STEP_SUMMARY"
+  fi
+  return "$exit_code"
+}
+
+prepare_usdb_service_binaries() {
+  local tier="$1"
+  local shard="$2"
+
+  case "${tier}:${shard}" in
+    nightly:go-profile | nightly:go-activation | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:release-e2e)
+      run_case rust-service-build \
+        cargo build --locked \
+          --manifest-path "$USDB_REPO_DIR/src/btc/Cargo.toml" \
+          -p balance-history \
+          -p usdb-indexer
+      ;;
+  esac
 }
 
 collect_diagnostics() {
@@ -268,6 +322,7 @@ main() {
   require_directory "$SOURCE_DAO_REPO" SourceDAO
   mkdir -p "$OUTPUT_ROOT" "$WORK_ROOT"
   trap collect_diagnostics EXIT
+  prepare_usdb_service_binaries "$tier" "$shard"
 
   case "$tier" in
     nightly) run_nightly "$shard" ;;
@@ -275,4 +330,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

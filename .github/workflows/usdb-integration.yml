@@ -154,6 +154,7 @@ jobs:
           ORD_BIN: ${{ runner.temp }}/regtest-tools/ord/ord
           USDB_LONG_CI_OUTPUT_DIR: ${{ runner.temp }}/long-ci-output
           USDB_LONG_CI_WORK_DIR: ${{ runner.temp }}/long-ci-work
+          USDB_LONG_CI_ARTIFACT_NAME: usdb-nightly-${{ matrix.shard }}-${{ github.sha }}
           USDB_WORKSPACE_ROOT: ${{ github.workspace }}
         run: |
           chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
@@ -251,6 +252,7 @@ jobs:
           ORD_BIN: ${{ runner.temp }}/regtest-tools/ord/ord
           USDB_LONG_CI_OUTPUT_DIR: ${{ runner.temp }}/long-ci-output
           USDB_LONG_CI_WORK_DIR: ${{ runner.temp }}/long-ci-work
+          USDB_LONG_CI_ARTIFACT_NAME: usdb-weekly-${{ matrix.shard }}-${{ github.sha }}
           USDB_WORKSPACE_ROOT: ${{ github.workspace }}
         run: |
           chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"

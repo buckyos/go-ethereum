@@ -96,6 +96,20 @@ scripts/usdb/run_long_ci.sh nightly go-profile
 每个 shard 使用独立工作目录；stdout/stderr、JSON report 和有限大小的诊断文件分别保留 14 天和 30 天。
 Weekly 是 Nightly 的超集，因此一次成功 Weekly run 同时证明基础 Nightly 分片和 Weekly 扩展分片通过。
 
+需要启动 Rust RPC 服务的 shard 会先完成 `balance-history` 与 `usdb-indexer`
+构建，再开始服务 readiness 计时。失败时按以下顺序定位：
+
+1. 在失败 job 的 `Run nightly shard` 或 `Run weekly shard` step 中搜索
+   `[usdb-long-ci] FAIL`；该行给出失败 case、命令退出码和主日志路径。
+2. 查看 job 的 Step Summary；其中记录本次上传的 artifact 名称，以及主日志和
+   `diagnostics/` 目录位置。
+3. 从 run summary 下载对应的 `usdb-nightly-*` 或 `usdb-weekly-*` artifact。
+   根目录的 `<case>.log` 是原始命令输出，`diagnostics/` 保存服务日志和测试报告。
+
+测试脚本退出后打印的 Bitcoin Core、ord 或 RPC 服务 shutdown tail 属于失败清理，
+不应当被当作根因。应优先查看 `FAIL` 标记之前的第一条失败信息，以及 artifact
+中的对应服务日志。
+
 需要给 release tag 生成更高资格证据时，必须在该 tag 上手工运行，不能借用默认分支其他 SHA 的定时结果：
 
 ```bash
