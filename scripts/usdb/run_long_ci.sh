@@ -161,6 +161,22 @@ prepare_usdb_service_binaries() {
   esac
 }
 
+prepare_source_dao_artifacts() {
+  local tier="$1"
+  local shard="$2"
+
+  case "${tier}:${shard}" in
+    nightly:go-activation)
+      command -v npm >/dev/null 2>&1 || {
+        echo "npm is required to build SourceDAO USDB artifacts" >&2
+        exit 1
+      }
+      run_case source-dao-usdb-build \
+        npm --prefix "$SOURCE_DAO_REPO" run build:usdb
+      ;;
+  esac
+}
+
 collect_diagnostics() {
   local source relative destination
   mkdir -p "$OUTPUT_ROOT/diagnostics"
@@ -331,6 +347,7 @@ main() {
   mkdir -p "$OUTPUT_ROOT" "$WORK_ROOT"
   trap collect_diagnostics EXIT
   prepare_usdb_service_binaries "$tier" "$shard"
+  prepare_source_dao_artifacts "$tier" "$shard"
 
   case "$tier" in
     nightly) run_nightly "$shard" ;;

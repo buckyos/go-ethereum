@@ -132,6 +132,27 @@ class LongCiRunnerTests(unittest.TestCase):
         self.assertIn("run_case rust-balance-history-build", runner)
         self.assertIn("-p balance-history \\\n          --bin balance-history", runner)
 
+    def test_runner_builds_sourcedao_artifacts_for_activation_shard(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("prepare_source_dao_artifacts \"$tier\" \"$shard\"", runner)
+        self.assertIn("nightly:go-activation)", runner)
+        self.assertIn("run_case source-dao-usdb-build", runner)
+        self.assertIn('npm --prefix "$SOURCE_DAO_REPO" run build:usdb', runner)
+
+    def test_historical_profile_e2e_uses_stable_btc_context(self) -> None:
+        script = (REPOSITORY / "scripts/usdb/run_usdb_profile_historical_stability_e2e.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("BTC_STABLE_LAG_BLOCKS=${BTC_STABLE_LAG_BLOCKS:-10}", script)
+        self.assertIn(
+            "current_context_height=$((current_tip_height - BTC_STABLE_LAG_BLOCKS))",
+            script,
+        )
+        self.assertIn(
+            'regtest_mine_blocks "$((BTC_STABLE_LAG_BLOCKS + 1))"', script
+        )
+        self.assertNotIn('pass_energy_now "$pass_id"', script)
+
     def test_run_case_reports_the_command_failure_before_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             summary = pathlib.Path(root) / "summary.md"

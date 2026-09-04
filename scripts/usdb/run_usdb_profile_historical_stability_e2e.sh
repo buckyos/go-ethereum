@@ -30,6 +30,7 @@ RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-90}
 BLOCK_WAIT_SECONDS=${BLOCK_WAIT_SECONDS:-180}
 ENERGY_TOPUP_AMOUNT_BTC=${ENERGY_TOPUP_AMOUNT_BTC:-1.0}
 ENERGY_GROWTH_BLOCKS=${ENERGY_GROWTH_BLOCKS:-2}
+BTC_STABLE_LAG_BLOCKS=${BTC_STABLE_LAG_BLOCKS:-10}
 BTC_STATE_TRANSITION=${BTC_STATE_TRANSITION:-advance}
 REJECTION_WAIT_SECONDS=${REJECTION_WAIT_SECONDS:-20}
 
@@ -192,12 +193,11 @@ stop_mining() {
   rpc_call "$url" "miner_stop" "[]" >/dev/null || true
 }
 
-pass_energy_now() {
+pass_energy_at_height() {
   local pass_id="$1"
-  local block_height
+  local block_height="$2"
   local resp
 
-  block_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
   resp="$(regtest_get_pass_economic_profile_response "$pass_id" "$block_height")"
   if [[ "$(regtest_json_expr "$resp" "data.get('error') is None")" != "True" ]]; then
     regtest_log "Failed to fetch current pass economic profile: pass_id=${pass_id}, response=${resp}"
@@ -320,6 +320,10 @@ main() {
     echo "BTC_STATE_TRANSITION must be advance or same-height-replacement" >&2
     exit 1
   fi
+  if [[ ! "$BTC_STABLE_LAG_BLOCKS" =~ ^[0-9]+$ ]]; then
+    echo "BTC_STABLE_LAG_BLOCKS must be a non-negative integer" >&2
+    exit 1
+  fi
   regtest_assert_ord_server_port_available
   if [[ ! -x "$ORD_BIN" ]]; then
     echo "Missing required ORD_BIN executable: $ORD_BIN" >&2
@@ -336,7 +340,8 @@ main() {
   regtest_start_bitcoind
   regtest_ensure_wallet
 
-  local miner_btc_address ord_receive_address mint_content_file pass_id current_tip_height
+  local miner_btc_address ord_receive_address mint_content_file pass_id
+  local current_tip_height current_context_height
   local initial_energy boosted_energy node1_tip_height node2_tip_height
   local node1_tip_hash node2_tip_hash node1_balance_hex blocks_file node1_enode
   local node1_rpc node2_rpc
@@ -362,21 +367,26 @@ EOF
 
   pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$mint_content_file" "$ord_receive_address")"
   regtest_mine_blocks "$INSCRIBE_CONFIRM_BLOCKS" "$miner_btc_address"
+  if (( BTC_STABLE_LAG_BLOCKS > 0 )); then
+    regtest_log "Mining ${BTC_STABLE_LAG_BLOCKS} blocks so the mint reaches the stable frontier"
+    regtest_mine_blocks "$BTC_STABLE_LAG_BLOCKS" "$miner_btc_address"
+  fi
   regtest_wait_until_ord_server_synced_to_bitcoind
   current_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
+  current_context_height=$((current_tip_height - BTC_STABLE_LAG_BLOCKS))
 
   regtest_create_balance_history_config
   regtest_create_usdb_indexer_config
   regtest_start_balance_history
   regtest_wait_balance_history_rpc_ready
-  regtest_wait_until_balance_history_synced_eq "$current_tip_height"
+  regtest_wait_until_balance_history_synced_eq "$current_context_height"
   regtest_wait_balance_history_consensus_ready
   regtest_start_usdb_indexer
   regtest_wait_usdb_rpc_ready
-  regtest_wait_until_usdb_synced_eq "$current_tip_height"
+  regtest_wait_until_usdb_synced_eq "$current_context_height"
   regtest_wait_usdb_consensus_ready
 
-  initial_energy="$(pass_energy_now "$pass_id")"
+  initial_energy="$(pass_energy_at_height "$pass_id" "$current_context_height")"
   usdb_chain_log "Initial current pass energy=${initial_energy} for pass_id=${pass_id}"
 
   usdb_chain_log "Generating canonical USDB genesis"
@@ -420,22 +430,22 @@ EOF
   node1_balance_hex="$(printf '%s' "$(rpc_call "$node1_rpc" "eth_getBalance" "[\"${USDB_CHAIN_MINER_ADDRESS}\",\"latest\"]")" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result") or "0x0")')"
 
   if [[ "$BTC_STATE_TRANSITION" == "same-height-replacement" ]]; then
-    old_btc_hash="$(regtest_get_bitcoin_block_hash "$current_tip_height")"
+    old_btc_hash="$(regtest_get_bitcoin_block_hash "$current_context_height")"
     old_snapshot_id="$(regtest_json_expr \
       "$(regtest_rpc_call_usdb_indexer "get_snapshot_info" "[]")" \
       "((data.get('result') or {}).get('snapshot_id', ''))")"
-    regtest_log "Replacing referenced BTC state at the same height=${current_tip_height}, old_hash=${old_btc_hash}"
+    regtest_log "Replacing referenced BTC state at stable height=${current_context_height}, old_hash=${old_btc_hash}"
     "$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" invalidateblock "$old_btc_hash"
-    regtest_mine_empty_block "$(regtest_get_new_address)"
-    replacement_btc_hash="$(regtest_get_bitcoin_block_hash "$current_tip_height")"
+    regtest_mine_blocks "$((BTC_STABLE_LAG_BLOCKS + 1))" "$(regtest_get_new_address)"
+    replacement_btc_hash="$(regtest_get_bitcoin_block_hash "$current_context_height")"
     if [[ "$replacement_btc_hash" == "$old_btc_hash" ]]; then
       echo "Same-height replacement produced the original BTC block hash" >&2
       exit 1
     fi
     regtest_wait_until_ord_server_synced_to_bitcoind
-    regtest_wait_until_balance_history_synced_eq "$current_tip_height"
-    regtest_wait_until_balance_history_block_commit_hash "$current_tip_height" "$replacement_btc_hash"
-    regtest_wait_until_usdb_synced_eq "$current_tip_height"
+    regtest_wait_until_balance_history_synced_eq "$current_context_height"
+    regtest_wait_until_balance_history_block_commit_hash "$current_context_height" "$replacement_btc_hash"
+    regtest_wait_until_usdb_synced_eq "$current_context_height"
     regtest_wait_until_rpc_expr_eq \
       "usdb snapshot stable hash after same-height replacement" \
       regtest_rpc_call_usdb_indexer \
@@ -452,8 +462,8 @@ EOF
       echo "Snapshot id did not change after same-height BTC replacement" >&2
       exit 1
     fi
-    boosted_energy="$(pass_energy_now "$pass_id")"
-    usdb_chain_log "BTC state at height=${current_tip_height} changed snapshot ${old_snapshot_id} -> ${new_snapshot_id}"
+    boosted_energy="$(pass_energy_at_height "$pass_id" "$current_context_height")"
+    usdb_chain_log "BTC state at height=${current_context_height} changed snapshot ${old_snapshot_id} -> ${new_snapshot_id}"
   else
     regtest_log "Applying BTC owner top-up to advance the BTC head and increase current pass energy"
     regtest_fund_address "$ord_receive_address" "$ENERGY_TOPUP_AMOUNT_BTC"
@@ -461,13 +471,18 @@ EOF
     if (( ENERGY_GROWTH_BLOCKS > 0 )); then
       regtest_mine_blocks "$ENERGY_GROWTH_BLOCKS" "$miner_btc_address"
     fi
+    if (( BTC_STABLE_LAG_BLOCKS > 0 )); then
+      regtest_log "Mining ${BTC_STABLE_LAG_BLOCKS} blocks so the top-up reaches the stable frontier"
+      regtest_mine_blocks "$BTC_STABLE_LAG_BLOCKS" "$miner_btc_address"
+    fi
     regtest_wait_until_ord_server_synced_to_bitcoind
     current_tip_height="$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" getblockcount)"
-    regtest_wait_until_balance_history_synced_eq "$current_tip_height"
-    regtest_wait_until_usdb_synced_eq "$current_tip_height"
+    current_context_height=$((current_tip_height - BTC_STABLE_LAG_BLOCKS))
+    regtest_wait_until_balance_history_synced_eq "$current_context_height"
+    regtest_wait_until_usdb_synced_eq "$current_context_height"
     regtest_wait_balance_history_consensus_ready
     regtest_wait_usdb_consensus_ready
-    boosted_energy="$(pass_energy_now "$pass_id")"
+    boosted_energy="$(pass_energy_at_height "$pass_id" "$current_context_height")"
     usdb_chain_log "Current pass energy after BTC head advance=${boosted_energy}"
   fi
 
@@ -502,7 +517,7 @@ EOF
     fi
     usdb_chain_log "Fresh validator rejected the old selector with SNAPSHOT_ID_MISMATCH and remained at genesis"
     usdb_chain_log "USDB-chain same-height BTC replacement E2E succeeded."
-    usdb_chain_log "pass_id=${pass_id}, stale_usdb_head=${node1_tip_hash}, btc_height=${current_tip_height}, replacement_btc_hash=${replacement_btc_hash}"
+    usdb_chain_log "pass_id=${pass_id}, stale_usdb_head=${node1_tip_hash}, btc_height=${current_context_height}, replacement_btc_hash=${replacement_btc_hash}"
   else
     wait_peers "$node1_rpc" 1
     wait_peers "$node2_rpc" 1
