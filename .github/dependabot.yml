@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:10"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    rebase-strategy: auto
+    commit-message:
+      prefix: Update
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:20"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    rebase-strategy: auto
+    commit-message:
+      prefix: Update

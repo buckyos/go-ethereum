@@ -1,0 +1,102 @@
+name: Dependency Security (Report Only)
+
+on:
+  pull_request:
+    paths:
+      - .github/dependabot.yml
+      - .github/workflows/dependency-security.yml
+      - go.mod
+      - go.sum
+  push:
+    branches:
+      - master
+    paths:
+      - .github/dependabot.yml
+      - .github/workflows/dependency-security.yml
+      - go.mod
+      - go.sum
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: Go source and release-binary baseline (report-only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out go-ethereum
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up scanner Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+          check-latest: false
+          cache: false
+
+      - name: Install pinned govulncheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOBIN="${RUNNER_TEMP}/govulncheck-bin" \
+            go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+
+      - name: Set up compatibility Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.0
+          check-latest: false
+          cache: false
+
+      - name: Generate compatibility source baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          report_dir="${RUNNER_TEMP}/dependency-security"
+          mkdir -p "$report_dir"
+          "${RUNNER_TEMP}/govulncheck-bin/govulncheck" \
+            -format json ./... >"${report_dir}/govulncheck-source-go1.26.0.json"
+          [[ -s "${report_dir}/govulncheck-source-go1.26.0.json" ]]
+
+      - name: Set up release Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.18.5
+          check-latest: false
+          cache: false
+
+      - name: Build and scan the release geth binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          report_dir="${RUNNER_TEMP}/dependency-security"
+          binary_path="${RUNNER_TEMP}/geth-go1.18.5"
+          go build -trimpath -buildvcs=false -o "$binary_path" ./cmd/geth
+          "${RUNNER_TEMP}/govulncheck-bin/govulncheck" \
+            -mode binary -format json "$binary_path" \
+            >"${report_dir}/govulncheck-geth-go1.18.5.json"
+          [[ -s "${report_dir}/govulncheck-geth-go1.18.5.json" ]]
+          {
+            echo "## Go dependency security"
+            echo
+            echo "Report-only source and release-binary baselines completed with govulncheck v1.7.0."
+            echo "Source analysis uses Go 1.26.0 and the release binary uses Go 1.18.5."
+            echo "Review the uploaded JSON artifacts before classifying reachability."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload dependency security report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: dependency-security-go-${{ github.sha }}
+          path: ${{ runner.temp }}/dependency-security
+          if-no-files-found: error
+          retention-days: 30
