@@ -125,7 +125,8 @@ v2 不保存 coordinator revision，因此不再需要“已验证前一提交�
 发布协调工具可以从当前 `go-ethereum` checkout 自动推导 sibling workspace：
 
 ```bash
-# 默认 dry-run；要求 USDB HEAD 已 push 且与 origin/master 完全一致。
+# 默认 dry-run；要求 USDB 与 SourceDAO HEAD 都已 push，并分别与
+# origin/master、origin/main 完全一致。
 python3 scripts/usdb/prepare_release.py sync-lock
 
 # 一次性写入 lock、创建 Go commit，并显式 push。
@@ -140,6 +141,9 @@ python3 scripts/usdb/prepare_release.py tag --release-id usdb-testnet-v0-r1
 python3 scripts/usdb/prepare_release.py tag \
   --release-id usdb-testnet-v0-r1 --create --push
 ```
+
+`sync-lock` 将两个 dependency revision 作为一个整体写入同一个 Go lock commit。任一仓库 HEAD
+尚未发布、worktree 不干净或断点续推期间再次前进都会失败关闭；不需要也不应先手工修改 JSON。
 
 默认 workspace root 是承载当前 `go-ethereum` checkout 的上级目录。非标准布局可在子命令前
 显式提供 `--workspace-root /path/to/workspace`。工具会校验三仓目录、Git top-level、GitHub

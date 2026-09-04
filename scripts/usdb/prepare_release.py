@@ -261,7 +261,7 @@ def sync_lock(
     push: bool,
     fetch: bool,
 ) -> None:
-    """Pin the published USDB HEAD and optionally commit or resume-push the update."""
+    """Pin published dependency HEADs and optionally commit or resume-push the update."""
 
     _fetch_repositories(repositories, fetch)
     for repository in repositories.values():
@@ -269,35 +269,45 @@ def sync_lock(
 
     go_repository = repositories["go_ethereum"]
     usdb_repository = repositories["usdb"]
+    source_dao_repository = repositories["source_dao"]
     usdb_revision = usdb_repository.ensure_published_head()
+    source_dao_revision = source_dao_repository.ensure_published_head()
     lock_path, lock = _load_workspace_lock(repositories)
-    source_dao_revision = _ensure_source_dao_matches_lock(repositories, lock)
-    previous = lock["dependencies"]["usdb"]["revision"]
+    previous_usdb = lock["dependencies"]["usdb"]["revision"]
+    previous_source_dao = lock["dependencies"]["source_dao"]["revision"]
 
     print(f"workspace_root={go_repository.path.parent}")
     print(f"go_ethereum_revision={go_repository.head()}")
     print(f"usdb_revision={usdb_revision}")
     print(f"source_dao_revision={source_dao_revision}")
-    print(f"locked_usdb_revision={previous}")
+    print(f"locked_usdb_revision={previous_usdb}")
+    print(f"locked_source_dao_revision={previous_source_dao}")
 
     if push and not commit:
-        if previous != usdb_revision:
+        if (
+            previous_usdb != usdb_revision
+            or previous_source_dao != source_dao_revision
+        ):
             raise ReleasePreparationError(
                 "--push can only resume an existing lock commit, but the lock does not "
-                "pin the published USDB HEAD; use --commit --push"
+                "pin both published dependency HEADs; use --commit --push"
             )
         _push_existing_lock_commit(go_repository, lock_path)
         return
 
     go_repository.ensure_published_head()
-    if previous == usdb_revision:
-        print("compatibility lock already pins the published USDB HEAD")
+    if (
+        previous_usdb == usdb_revision
+        and previous_source_dao == source_dao_revision
+    ):
+        print("compatibility lock already pins both published dependency HEADs")
         return
     if not commit:
         print("dry run: pass --commit to write and commit the lock update")
         return
 
     ci_revisions.set_dependency_revision(lock, "usdb", usdb_revision)
+    ci_revisions.set_dependency_revision(lock, "source_dao", source_dao_revision)
     ci_revisions.write_lock(lock_path, lock)
     ci_revisions.load_lock(lock_path)
     go_repository.git("diff", "--check")
@@ -454,7 +464,10 @@ def build_parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status", help="show repository and lock identities")
     status.add_argument("--fetch", action="store_true", help="refresh origin refs first")
 
-    sync = subparsers.add_parser("sync-lock", help="pin the published USDB HEAD")
+    sync = subparsers.add_parser(
+        "sync-lock",
+        help="pin the published USDB and SourceDAO dependency HEADs",
+    )
     sync.add_argument(
         "--commit",
         action="store_true",

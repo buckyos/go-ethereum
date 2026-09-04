@@ -168,6 +168,68 @@ class PrepareReleaseTests(unittest.TestCase):
             self.run_git(self.go_remote, "show-ref", "--tags"),
         )
 
+    def test_sync_lock_updates_published_source_dao_head(self) -> None:
+        usdb_revision = self.run_git(self.usdb, "rev-parse", "HEAD")
+        initial_lock = PREPARE.ci_revisions.load_lock(self.lock_path)
+        PREPARE.ci_revisions.set_dependency_revision(
+            initial_lock,
+            "usdb",
+            usdb_revision,
+        )
+        PREPARE.ci_revisions.write_lock(self.lock_path, initial_lock)
+        self.run_git(self.go, "add", "scripts/usdb/ci-revisions.json")
+        self.run_git(self.go, "commit", "-m", "Pin USDB fixture")
+        self.run_git(self.go, "push", "origin", "master")
+
+        (self.source_dao / "CHANGELOG").write_text(
+            "SourceDAO release change\n",
+            encoding="utf-8",
+        )
+        self.run_git(self.source_dao, "add", "CHANGELOG")
+        self.run_git(self.source_dao, "commit", "-m", "Update SourceDAO fixture")
+        self.run_git(self.source_dao, "push", "origin", "main")
+        source_dao_revision = self.run_git(self.source_dao, "rev-parse", "HEAD")
+
+        PREPARE.sync_lock(
+            self.repositories,
+            commit=True,
+            push=False,
+            fetch=False,
+        )
+
+        lock = PREPARE.ci_revisions.load_lock(self.lock_path)
+        self.assertEqual(lock["dependencies"]["usdb"]["revision"], usdb_revision)
+        self.assertEqual(
+            lock["dependencies"]["source_dao"]["revision"],
+            source_dao_revision,
+        )
+
+    def test_resume_push_rejects_newer_source_dao_head(self) -> None:
+        PREPARE.sync_lock(
+            self.repositories,
+            commit=True,
+            push=False,
+            fetch=False,
+        )
+        (self.source_dao / "CHANGELOG").write_text(
+            "SourceDAO changed after lock\n",
+            encoding="utf-8",
+        )
+        self.run_git(self.source_dao, "add", "CHANGELOG")
+        self.run_git(self.source_dao, "commit", "-m", "Advance SourceDAO fixture")
+        self.run_git(self.source_dao, "push", "origin", "main")
+
+        with self.assertRaisesRegex(
+            PREPARE.ReleasePreparationError,
+            "both published dependency HEADs",
+        ):
+            PREPARE.sync_lock(
+                self.repositories,
+                commit=False,
+                push=True,
+                fetch=False,
+            )
+
     def test_sync_lock_commit_can_resume_push(self) -> None:
         remote_before = self.run_git(self.go, "rev-parse", "origin/master")
         PREPARE.sync_lock(
