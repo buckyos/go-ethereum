@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import tempfile
@@ -136,6 +137,8 @@ class LongCiRunnerTests(unittest.TestCase):
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertIn("prepare_source_dao_artifacts \"$tier\" \"$shard\"", runner)
         self.assertIn("nightly:go-activation)", runner)
+        self.assertIn("USDB_REQUIRED_NODE_MAJOR=24", runner)
+        self.assertIn("usdb_load_node_toolchain", runner)
         self.assertIn("run_case source-dao-usdb-build", runner)
         self.assertIn('npm --prefix "$SOURCE_DAO_REPO" run build:usdb', runner)
 
@@ -152,6 +155,25 @@ class LongCiRunnerTests(unittest.TestCase):
             'regtest_mine_blocks "$((BTC_STABLE_LAG_BLOCKS + 1))"', script
         )
         self.assertNotIn('pass_energy_now "$pass_id"', script)
+
+    def test_profile_service_ports_stay_below_linux_ephemeral_range(self) -> None:
+        scripts = [
+            "run_usdb_profile_e2e.sh",
+            "run_usdb_profile_energy_growth_e2e.sh",
+            "run_usdb_profile_historical_stability_e2e.sh",
+            "run_usdb_profile_anchor_boundary_e2e.sh",
+            "run_usdb_profile_failure_matrix_e2e.sh",
+            "run_usdb_activation_upgrade_e2e.sh",
+            "run_usdb_economic_activation_upgrade_e2e.sh",
+        ]
+        for name in scripts:
+            content = (REPOSITORY / "scripts/usdb" / name).read_text(encoding="utf-8")
+            ports = re.findall(r"\$\{([A-Z0-9_]*PORT):-([0-9]+)\}", content)
+            self.assertTrue(ports, name)
+            for variable, raw_port in ports:
+                port = int(raw_port)
+                self.assertGreaterEqual(port, 1024, f"{name}: {variable}")
+                self.assertLess(port, 32768, f"{name}: {variable}")
 
     def test_run_case_reports_the_command_failure_before_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as root:

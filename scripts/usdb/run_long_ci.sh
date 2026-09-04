@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+# shellcheck source=lib/node_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/node_toolchain.sh"
 WORKSPACE_ROOT=${USDB_WORKSPACE_ROOT:-$(dirname "$ROOT_DIR")}
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$WORKSPACE_ROOT/usdb"}
 SOURCE_DAO_REPO=${SOURCE_DAO_REPO:-"$WORKSPACE_ROOT/SourceDAO"}
@@ -167,6 +169,8 @@ prepare_source_dao_artifacts() {
 
   case "${tier}:${shard}" in
     nightly:go-activation)
+      USDB_REQUIRED_NODE_MAJOR=24
+      usdb_load_node_toolchain
       command -v npm >/dev/null 2>&1 || {
         echo "npm is required to build SourceDAO USDB artifacts" >&2
         exit 1

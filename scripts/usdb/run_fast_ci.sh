@@ -67,6 +67,8 @@ run_go_checks() {
 
   log "running Go toolchain policy tests"
   "$ROOT_DIR/scripts/usdb/test_go_toolchain.sh"
+  log "running Node toolchain policy tests"
+  "$ROOT_DIR/scripts/usdb/test_node_toolchain.sh"
 
   (
     export USDB_GO_BIN="$CANONICAL_GO_BIN"

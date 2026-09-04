@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=lib/go_toolchain.sh
 source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
+# shellcheck source=lib/node_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/node_toolchain.sh"
 SOURCE_DAO_REPO=${SOURCE_DAO_REPO:-"$ROOT_DIR/../SourceDAO"}
 USDB_REPO=${USDB_REPO:-"$ROOT_DIR/../usdb"}
 WORK_DIR=${WORK_DIR:-/tmp/usdb-public-release-candidate-e2e}
@@ -87,13 +89,6 @@ prepare_clean_sources() {
   ln -s "$SOURCE_DAO_REPO/node_modules" "$SOURCE_DAO_SOURCE_DIR/node_modules"
 }
 
-load_node_toolchain() {
-  # nvm is installed per-user and cannot be resolved statically by shellcheck.
-  # shellcheck source=/dev/null
-  source "$HOME/.nvm/nvm.sh"
-  nvm use 24 >/dev/null
-}
-
 build_clean_artifacts() {
   rm -rf "${USDB_GOCACHE:?}" "${WORK_DIR:?}/bin"
   mkdir -p "$USDB_GOCACHE" "$WORK_DIR/bin"
@@ -104,7 +99,7 @@ build_clean_artifacts() {
   echo "Building and auditing SourceDAO USDB artifacts from an isolated source snapshot"
   (
     cd "$SOURCE_DAO_SOURCE_DIR"
-    load_node_toolchain
+    usdb_load_node_toolchain
     npm run build:usdb
     npm run test:usdb:audit
   )

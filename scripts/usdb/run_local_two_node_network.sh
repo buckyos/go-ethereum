@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=lib/go_toolchain.sh
 source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
+# shellcheck source=lib/node_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/node_toolchain.sh"
 SOURCE_DAO_DIR=${SOURCE_DAO_DIR:-"$ROOT_DIR/../SourceDAO"}
 USDB_CONFIG=${USDB_CONFIG:-"$ROOT_DIR/tools/config/usdb-local-chain.json"}
 USDB_ARTIFACTS=${USDB_ARTIFACTS:-"$SOURCE_DAO_DIR/artifacts-usdb"}
@@ -178,13 +180,6 @@ run_geth() {
     cd "$ROOT_DIR"
     "${GETH_CMD[@]}" "$@"
   )
-}
-
-load_node_toolchain() {
-  # nvm is installed per-user and cannot be resolved statically by shellcheck.
-  # shellcheck source=/dev/null
-  source "$HOME/.nvm/nvm.sh"
-  nvm use 24 >/dev/null
 }
 
 cleanup() {
@@ -477,7 +472,7 @@ run_source_dao_full_bootstrap() {
   local state_file=$2
   (
     cd "$SOURCE_DAO_DIR"
-    load_node_toolchain
+    usdb_load_node_toolchain
     SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY="$SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY" \
       npx tsx scripts/usdb_bootstrap_full.ts \
         --config "$SOURCE_DAO_FULL_CONFIG" \
@@ -492,7 +487,7 @@ run_source_dao_validation() {
   local output_file=$3
   (
     cd "$SOURCE_DAO_DIR"
-    load_node_toolchain
+    usdb_load_node_toolchain
     npm run validate:bootstrap -- \
       --config "$SOURCE_DAO_FULL_CONFIG" \
       --rpc-url "$rpc_url" \
@@ -632,7 +627,7 @@ run_source_dao_fee_probe() {
   fi
   (
     cd "$SOURCE_DAO_DIR"
-    load_node_toolchain
+    usdb_load_node_toolchain
     SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY="$SOURCE_DAO_BOOTSTRAP_PRIVATE_KEY" \
       npx tsx scripts/usdb_fee_split_probe.ts \
         --rpc-url "$rpc_url" \
@@ -921,7 +916,7 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
   echo "Running SourceDAO bootstrap smoke against node 1"
   (
     cd "$SOURCE_DAO_DIR"
-    load_node_toolchain
+    usdb_load_node_toolchain
     # SourceDAO owns this external env key; its value is the USDB-chain RPC endpoint.
     SOURCE_DAO_USDB_CONFIG="$SOURCE_DAO_CONFIG" \
     SOURCE_DAO_USDB_RPC_URL="$NODE1_RPC" \

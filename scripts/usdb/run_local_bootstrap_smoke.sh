@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=lib/go_toolchain.sh
 source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
+# shellcheck source=lib/node_toolchain.sh
+source "$ROOT_DIR/scripts/usdb/lib/node_toolchain.sh"
 SOURCE_DAO_DIR=${SOURCE_DAO_DIR:-"$ROOT_DIR/../SourceDAO"}
 USDB_CONFIG=${USDB_CONFIG:-"$ROOT_DIR/tools/config/usdb-local-chain.json"}
 USDB_ARTIFACTS=${USDB_ARTIFACTS:-"$SOURCE_DAO_DIR/artifacts-usdb"}
@@ -180,9 +182,7 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
   echo "Running SourceDAO bootstrap smoke"
   (
     cd "$SOURCE_DAO_DIR"
-    # shellcheck source=/dev/null
-    source "$HOME/.nvm/nvm.sh"
-    nvm use 24 >/dev/null
+    usdb_load_node_toolchain
     # SourceDAO owns this external env key; its value is the USDB-chain RPC endpoint.
     SOURCE_DAO_USDB_CONFIG="${SOURCE_DAO_USDB_CONFIG:-$SOURCE_DAO_DIR/tools/config/sourcedao-local.json}" \
     SOURCE_DAO_USDB_RPC_URL="http://${HTTP_ADDR}:${HTTP_PORT}" \
