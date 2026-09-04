@@ -96,8 +96,10 @@ scripts/usdb/run_long_ci.sh nightly go-profile
 每个 shard 使用独立工作目录；stdout/stderr、JSON report 和有限大小的诊断文件分别保留 14 天和 30 天。
 Weekly 是 Nightly 的超集，因此一次成功 Weekly run 同时证明基础 Nightly 分片和 Weekly 扩展分片通过。
 
-需要启动 Rust RPC 服务的 shard 会先完成 `balance-history` 与 `usdb-indexer`
-构建，再开始服务 readiness 计时。失败时按以下顺序定位：
+需要启动 Rust RPC 服务的 shard 会按照实际 `cargo run` 的 package/bin 选择，分别
+完成 `usdb-indexer` 与 `balance-history` 构建，再开始服务 readiness 计时。这里不能
+合并构建两个 package，否则 Cargo 联合解析的 dependency feature set 可能无法被后续
+单 package 启动复用。失败时按以下顺序定位：
 
 1. 在失败 job 的 `Run nightly shard` 或 `Run weekly shard` step 中搜索
    `[usdb-long-ci] FAIL`；该行给出失败 case、命令退出码和主日志路径。

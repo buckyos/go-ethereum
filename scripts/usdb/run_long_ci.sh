@@ -144,11 +144,19 @@ prepare_usdb_service_binaries() {
 
   case "${tier}:${shard}" in
     nightly:go-profile | nightly:go-activation | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:release-e2e)
-      run_case rust-service-build \
+      # Build each package with the same selection used by its later cargo run.
+      # A combined build unifies dependency features and does not warm the
+      # single-package fingerprints used inside the readiness window.
+      run_case rust-usdb-indexer-build \
+        cargo build --locked \
+          --manifest-path "$USDB_REPO_DIR/src/btc/Cargo.toml" \
+          -p usdb-indexer \
+          --bin usdb-indexer
+      run_case rust-balance-history-build \
         cargo build --locked \
           --manifest-path "$USDB_REPO_DIR/src/btc/Cargo.toml" \
           -p balance-history \
-          -p usdb-indexer
+          --bin balance-history
       ;;
   esac
 }

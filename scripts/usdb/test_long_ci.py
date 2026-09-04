@@ -127,8 +127,10 @@ class LongCiRunnerTests(unittest.TestCase):
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertIn("prepare_usdb_service_binaries \"$tier\" \"$shard\"", runner)
         self.assertIn("cargo build --locked", runner)
-        self.assertIn("-p balance-history", runner)
-        self.assertIn("-p usdb-indexer", runner)
+        self.assertIn("run_case rust-usdb-indexer-build", runner)
+        self.assertIn("-p usdb-indexer \\\n          --bin usdb-indexer", runner)
+        self.assertIn("run_case rust-balance-history-build", runner)
+        self.assertIn("-p balance-history \\\n          --bin balance-history", runner)
 
     def test_run_case_reports_the_command_failure_before_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as root:
