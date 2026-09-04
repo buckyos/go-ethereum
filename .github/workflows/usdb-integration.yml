@@ -171,7 +171,7 @@ jobs:
           compression-level: 6
 
   weekly:
-    name: Weekly ${{ matrix.shard }}
+    name: Weekly ${{ matrix.name }}
     if: inputs.tier == 'weekly'
     needs:
       - revision_lock
@@ -181,11 +181,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard:
-          - world-soak
-          - economic-capacity
-          - balance-history-extended
-          - release-e2e
+        include:
+          - name: world-soak seed-41
+            shard: world-soak
+            artifact_suffix: world-soak-seed-41
+            world_soak_seeds: '41'
+          - name: world-soak seed-42
+            shard: world-soak
+            artifact_suffix: world-soak-seed-42
+            world_soak_seeds: '42'
+          - name: world-soak seed-43
+            shard: world-soak
+            artifact_suffix: world-soak-seed-43
+            world_soak_seeds: '43'
+          - name: economic-capacity
+            shard: economic-capacity
+            artifact_suffix: economic-capacity
+            world_soak_seeds: ''
+          - name: balance-history-extended
+            shard: balance-history-extended
+            artifact_suffix: balance-history-extended
+            world_soak_seeds: ''
+          - name: release-e2e
+            shard: release-e2e
+            artifact_suffix: release-e2e
+            world_soak_seeds: ''
     steps:
       - name: Check out go-ethereum
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -252,8 +272,9 @@ jobs:
           ORD_BIN: ${{ runner.temp }}/regtest-tools/ord/ord
           USDB_LONG_CI_OUTPUT_DIR: ${{ runner.temp }}/long-ci-output
           USDB_LONG_CI_WORK_DIR: ${{ runner.temp }}/long-ci-work
-          USDB_LONG_CI_ARTIFACT_NAME: usdb-weekly-${{ matrix.shard }}-${{ github.sha }}
+          USDB_LONG_CI_ARTIFACT_NAME: usdb-weekly-${{ matrix.artifact_suffix }}-${{ github.sha }}
           USDB_WORKSPACE_ROOT: ${{ github.workspace }}
+          WORLD_SOAK_SEEDS: ${{ matrix.world_soak_seeds }}
         run: |
           chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
           go-ethereum/scripts/usdb/run_long_ci.sh weekly "${{ matrix.shard }}"
@@ -262,7 +283,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: usdb-weekly-${{ matrix.shard }}-${{ github.sha }}
+          name: usdb-weekly-${{ matrix.artifact_suffix }}-${{ github.sha }}
           path: ${{ runner.temp }}/long-ci-output/
           if-no-files-found: warn
           retention-days: 30

@@ -124,6 +124,22 @@ class LongCiRunnerTests(unittest.TestCase):
         self.assertIn("go-ethereum/scripts/usdb/run_long_ci.sh", integration)
         self.assertIn("USDB_LONG_CI_ARTIFACT_NAME", integration)
 
+    def test_weekly_world_soak_seeds_run_as_independent_jobs(self) -> None:
+        integration = (WORKFLOWS / "usdb-integration.yml").read_text(
+            encoding="utf-8"
+        )
+        for seed in ("41", "42", "43"):
+            self.assertIn(f"name: world-soak seed-{seed}", integration)
+            self.assertIn(f"artifact_suffix: world-soak-seed-{seed}", integration)
+            self.assertIn(f"world_soak_seeds: '{seed}'", integration)
+        self.assertIn(
+            "WORLD_SOAK_SEEDS: ${{ matrix.world_soak_seeds }}", integration
+        )
+        self.assertIn(
+            "usdb-weekly-${{ matrix.artifact_suffix }}-${{ github.sha }}",
+            integration,
+        )
+
     def test_runner_prebuilds_services_before_readiness_bound_cases(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertIn("prepare_usdb_service_binaries \"$tier\" \"$shard\"", runner)
