@@ -442,7 +442,8 @@ EOF
       echo "Same-height replacement produced the original BTC block hash" >&2
       exit 1
     fi
-    regtest_wait_until_ord_server_synced_to_bitcoind
+    # Keep the exact same-height selector check before advancing the raw tip
+    # required to trigger Ord 0.23.3 reorg detection (finished below).
     regtest_wait_until_balance_history_synced_eq "$current_context_height"
     regtest_wait_until_balance_history_block_commit_hash "$current_context_height" "$replacement_btc_hash"
     regtest_wait_until_usdb_synced_eq "$current_context_height"
@@ -516,6 +517,7 @@ EOF
       exit 1
     fi
     usdb_chain_log "Fresh validator rejected the old selector with SNAPSHOT_ID_MISMATCH and remained at genesis"
+    regtest_finish_ord_reorg
     usdb_chain_log "USDB-chain same-height BTC replacement E2E succeeded."
     usdb_chain_log "pass_id=${pass_id}, stale_usdb_head=${node1_tip_hash}, btc_height=${current_context_height}, replacement_btc_hash=${replacement_btc_hash}"
   else

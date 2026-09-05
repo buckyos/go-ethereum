@@ -96,6 +96,21 @@ scripts/usdb/run_long_ci.sh nightly go-profile
 每个 shard 使用独立工作目录；stdout/stderr、JSON report 和有限大小的诊断文件分别保留 14 天和 30 天。
 Weekly 是 Nightly 的超集，因此一次成功 Weekly run 同时证明基础 Nightly 分片和 Weekly 扩展分片通过。
 
+World-soak 的 seeds `41/42/43` 各用独立 job，单个 seed 保持连续 `2500` tick。
+runner 在长跑前执行真实 Bitcoin Core/Ord 钱包回归，覆盖断开 `10/11/13` 个块后的
+commit/reveal 恢复与继续铭刻。默认 `ORD_POLLING_INTERVAL=200ms`、
+`USDB_UPSTREAM_POLL_INTERVAL_MS=200`，只压缩轮询等待，稳定确认深度与校验频率保持不变。
+需要做旧配置对照时，可分别覆盖为 `5s` 和 `5000`。
+
+World-soak 执行步骤限时 300 分钟，为 360 分钟 job 上限内的准备和日志上传留出空间；
+超时仍判失败。`seed-*-report.jsonl` 保存逐轮及分阶段耗时，成功的
+`seed-*-summary.json` 汇总均值、P95 和最后 100 轮均值，完整耗时为 `duration_seconds`。
+每轮含动作块和稳定确认块，不能把 2500 tick 当作只有 2500 个 BTC 块。
+
+独立的较短 seed 不继承上一条链的累计状态；跨 job 延续同一条链则需要完整的
+Bitcoin/钱包、Ord、balance-history、indexer 和 simulator 一致 checkpoint，单独的
+recovery JSON 不足以实现。目前保留连续长跑，不做跨 job 状态迁移。
+
 需要启动 Rust RPC 服务的 shard 会按照实际 `cargo run` 的 package/bin 选择，分别
 完成 `usdb-indexer` 与 `balance-history` 构建，再开始服务 readiness 计时。这里不能
 合并构建两个 package，否则 Cargo 联合解析的 dependency feature set 可能无法被后续

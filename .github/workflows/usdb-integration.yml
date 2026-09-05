@@ -267,6 +267,8 @@ jobs:
           path: ${{ runner.temp }}/regtest-tools
 
       - name: Run weekly shard
+        # Keep room for log upload before the hosted runner's six-hour job limit.
+        timeout-minutes: ${{ matrix.shard == 'world-soak' && 300 || 360 }}
         env:
           BITCOIN_BIN_DIR: ${{ runner.temp }}/regtest-tools/bitcoin/bin
           ORD_BIN: ${{ runner.temp }}/regtest-tools/ord/ord

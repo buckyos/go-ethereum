@@ -282,8 +282,13 @@ run_weekly() {
   case "$shard" in
     world-soak)
       require_regtest_tools
+      run_case world-reorg-wallet-recovery \
+        env PYTHONDONTWRITEBYTECODE=1 BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          python3 "$USDB_REPO_DIR/tests/test_regtest_world_reorg.py"
       run_case world-soak \
         env BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          ORD_POLLING_INTERVAL="${ORD_POLLING_INTERVAL:-200ms}" \
+          USDB_UPSTREAM_POLL_INTERVAL_MS="${USDB_UPSTREAM_POLL_INTERVAL_MS:-200}" \
           WORLD_SOAK_OUTPUT_ROOT="$OUTPUT_ROOT/world-soak" \
           WORLD_SOAK_WORKSPACE_ROOT="$WORK_ROOT/world-soak" \
           WORLD_SOAK_BLOCKS="${WORLD_SOAK_BLOCKS:-2500}" \
