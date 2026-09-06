@@ -1,0 +1,20 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "fast-go-critical-test-coverage",
+  "type": "fixed",
+  "scopes": ["testing"],
+  "summary": "Run and enforce critical K, fixed-price and activation tests in Fast CI",
+  "details": [
+    "Expand the Ethash test filter to include the independent 50405-step K oracle, K and fixed-price transition tests, and expected-version activation-boundary validation.",
+    "Require manifest-listed tests to run and pass in actual Go JSON reports for the default and all three conformance builds; omitted, renamed, skipped or incomplete tests fail the gate.",
+    "Check that critical test families remain registered and selected without changing world-sim round counts or protocol behavior."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": false
+  },
+  "references": []
+}

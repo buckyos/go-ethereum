@@ -1,0 +1,10 @@
+{
+  "github.com/ethereum/go-ethereum/consensus/ethash": [
+    "TestPrepareKTransitionMatchesIndependent50405StepOracle",
+    "TestPrepareKTransitionUsesPriorFullWindowAndReplacesOldestSample",
+    "TestPrepareKTransitionRejectsCorruptWindowState",
+    "TestPrepareFixedPriceTransitionUsesParentStateAndWritesActiveRange",
+    "TestPrepareFixedPriceTransitionRejectsParentStateMismatch",
+    "TestVerifyHeaderUsesExpectedVersionAtActivationBoundary"
+  ]
+}

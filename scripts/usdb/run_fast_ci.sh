@@ -57,6 +57,19 @@ require_command() {
   fi
 }
 
+run_consensus_checks() {
+  local test_filter="$1"
+  local build_tags="${2:-}"
+  local report="$FAST_OUTPUT_DIR/consensus-${build_tags:-default}.jsonl"
+  local -a args=(test -json)
+  if [[ -n "$build_tags" ]]; then
+    args+=(-tags "$build_tags")
+  fi
+  args+=(./consensus/ethash -run "$test_filter")
+  usdb_go_with_geth_linker_compat "${args[@]}" | tee "$report"
+  python3 "$ROOT_DIR/scripts/usdb/check_fast_go_coverage.py" --report "$report"
+}
+
 run_go_checks() {
   require_command shellcheck
   require_command python3
@@ -69,6 +82,7 @@ run_go_checks() {
   "$ROOT_DIR/scripts/usdb/test_go_toolchain.sh"
   log "running Node toolchain policy tests"
   "$ROOT_DIR/scripts/usdb/test_node_toolchain.sh"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_fast_go_coverage.py"
 
   (
     export USDB_GO_BIN="$CANONICAL_GO_BIN"
@@ -104,7 +118,7 @@ run_go_checks() {
       ./cmd/geth
       ./cmd/usdb-genesis-hash
     )
-    local consensus_tests='USDB|Usdb|Profile|BTCAnchor|ActivationConformance|EconomicActivation|QuotePolicy|MinimumDifficulty|DefaultBuildRejectsEconomic'
+    local consensus_tests='USDB|Usdb|Profile|BTCAnchor|ActivationConformance|EconomicActivation|QuotePolicy|MinimumDifficulty|DefaultBuildRejectsEconomic|PrepareKTransition|PrepareFixedPriceTransition|ExpectedVersionAtActivationBoundary'
     local miner_tests='USDB|Usdb|Profile'
     local geth_tests='USDB|Usdb|Acceptance|CanonicalPositiveBigInt|ChainCommand.*USDB'
     log "running canonical Go vet and tests"
@@ -119,23 +133,20 @@ run_go_checks() {
         ./params
       usdb_go_with_geth_linker_compat test ./core/forkid
       usdb_go_with_geth_linker_compat test ./core -run 'USDB|Usdb'
-      usdb_go_with_geth_linker_compat test ./consensus/ethash -run "$consensus_tests"
+      run_consensus_checks "$consensus_tests"
       usdb_go_with_geth_linker_compat test ./miner -run "$miner_tests"
       usdb_go_with_geth_linker_compat test ./eth/ethconfig ./cmd/utils
       usdb_go_with_geth_linker_compat test ./cmd/geth -run "$geth_tests"
       usdb_go_with_geth_linker_compat test ./cmd/usdb-genesis-hash
       usdb_go_with_geth_linker_compat test \
         -tags usdb_activation_conformance ./internal/usdb
-      usdb_go_with_geth_linker_compat test \
-        -tags usdb_activation_conformance ./consensus/ethash -run "$consensus_tests"
+      run_consensus_checks "$consensus_tests" usdb_activation_conformance
       usdb_go_with_geth_linker_compat test \
         -tags usdb_economic_conformance_v2 ./internal/usdb
-      usdb_go_with_geth_linker_compat test \
-        -tags usdb_economic_conformance_v2 ./consensus/ethash -run "$consensus_tests"
+      run_consensus_checks "$consensus_tests" usdb_economic_conformance_v2
       usdb_go_with_geth_linker_compat test \
         -tags usdb_economic_conformance_v3 ./internal/usdb
-      usdb_go_with_geth_linker_compat test \
-        -tags usdb_economic_conformance_v3 ./consensus/ethash -run "$consensus_tests"
+      run_consensus_checks "$consensus_tests" usdb_economic_conformance_v3
     )
     usdb_build_geth "$ROOT_DIR" "$FAST_OUTPUT_DIR/geth-go118"
     "$FAST_OUTPUT_DIR/geth-go118" version >/dev/null

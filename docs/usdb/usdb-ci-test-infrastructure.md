@@ -26,6 +26,16 @@ scripts/usdb/run_fast_ci.sh
 入口支持单独运行 `go`、`rust`、`golden`、`sourcedao`，也支持通过 `all`
 一次运行全部 scope。
 
+Go canonical lane 的 Ethash 定向测试保留名称筛选，但默认构建与三种 conformance
+构建都以 `go test -json` 输出执行报告，并通过
+`scripts/usdb/check_fast_go_coverage.py` 校验
+`scripts/usdb/fast_go_required_tests.json` 中的关键用例实际运行且通过。
+清单覆盖 UIP-0012 的 50,405 步独立 K oracle、K 窗口边界/损坏状态、UIP-0013
+parent price 状态，以及激活边界 expected version 校验。漏选、skip、包未完成或
+测试改名后清单未更新都会使 gate 失败；无需依靠增加 world-sim 轮数覆盖 K 窗口。
+新增这些关键测试族的用例时必须同步登记清单；新增其他关键用例也应显式登记。
+报告保存在 `USDB_FAST_OUTPUT_DIR/consensus-*.jsonl`，并输出到 CI 日志。
+
 ## Go 工具链策略
 
 USDB geth 的正式构建使用项目 canonical Go 1.18.5。由于继承的
