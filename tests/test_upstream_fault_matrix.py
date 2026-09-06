@@ -4,14 +4,17 @@
 import copy
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/usdb"))
-from upstream_fault_matrix import Node, compare_chain, ports, validate_fault
+from upstream_fault_matrix import (Matrix, Node, RECOVERY_ENV, compare_chain, ports, validate_fault,
+                                   validate_ord_independence, validate_interrupted_recovery)
 
 
 class FaultCoverageTests(unittest.TestCase):
@@ -50,6 +53,48 @@ class FaultCoverageTests(unittest.TestCase):
         for allocation in allocations:
             self.assertEqual(allocation["btc-onion"], allocation["btc-p2p"] + 1)
         self.assertLess(max(all_ports), 32768)
+
+    def test_upstream_fault_requires_live_indexer_and_specific_blocker(self):
+        for kind, blocker in (("balance-crash", "UpstreamReadinessUnknown"), ("ord-source-outage", "CatchingUp")):
+            evidence = self.evidence()
+            evidence["profile_error_codes"] = [-32041]
+            evidence["readiness"] = {"rpc_alive": True, "consensus_ready": False, "blockers": [blocker]}
+            validate_fault(evidence, kind)
+            for field, bad in (("rpc_alive", False), ("consensus_ready", True), ("blockers", [])):
+                with self.subTest(kind=kind, field=field):
+                    broken = copy.deepcopy(evidence)
+                    broken["readiness"][field] = bad
+                    with self.assertRaises(ValueError):
+                        validate_fault(broken, kind)
+
+    def test_optional_ord_outage_requires_successful_new_validation(self):
+        evidence = {"source": "bitcoind", "ord_exit_code": -9, "btc_before": 150, "btc_after": 153,
+                    "before": 4, "after": 6, "validator_after": 6, "profile_successes": 1,
+                    "readiness": {"consensus_ready": True}}
+        validate_ord_independence(evidence)
+        for field, bad in (("source", "ord"), ("ord_exit_code", 0), ("btc_after", 150),
+                           ("after", 4), ("validator_after", 4), ("profile_successes", 0)):
+            with self.subTest(field=field):
+                broken = {**evidence, field: bad}
+                with self.assertRaises(ValueError):
+                    validate_ord_independence(broken)
+
+    def test_interruption_requires_durable_recovery_and_real_rejection(self):
+        evidence = {"readiness": {"rpc_alive": True, "consensus_ready": False, "query_ready": False,
+                                  "blockers": ["ReorgRecoveryPending"], "synced_block_height": 147},
+                    "pending_before": 147, "pending_after": 147, "epoch": 2, "fork_epoch": 1,
+                    "hook_hits": 1, "profile_errors": 1, "validator_before": 4, "validator_after": 4, "exit_code": -9}
+        validate_interrupted_recovery(evidence)
+        for field, bad in (("pending_before", None), ("pending_after", None), ("epoch", 1),
+                           ("hook_hits", 0), ("profile_errors", 0), ("validator_after", 5), ("exit_code", 0)):
+            with self.subTest(field=field):
+                broken = {**evidence, field: bad}
+                with self.assertRaises(ValueError):
+                    validate_interrupted_recovery(broken)
+        broken = copy.deepcopy(evidence)
+        broken["readiness"]["query_ready"] = True
+        with self.assertRaises(ValueError):
+            validate_interrupted_recovery(broken)
 
 
 class FullReplayTests(unittest.TestCase):
@@ -98,6 +143,45 @@ class FullReplayTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Missing prepared service binary", result.stderr)
             self.assertFalse(list(Path(work).glob("run-*")))
+
+
+class RecoveryLifecycleTests(unittest.TestCase):
+    def test_fault_hooks_do_not_leak_into_later_restarts(self):
+        args = SimpleNamespace(work_dir=Path("/tmp/unused-matrix-test"), port_base=22400,
+                               balance_history=Path("/unused/balance-history"), indexer=Path("/unused/indexer"))
+        node = Node(SimpleNamespace(args=args), "b", 1)
+        with patch.dict(os.environ, {key: "99" for key in RECOVERY_ENV}), patch.object(node, "start") as start:
+            for stage, expected in (("energy", {RECOVERY_ENV[0]}), ("transfer", {RECOVERY_ENV[1]}), (None, set())):
+                node.start_indexer(recovery_stage=stage)
+                env = start.call_args.kwargs["env"]
+                self.assertEqual(set(RECOVERY_ENV).intersection(env), expected)
+            node.start_service("balance-history")
+            self.assertTrue(set(RECOVERY_ENV).isdisjoint(start.call_args.kwargs["env"]))
+
+    def test_pending_marker_read_is_independent_and_read_only(self):
+        with tempfile.TemporaryDirectory() as work:
+            matrix = Matrix.__new__(Matrix)
+            matrix.b = SimpleNamespace(root=Path(work))
+            path = Path(work) / "usdb-indexer/data/miner_pass.db"
+            path.parent.mkdir(parents=True)
+            with self.assertRaises(sqlite3.OperationalError):
+                matrix.pending_recovery_height()
+            self.assertFalse(path.exists())
+            conn = sqlite3.connect(path)
+            try:
+                conn.execute("CREATE TABLE state (name TEXT PRIMARY KEY, value TEXT)")
+                conn.commit()
+                self.assertIsNone(matrix.pending_recovery_height())
+                conn.execute("INSERT INTO state VALUES ('upstream_reorg_recovery_pending_height', '156')")
+                conn.commit()
+                before = path.read_bytes()
+                self.assertEqual(matrix.pending_recovery_height(), 156)
+                self.assertEqual(path.read_bytes(), before)
+                conn.execute("DELETE FROM state")
+                conn.commit()
+                self.assertIsNone(matrix.pending_recovery_height())
+            finally:
+                conn.close()
 
 
 if __name__ == "__main__":

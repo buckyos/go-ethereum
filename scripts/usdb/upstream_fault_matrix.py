@@ -2,6 +2,7 @@
 """Short, isolated geth/BTC/Ord/indexer fault and canonical replay matrix."""
 
 import argparse
+from contextlib import closing
 import base64
 import hashlib
 import json
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -20,8 +22,14 @@ from configure_usdb_pow_calibration_genesis import configure_genesis
 from verify_usdb_profile_e2e import decode_selector, SYSTEM_STATE_SLOTS, USDB_SYSTEM_STATE_ADDRESS
 
 
-SCHEMA = "usdb-independent-upstream-matrix:v1"
-CASES = ("baseline", "indexer-crash", "crash-recovery", "stable-fork", "fork-recovery", "fresh-replay")
+SCHEMA = "usdb-independent-upstream-matrix:v2"
+CASES = ("baseline", "indexer-crash", "crash-recovery", "balance-crash", "balance-recovery",
+         "ord-outage", "ord-recovery", "ord-source-outage", "ord-source-recovery",
+         "stable-fork", "recovery-interrupted", "recovery-reinterrupted", "fork-recovery", "fresh-replay")
+FAULT_CODES = {"indexer-crash": {-32098}, "balance-crash": {-32041},
+               "ord-source-outage": {-32040, -32041}, "stable-fork": {-32042, -32043, -32045, -32046}}
+RECOVERY_ENV = ("USDB_INDEXER_INJECT_REORG_RECOVERY_ENERGY_FAILURES",
+                "USDB_INDEXER_INJECT_REORG_RECOVERY_TRANSFER_RELOAD_FAILURES")
 SERVICES = ("bitcoin", "btc-p2p", "ord", "balance-history", "usdb-indexer", "geth", "geth-p2p", "auth", "audit")
 MINER = "0x1111111111111111111111111111111111111111"
 
@@ -56,13 +64,46 @@ def validate_fault(evidence, kind):
     require(evidence["new_anchor"] > evidence["old_anchor"], "fault only exercised a cached anchor")
     require(evidence["observed_seconds"] >= 4, "fault observation too short")
     require(evidence["profile_errors"] > 0, "no real validator profile rejection observed")
-    expected_codes = {-32098} if kind == "indexer-crash" else {-32042, -32043, -32045, -32046}
+    expected_codes = FAULT_CODES[kind]
     require(expected_codes.intersection(evidence["profile_error_codes"]), "rejection did not match injected fault")
+    if kind in {"balance-crash", "ord-source-outage"}:
+        validate_not_ready(evidence["readiness"],
+                           "UpstreamReadinessUnknown" if kind == "balance-crash" else "CatchingUp")
     if kind == "stable-fork":
         require(evidence["fork_depth"] > 10, "fork did not cross stable frontier")
         require(evidence["canonical_hash"] != evidence["fork_hash"], "no actual BTC fork")
         require(evidence["canonical_balance"] - evidence["fork_balance"] == 100_000_000,
                 "fork did not remove the confirmed one-BTC top-up")
+
+
+def validate_not_ready(readiness, blocker):
+    require(readiness["rpc_alive"] is True, "indexer RPC died instead of reporting not ready")
+    require(readiness["consensus_ready"] is False and blocker in readiness["blockers"],
+            f"missing readiness blocker: {blocker}")
+
+
+def validate_ord_independence(evidence):
+    require(evidence["source"] == "bitcoind", "Ord-independent case requires Core inscription source")
+    require(evidence["ord_exit_code"] == -signal.SIGKILL, "Ord outage was not injected")
+    require(evidence["btc_after"] > evidence["btc_before"], "Ord missed no new BTC blocks")
+    require(evidence["after"] > evidence["before"] and evidence["validator_after"] == evidence["after"],
+            "Core-based consensus did not progress during Ord outage")
+    require(evidence["profile_successes"] > 0 and evidence["readiness"]["consensus_ready"] is True,
+            "Core-based validator did not actually validate while Ord was offline")
+
+
+def validate_interrupted_recovery(evidence):
+    validate_not_ready(evidence["readiness"], "ReorgRecoveryPending")
+    require(evidence["readiness"]["query_ready"] is False, "pending recovery exposed query-ready state")
+    require(type(evidence["pending_before"]) is int and evidence["pending_before"] > 0,
+            "recovery was not durably pending")
+    require(evidence["pending_before"] == evidence["pending_after"] == evidence["readiness"]["synced_block_height"],
+            "crash lost or changed durable recovery marker")
+    require(evidence["epoch"] > evidence["fork_epoch"] and evidence["hook_hits"] > 0,
+            "canonical recovery phase was not actually reached")
+    require(evidence["profile_errors"] > 0 and evidence["validator_after"] == evidence["validator_before"],
+            "validator did not reject while recovery was pending")
+    require(evidence["exit_code"] == -signal.SIGKILL, "recovery process was not interrupted")
 
 
 def compare_chain(expected, actual):
@@ -169,12 +210,12 @@ class Node:
             return RPC(self.url(service), self.root / "bitcoin/regtest/.cookie")
         return RPC(self.url(service))
 
-    def start(self, service, command):
+    def start(self, service, command, *, env=None):
         require(service not in self.processes, f"{self.name}/{service} already managed")
         log = (self.matrix.args.output_dir / f"{self.name}-{service}.log").open("a")
         try:
             self.processes[service] = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
-                                                       start_new_session=True)
+                                                       start_new_session=True, env=env)
         finally:
             log.close()
 
@@ -190,13 +231,40 @@ class Node:
             require(False, f"{self.name}/{service} failed graceful shutdown")
         return process.returncode
 
-    def start_indexer(self):
-        self.start_service("usdb-indexer")
+    def start_indexer(self, recovery_stage=None):
+        self.start_service("usdb-indexer", recovery_stage=recovery_stage)
 
-    def start_service(self, package):
+    def start_service(self, package, recovery_stage=None):
         binary = self.matrix.args.balance_history if package == "balance-history" else self.matrix.args.indexer
+        env = {key: value for key, value in os.environ.items() if key not in RECOVERY_ENV}
+        if recovery_stage is not None:
+            require(package == "usdb-indexer" and recovery_stage in ("energy", "transfer"), "invalid recovery hook")
+            # Existing regtest hooks keep the persisted recovery phase pending;
+            # the matrix then kills the real process at that observed boundary.
+            env[RECOVERY_ENV[0 if recovery_stage == "energy" else 1]] = "100000"
         self.start(package, [str(binary),
-                            "--root-dir", str(self.root / package), "--skip-process-lock"])
+                            "--root-dir", str(self.root / package), "--skip-process-lock"], env=env)
+
+    def start_ord(self):
+        self.start("ord", [str(self.matrix.args.ord), "--regtest", "--bitcoin-rpc-url", self.url("bitcoin"),
+                           "--cookie-file", str(self.root / "bitcoin/regtest/.cookie"),
+                           "--bitcoin-data-dir", str(self.root / "bitcoin"), "--data-dir", str(self.root / "ord"),
+                           "--savepoint-interval", "1", "--max-savepoints", "64", "--index-addresses",
+                           "--index-transactions", "server", "--address", "127.0.0.1", "--http",
+                           "--http-port", str(self.ports["ord"])])
+
+    def inscription_source(self):
+        return json.loads((self.root / "usdb-indexer/config.json").read_text())["usdb"]["inscription_source"]
+
+    def set_inscription_source(self, source):
+        require(source in {"bitcoind", "ord"}, "unsupported matrix inscription source")
+        self.stop("usdb-indexer")
+        path = self.root / "usdb-indexer/config.json"
+        config = json.loads(path.read_text())
+        config["usdb"]["inscription_source"] = source
+        self.matrix.write_json(path, config)
+        self.start_indexer()
+        self.matrix.wait_upstream(self)
 
     def fresh_upstream(self):
         # mkdir(exist_ok=False) is the proof that no BTC, Ord or indexer state
@@ -210,12 +278,7 @@ class Node:
         self.matrix.wait(f"{self.name} Bitcoin RPC", lambda: self.rpc("bitcoin")("getblockchaininfo")["chain"] == "regtest")
         self.rpc("bitcoin")("addnode", [f"127.0.0.1:{self.matrix.a.ports['btc-p2p']}", "add"])
         self.matrix.wait_btc(self)
-        self.start("ord", [str(self.matrix.args.ord), "--regtest", "--bitcoin-rpc-url", self.url("bitcoin"),
-                           "--cookie-file", str(self.root / "bitcoin/regtest/.cookie"),
-                           "--bitcoin-data-dir", str(self.root / "bitcoin"), "--data-dir", str(self.root / "ord"),
-                           "--savepoint-interval", "1", "--max-savepoints", "64", "--index-addresses",
-                           "--index-transactions", "server", "--address", "127.0.0.1", "--http",
-                           "--http-port", str(self.ports["ord"])])
+        self.start_ord()
         self.matrix.wait_ord(self)
         balance = (self.matrix.a.root / "balance-history/config.toml").read_text()
         balance = balance.replace(str(self.matrix.a.root), str(self.root))
@@ -384,7 +447,7 @@ class Matrix:
         return self.capture(node.rpc("usdb-indexer"), node.rpc("balance-history"), height, block_hash,
                             [self.owner], self.context, history=True)
 
-    def compare_states(self, label, nodes):
+    def compare_states(self, label, nodes, *, include_ord=True):
         expected = self.state(self.a)
         require(self.args.pass_id in expected["passes"], "minted pass missing from state audit")
         self.write_json(self.args.output_dir / f"{label}-a-state.json", expected)
@@ -393,8 +456,11 @@ class Matrix:
             self.write_json(self.args.output_dir / f"{label}-{node.name}-state.json", actual)
             difference = self.difference(expected, actual)
             require(difference is None, f"{label}/{node.name} upstream mismatch: {difference}")
-        # The indexer scans inscriptions through Core. Independently rebuilt Ord
-        # indexes must also agree on the actual inscription owner and content.
+        if not include_ord:
+            require(label == "ord-outage", "Ord comparison can only be deferred during the explicit outage")
+            return self.digest(expected)
+        # A and C scan inscriptions through Core; B also exercises Ord as its
+        # source. Compare independently rebuilt Ord ownership and content too.
         inscriptions = {}
         for node in [self.a, *nodes]:
             self.wait_ord(node)
@@ -453,29 +519,47 @@ class Matrix:
     def mine_btc(self, count):
         self.a.rpc("bitcoin")("generatetoaddress", [count, self.args.miner_address])
 
-    def prepare_miner(self):
+    def prepare_miner(self, *, wait_for_peer=True):
         # miner_stop preserves pending sealing work. Restart the healthy miner
         # after advancing BTC so no old-anchor work can race the fault's first
         # block. Live miner refresh has its own dedicated E2E coverage.
         self.a.stop("geth")
         self.a.start_geth()
         self.connect_geth(self.b)
-        self.wait("validator attached before fault injection", lambda: bool(self.b.rpc("geth")("admin_peers")))
+        if wait_for_peer:
+            self.wait("validator attached before fault injection", lambda: bool(self.b.rpc("geth")("admin_peers")))
+
+    def readiness_blocked(self, blocker):
+        evidence = {}
+        def blocked():
+            evidence.update(self.b.rpc("usdb-indexer")("get_readiness"))
+            return evidence["rpc_alive"] is True and evidence["consensus_ready"] is False and blocker in evidence["blockers"]
+        self.wait(f"B readiness reports {blocker}", blocked, seconds=45)
+        validate_not_ready(evidence, blocker)
+        return evidence
+
+    def profile_errors(self, phase, codes, anchor=None):
+        return [event for event in self.b.proxy.profile_calls(phase, errors=True)
+                if event["error"]["code"] in codes
+                and (anchor is None or event["params"][0]["block_height"] == anchor)]
 
     def fault_observation(self, name, before, old_anchor, **extra):
         self.mine_usdb()
         started = time.monotonic()
-        while time.monotonic() - started < 5:
-            self.check_alive()
-            require(self.b.height() == before, f"{name}: faulty validator imported new blocks")
-            time.sleep(0.25)
         new_anchor = decode_selector(self.a.block())["btc_height"]
-        errors = self.b.proxy.profile_calls(name, errors=True)
+        def rejected():
+            require(self.b.height() == before, f"{name}: faulty validator imported new blocks")
+            return time.monotonic() - started >= 5 and bool(self.profile_errors(
+                name, FAULT_CODES[name], new_anchor if name == "stable-fork" else None))
+        self.wait(f"{name}: actual validator rejection", rejected, seconds=45)
+        errors = self.profile_errors(name, FAULT_CODES[name])
         # An unavailable indexer can reject the already-known parent before the
         # validator reaches the new header. A divergent but ready indexer must
         # reject the new anchor specifically, with a native selector error.
         if name == "stable-fork":
             errors = [e for e in errors if e["params"][0]["block_height"] == new_anchor]
+        if name in {"balance-crash", "ord-source-outage"}:
+            extra["readiness"] = self.b.rpc("usdb-indexer")("get_readiness")
         evidence = {"before": before, "healthy_after": self.a.height(), "validator_after": self.b.height(),
                     "old_anchor": old_anchor, "new_anchor": new_anchor,
                     "observed_seconds": round(time.monotonic() - started, 2), "profile_errors": len(errors),
@@ -484,6 +568,113 @@ class Matrix:
         self.report["active_case"] = {"name": name, **evidence}
         validate_fault(evidence, name)
         self.passed(name, **evidence)
+
+    def run_balance_outage(self):
+        self.phase("balance-crash")
+        before, old_anchor = self.a.height(), decode_selector(self.a.block())["btc_height"]
+        self.mine_btc(3)
+        self.wait_btc(self.b)
+        for node in (self.a, self.b):
+            self.wait_upstream(node)
+        self.prepare_miner()
+        indexer_pid = self.b.processes["usdb-indexer"].pid
+        require(self.b.stop("balance-history", crash=True) == -signal.SIGKILL, "balance-history crash was not injected")
+        readiness = self.readiness_blocked("UpstreamReadinessUnknown")
+        self.fault_observation("balance-crash", before, old_anchor, readiness=readiness)
+
+        self.phase("balance-recovery")
+        self.b.start_service("balance-history")
+        self.wait_upstream(self.b)
+        require(self.b.processes["usdb-indexer"].pid == indexer_pid, "balance recovery restarted downstream indexer")
+        blocks = self.converge_geth(self.b, restart=True)
+        self.passed("balance-recovery", blocks=blocks, indexer_restarted=False, balance_database_reused=True,
+                    state_sha256=self.compare_states("balance-recovery", [self.b]))
+
+    def run_ord_outages(self):
+        self.phase("ord-outage")
+        require(self.b.inscription_source() == "bitcoind", "unexpected initial B source")
+        before = self.a.height()
+        btc_before = self.b.rpc("bitcoin")("getblockcount")
+        exit_code = self.b.stop("ord", crash=True)
+        self.mine_btc(3)
+        self.wait_btc(self.b)
+        for node in (self.a, self.b):
+            self.wait_upstream(node)
+        self.prepare_miner()
+        self.mine_usdb()
+        blocks = self.converge_geth(self.b)
+        anchor = decode_selector(self.a.block())["btc_height"]
+        calls = [e for e in self.b.proxy.profile_calls("ord-outage")
+                 if "error" not in e and e["params"][0]["block_height"] == anchor]
+        evidence = {"source": self.b.inscription_source(), "ord_exit_code": exit_code,
+                    "btc_before": btc_before, "btc_after": self.b.rpc("bitcoin")("getblockcount"),
+                    "before": before, "after": blocks, "validator_after": self.b.height(),
+                    "profile_successes": len(calls), "readiness": self.b.rpc("usdb-indexer")("get_readiness")}
+        validate_ord_independence(evidence)
+        self.passed("ord-outage", **evidence, state_sha256=self.compare_states("ord-outage", [self.b], include_ord=False))
+
+        self.phase("ord-recovery")
+        self.b.start_ord()
+        self.wait_ord(self.b)
+        self.passed("ord-recovery", ord_database_reused=True, state_sha256=self.compare_states("ord-recovery", [self.b]))
+
+        self.phase("ord-source-outage")
+        self.b.set_inscription_source("ord")
+        before, old_anchor = self.a.height(), decode_selector(self.a.block())["btc_height"]
+        require(self.b.stop("ord", crash=True) == -signal.SIGKILL, "required Ord crash was not injected")
+        self.mine_btc(3)
+        self.wait_btc(self.b)
+        self.wait_upstream(self.a)
+        readiness = self.readiness_blocked("CatchingUp")
+        require(readiness["synced_block_height"] < self.frontier(self.a)[0], "Ord-dependent indexer did not stall")
+        self.prepare_miner(wait_for_peer=False)
+        self.fault_observation("ord-source-outage", before, old_anchor, readiness=readiness)
+
+        self.phase("ord-source-recovery")
+        self.b.start_ord()
+        self.wait_ord(self.b)
+        self.wait_upstream(self.b)
+        blocks = self.converge_geth(self.b, restart=True)
+        self.passed("ord-source-recovery", blocks=blocks, source=self.b.inscription_source(),
+                    state_sha256=self.compare_states("ord-source-recovery", [self.b]))
+
+    def pending_recovery_height(self):
+        path = self.b.root / "usdb-indexer/data/miner_pass.db"
+        # Read-only SQLite observes the durable marker without changing it or
+        # relying exclusively on the RPC's in-memory readiness flags.
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as conn:
+            row = conn.execute("SELECT value FROM state WHERE name = 'upstream_reorg_recovery_pending_height'").fetchone()
+        return None if row is None else int(row[0])
+
+    def recovery_hook_hits(self, stage, height):
+        token = "energy" if stage == "energy" else "transfer reload"
+        text = f"Injected reorg recovery {token} failure: target_height={height},"
+        return sum(path.read_text().count(text) for path in (self.b.root / "usdb-indexer/logs").glob("*.log"))
+
+    def interrupt_pending_recovery(self, phase, stage, fork_epoch, expected_height):
+        self.phase(phase)
+        readiness = self.readiness_blocked("ReorgRecoveryPending")
+        pending = self.pending_recovery_height()
+        require(pending == expected_height, f"unexpected recovery rollback target: {pending}, expected {expected_height}")
+        self.wait(f"{stage} recovery hook reached", lambda: self.recovery_hook_hits(stage, pending) > 0, seconds=30)
+        before = self.b.height()
+        self.b.stop("geth")
+        self.b.start_geth()
+        self.connect_geth(self.b)
+        def rejected():
+            require(self.b.height() == before, "validator imported blocks while reorg recovery was pending")
+            return bool(self.profile_errors(phase, {-32041}))
+        self.wait(f"{phase}: validator refuses incomplete recovery", rejected, seconds=45)
+        evidence = {"stage": stage, "readiness": readiness, "pending_before": pending,
+                    "epoch": readiness["upstream_reorg_epoch"], "fork_epoch": fork_epoch,
+                    "hook_hits": self.recovery_hook_hits(stage, pending),
+                    "profile_errors": len(self.profile_errors(phase, {-32041})),
+                    "validator_before": before, "validator_after": self.b.height(),
+                    "exit_code": self.b.stop("usdb-indexer", crash=True), "pending_after": self.pending_recovery_height()}
+        self.report["active_case"] = {"name": phase, **evidence}
+        validate_interrupted_recovery(evidence)
+        self.passed(phase, **evidence)
+        return evidence["epoch"]
 
     def run(self):
         self.phase("baseline")
@@ -522,6 +713,9 @@ class Matrix:
         self.passed("crash-recovery", blocks=blocks, state_sha256=self.compare_states("crash-recovery", [self.b]),
                     indexer_database_reused=True, validator_restarted=True)
 
+        self.run_balance_outage()
+        self.run_ord_outages()
+
         self.phase("stable-fork")
         before, old_anchor = self.a.height(), decode_selector(self.a.block())["btc_height"]
         fork_height = self.frontier(self.a)[0] + 1
@@ -557,7 +751,15 @@ class Matrix:
                                canonical_hash=canonical_hash, fork_hash=btc("getblockhash", [canonical_height]),
                                canonical_balance=canonical_balance, fork_balance=fork_balance, removed_txid=txid)
 
-        self.phase("fork-recovery")
+        fork_epoch = self.b.rpc("usdb-indexer")("get_readiness")["upstream_reorg_epoch"]
+        self.b.stop("usdb-indexer")
+        self.b.start_indexer(recovery_stage="energy")
+        self.wait_upstream(self.b)
+        self.phase("recovery-interrupted")
+        # Adopt one settled replacement chain. The intermediate tip between
+        # invalidateblock and reconsiderblock is an orchestration artifact and
+        # must not determine which durable recovery boundary gets interrupted.
+        self.b.stop("balance-history")
         btc("invalidateblock", [replacements[0]])
         btc("reconsiderblock", [original])
         # A must exceed B's old fork tip so Ord sees a new trigger block after
@@ -568,10 +770,24 @@ class Matrix:
         self.wait_btc(self.b)
         for node in (self.a, self.b):
             self.wait_ord(node)
-            self.wait_upstream(node)
+        self.wait_upstream(self.a)
+        self.b.start_service("balance-history")
+        self.wait("B balance-history adopted canonical fork", lambda:
+                  self.b.rpc("balance-history")("get_snapshot_info")["stable_block_hash"] == self.frontier(self.a)[1])
+        epoch = self.interrupt_pending_recovery("recovery-interrupted", "energy", fork_epoch, fork_height - 1)
+        self.b.start_indexer(recovery_stage="transfer")
+        resumed_epoch = self.interrupt_pending_recovery("recovery-reinterrupted", "transfer", fork_epoch, fork_height - 1)
+        require(resumed_epoch == epoch, "resuming the same recovery incremented reorg epoch")
+
+        self.phase("fork-recovery")
+        self.b.start_indexer()
+        self.wait_upstream(self.b)
+        require(self.pending_recovery_height() is None, "successful recovery retained pending marker")
+        readiness = self.b.rpc("usdb-indexer")("get_readiness")
+        require(readiness["upstream_reorg_epoch"] == epoch, "final recovery changed reorg epoch")
         blocks = self.converge_geth(self.b, restart=True)
         self.passed("fork-recovery", blocks=blocks, state_sha256=self.compare_states("fork-recovery", [self.b]),
-                    original_databases_reused=True, validator_restarted=True)
+                    original_databases_reused=True, validator_restarted=True, interruptions=2, reorg_epoch=epoch)
 
         self.phase("fresh-replay")
         require(not self.c.root.exists(), "fresh replay root already exists")
