@@ -4,6 +4,7 @@
 import argparse
 from contextlib import closing
 import base64
+from decimal import Decimal
 import hashlib
 import json
 import os
@@ -22,10 +23,11 @@ from configure_usdb_pow_calibration_genesis import configure_genesis
 from verify_usdb_profile_e2e import decode_selector, SYSTEM_STATE_SLOTS, USDB_SYSTEM_STATE_ADDRESS
 
 
-SCHEMA = "usdb-independent-upstream-matrix:v2"
+SCHEMA = "usdb-independent-upstream-matrix:v3"
 CASES = ("baseline", "indexer-crash", "crash-recovery", "balance-crash", "balance-recovery",
          "ord-outage", "ord-recovery", "ord-source-outage", "ord-source-recovery",
-         "stable-fork", "recovery-interrupted", "recovery-reinterrupted", "fork-recovery", "fresh-replay")
+         "ord-event-outage", "ord-event-catchup", "stable-fork", "recovery-interrupted",
+         "recovery-reinterrupted", "fork-recovery", "ord-event-rollback", "fresh-replay")
 FAULT_CODES = {"indexer-crash": {-32098}, "balance-crash": {-32041},
                "ord-source-outage": {-32040, -32041}, "stable-fork": {-32042, -32043, -32045, -32046}}
 RECOVERY_ENV = ("USDB_INDEXER_INJECT_REORG_RECOVERY_ENERGY_FAILURES",
@@ -114,8 +116,67 @@ def compare_chain(expected, actual):
             require(left[field] == right[field], f"block {number} {field} mismatch")
 
 
+def validate_transfer_event(before, transferred, later, event, pass_id, old_owner, new_owner):
+    """Check the fixed UIP-0002/0003 transfer fixture independently of replay equality."""
+    prior = before["passes"][pass_id]
+    require(prior["snapshot"]["state"] == "active" and prior["snapshot"]["owner"] == old_owner,
+            "transfer did not start from the active old owner")
+    require(before["height"] + 1 == event["height"] == transferred["height"] < later["height"],
+            "transfer/frozen-energy observation heights were not exercised")
+    balance_before = before["owners"][old_owner]["balance"][-1]["balance"]
+    balance_after = transferred["owners"][old_owner]["balance"][-1]["balance"]
+    require(balance_before - balance_after == 10_000, "transfer did not spend the inscription postage")
+    # This fixture removes only the 10,000-sat postage, leaving the old owner's
+    # integer balance units unchanged. UIP-0003 therefore applies no penalty.
+    units = balance_before // 100_000
+    require(units > 0 and units == balance_after // 100_000, "transfer fixture crossed an energy unit boundary")
+    expected_energy = int(prior["profile"]["pass"]["raw_energy"]) + units
+    satpoint = f"{event['txid']}:0:0"
+    for state in (transferred, later):
+        snapshot = state["passes"][pass_id]["snapshot"]
+        profile = state["passes"][pass_id]["profile"]["pass"]
+        require(snapshot["owner"] == new_owner and snapshot["mint_owner"] == old_owner
+                and snapshot["state"] == "dormant" and snapshot["satpoint"] == satpoint,
+                "transferred pass owner/state/satpoint mismatch")
+        require(profile["owner_script_hash"] == new_owner and profile["state"] == "dormant"
+                and int(profile["raw_energy"]) == expected_energy and int(profile["effective_energy"]) == 0,
+                "transfer settlement or dormant energy freeze mismatch")
+        events = state["ledgers"][pass_id]["history"]["items"]
+        prior_events = before["ledgers"][pass_id]["history"]["items"]
+        # An active-owner transfer records the dormant transition first, then
+        # the ownership change. Both rows are required exactly once and in order.
+        require(len(events) == len(prior_events) + 2 and events[:-2] == prior_events,
+                "missing or duplicate transfer history")
+        changes = events[-2:]
+        require([row["event_type"] for row in changes] == ["state_update", "owner_transfer"]
+                and all(row["block_height"] == event["height"] and row["state"] == "dormant" for row in changes)
+                and changes[0]["owner"] == old_owner and changes[0]["satpoint"] == prior["snapshot"]["satpoint"]
+                and changes[1]["owner"] == new_owner and changes[1]["satpoint"] == satpoint,
+                "transfer history does not identify the mined event")
+        require(state["owners"][old_owner]["active"] is None and state["owners"][new_owner]["active"] is None,
+                "transferred dormant pass remained active for an owner")
+        require(state["owners"][new_owner]["balance"][-1]["balance"] == 9_000,
+                "recipient did not receive the actual inscription output")
+        require(all(row["pass_id"] != pass_id for row in state["candidates"]["items"]),
+                "dormant pass remained a mining candidate")
+    require(transferred["ledgers"][pass_id]["energy"]["items"] == later["ledgers"][pass_id]["energy"]["items"],
+            "dormant energy ledger changed after catch-up")
+    return expected_energy
+
+
+def reject_orphan_selector(rpc, query):
+    """Require a selector mismatch; temporary unavailability is not evidence of rollback."""
+    try:
+        rpc("get_pass_economic_profile", [query])
+    except RPCError as error:
+        require(error.code in FAULT_CODES["stable-fork"], f"unexpected orphan selector error: {error}")
+        return error.code
+    raise ValueError("orphan historical selector was accepted after rollback")
+
+
 class RPCError(ValueError):
     def __init__(self, method, error):
+        self.method = method
         self.code, self.message = error.get("code"), error.get("message")
         super().__init__(f"{method}: {error}")
 
@@ -342,6 +403,7 @@ class Matrix:
         self.context = RegtestWorldSimulator.build_consensus_context_from_state_ref
         script = self.a.rpc("bitcoin")("validateaddress", [args.owner_address])["scriptPubKey"]
         self.owner = hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex()
+        self.owners = [self.owner]
 
     def log(self, message):
         print(f"[upstream-matrix] {message}", flush=True)
@@ -362,7 +424,12 @@ class Matrix:
             except RPCError as error:
                 # Startup/warmup may be retried; selector mismatches and unknown
                 # RPC methods are permanent failures, not readiness delays.
-                if error.code not in {-28, -32040, -32041, -32049}:
+                # Atomic anchor publication can briefly lock the readiness
+                # height read at startup. Retry only this observed read-only
+                # SQLite busy error, within the existing readiness deadline.
+                readiness_busy = error.method == "get_readiness" and error.code == -32603 and error.message == (
+                    "Snapshot history storage failed: action=btc_synced_block_height, error=database is locked")
+                if error.code not in {-28, -32040, -32041, -32049} and not readiness_busy:
                     raise
                 last = str(error)
             except OSError as error:
@@ -445,7 +512,7 @@ class Matrix:
         self.wait_history(self.history_rpc(node), [{"height": height, "block_hash": block_hash}],
                           final_height, min(self.deadline, time.monotonic() + 180))
         return self.capture(node.rpc("usdb-indexer"), node.rpc("balance-history"), height, block_hash,
-                            [self.owner], self.context, history=True)
+                            self.owners, self.context, history=True)
 
     def compare_states(self, label, nodes, *, include_ord=True):
         expected = self.state(self.a)
@@ -638,6 +705,114 @@ class Matrix:
         self.passed("ord-source-recovery", blocks=blocks, source=self.b.inscription_source(),
                     state_sha256=self.compare_states("ord-source-recovery", [self.b]))
 
+    def sign_pass_transfer(self, address):
+        # Sign using A's test wallet, but submit only to the chosen Core node.
+        # The single input carries inscription offset zero to output zero.
+        snapshot = self.state(self.a)["passes"][self.args.pass_id]["snapshot"]
+        txid, vout, offset = snapshot["satpoint"].split(":")
+        require(offset == "0", "transfer fixture requires inscription offset zero")
+        btc = self.a.rpc("bitcoin")
+        output = btc("gettxout", [txid, int(vout), False])
+        require(output is not None and Decimal(str(output["value"])) * 100_000_000 == 10_000,
+                "transfer fixture requires an unspent 10,000-sat inscription output")
+        unsigned = btc("createrawtransaction", [[{"txid": txid, "vout": int(vout)}], [{address: 0.00009}], 0, False])
+        wallet = RPC(self.a.url("bitcoin") + "/wallet/ord-upstream-a", self.a.root / "bitcoin/regtest/.cookie")
+        signed = wallet("signrawtransactionwithwallet", [unsigned])
+        require(signed["complete"] is True, "transfer transaction signing incomplete")
+        return {"txid": btc("decoderawtransaction", [signed["hex"]])["txid"], "hex": signed["hex"],
+                "input_txid": txid, "input_vout": int(vout)}
+
+    def run_ord_event(self, fork_address):
+        self.phase("ord-event-outage")
+        require(self.b.inscription_source() == "ord", "event outage requires Ord inscription source")
+        wallet = RPC(self.a.url("bitcoin") + "/wallet/upstream-matrix", self.a.root / "bitcoin/regtest/.cookie")
+        address = wallet("getnewaddress")
+        script = self.a.rpc("bitcoin")("validateaddress", [address])["scriptPubKey"]
+        recipient = hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex()
+        self.owners.append(recipient)
+        event = self.sign_pass_transfer(address)
+        event.update(recipient_address=address, recipient=recipient)
+        self.event = event
+        btc = self.b.rpc("bitcoin")
+        ord_exit = self.b.stop("ord", crash=True)
+        event["height"] = btc("getblockcount") + 1
+        event["block_hash"] = btc("generateblock", [fork_address, [event["hex"]]])["hash"]
+        block = btc("getblock", [event["block_hash"]])
+        require(block["tx"][1:] == [event["txid"]], "transfer was not actually mined in the outage block")
+        # Advance beyond the stable frontier, and observe two post-transfer
+        # heights so continued dormant growth cannot masquerade as settlement.
+        for _ in range(12):
+            btc("generateblock", [fork_address, []])
+        readiness = self.readiness_blocked("CatchingUp")
+        require(ord_exit == -signal.SIGKILL and readiness["synced_block_height"] < event["height"],
+                "Ord outage did not hold the mined transfer back")
+        self.passed("ord-event-outage", txid=event["txid"], event_height=event["height"],
+                    event_block_hash=event["block_hash"], recipient=recipient, ord_exit_code=ord_exit, readiness=readiness)
+
+        self.phase("ord-event-catchup")
+        self.b.start_ord()
+        self.wait_ord(self.b)
+        self.wait_upstream(self.b)
+        before = self.state(self.b, event["height"] - 1)
+        transferred = self.state(self.b, event["height"])
+        later = self.state(self.b)
+        for label, value in (("before", before), ("transferred", transferred), ("later", later)):
+            self.write_json(self.args.output_dir / f"ord-event-{label}.json", value)
+        event["frozen_energy"] = validate_transfer_event(before, transferred, later, event, self.args.pass_id, self.owner, recipient)
+        req = request.Request(self.b.url("ord") + f"/inscription/{self.args.pass_id}", headers={"Accept": "application/json"})
+        with request.urlopen(req, timeout=5) as response:
+            inscription = json.load(response)
+        require(inscription["address"] == address and inscription["satpoint"] == f"{event['txid']}:0:0",
+                "Ord did not index the real transferred owner/satpoint")
+        event["orphan_query"] = {"view_version": transferred["passes"][self.args.pass_id]["profile"]["view_version"],
+                                 "pass_id": self.args.pass_id, "block_height": event["height"],
+                                 "context": self.context(transferred["state_ref"])}
+        # Reopen the same database at the same head: reprocessing must not add
+        # another transfer row or settle the frozen energy a second time.
+        self.b.stop("usdb-indexer")
+        self.b.start_indexer()
+        self.wait_upstream(self.b)
+        restarted = self.state(self.b)
+        require(self.difference(later, restarted) is None, "catch-up restart duplicated or changed event state")
+        self.write_json(self.args.output_dir / "ord-event-restarted.json", restarted)
+        self.write_json(self.args.output_dir / "ord-event.json", event)
+        self.passed("ord-event-catchup", event_height=event["height"], frozen_energy=event["frozen_energy"],
+                    transfer_count=1, indexer_database_reused=True, restart_state_sha256=self.digest(restarted))
+
+    def verify_event_rollback(self, node):
+        event, height = self.event, self.event["height"]
+        expected, actual = self.state(self.a, height), self.state(node, height)
+        require(self.difference(expected, actual) is None, f"{node.name} post-event historical state diverged")
+        snapshot = actual["passes"][self.args.pass_id]["snapshot"]
+        require(snapshot["owner"] == self.owner and snapshot["state"] == "active"
+                and snapshot["satpoint"] == f"{event['canonical_txid']}:0:0", "rollback retained transferred ownership")
+        require(int(actual["passes"][self.args.pass_id]["profile"]["pass"]["raw_energy"]) == event["canonical_expected_energy"],
+                "rollback did not restore independently projected active energy")
+        require(actual["owners"][event["recipient"]]["active"] is None
+                and not actual["owners"][event["recipient"]]["passes"]["items"]
+                and sum(row["balance"] for row in actual["owners"][event["recipient"]]["balance"]) == 0,
+                "rollback retained recipient pass or balance")
+        history = actual["ledgers"][self.args.pass_id]["history"]["items"]
+        require(all(row["satpoint"].split(":")[0] != event["txid"] for row in history),
+                "orphan transfer remained in canonical history")
+        require(node.rpc("bitcoin")("gettxout", [event["canonical_txid"], 0, False]) is not None,
+                "canonical inscription UTXO missing")
+        require(event["txid"] not in node.rpc("bitcoin")("getrawmempool"), "orphan transfer resurrected in mempool")
+        require(actual["block_hash"] != event["block_hash"], "event block was not actually reorganized")
+        # The selector from the orphan block must be rejected even though the
+        # same historical height is now fully queryable on the canonical chain.
+        rejected = reject_orphan_selector(node.rpc("usdb-indexer"), event["orphan_query"])
+        prefix = self.event_prefix
+        prefix_query = {"view_version": prefix["passes"][self.args.pass_id]["profile"]["view_version"],
+                        "pass_id": self.args.pass_id, "block_height": prefix["height"],
+                        "context": self.context(prefix["state_ref"])}
+        require(node.rpc("usdb-indexer")("get_pass_economic_profile", [prefix_query])
+                == prefix["passes"][self.args.pass_id]["profile"], "unaffected historical selector changed after rollback")
+        self.write_json(self.args.output_dir / f"ord-event-rollback-{node.name}.json", actual)
+        return {"node": node.name, "height": height, "orphan_selector_error": rejected,
+                "raw_energy": actual["passes"][self.args.pass_id]["profile"]["pass"]["raw_energy"],
+                "state_sha256": self.digest(actual)}
+
     def pending_recovery_height(self):
         path = self.b.root / "usdb-indexer/data/miner_pass.db"
         # Read-only SQLite observes the durable marker without changing it or
@@ -719,6 +894,7 @@ class Matrix:
         self.phase("stable-fork")
         before, old_anchor = self.a.height(), decode_selector(self.a.block())["btc_height"]
         fork_height = self.frontier(self.a)[0] + 1
+        self.event_prefix = self.state(self.a, fork_height - 1)
         wallet = RPC(self.a.url("bitcoin") + "/wallet/upstream-matrix", self.a.root / "bitcoin/regtest/.cookie")
         txid = wallet("sendtoaddress", [self.args.owner_address, 1.0])
         self.mine_btc(13)
@@ -744,6 +920,8 @@ class Matrix:
             replacements.append(btc("generateblock", [fork_address, []])["hash"])
         self.wait_ord(self.b)
         self.wait_upstream(self.b)
+        self.run_ord_event(fork_address)
+        self.phase("stable-fork")
         fork = self.state(self.b, canonical_height)
         fork_balance = fork["owners"][self.owner]["balance"][-1]["balance"]
         self.write_json(self.args.output_dir / "divergent-b-state.json", fork)
@@ -762,9 +940,25 @@ class Matrix:
         self.b.stop("balance-history")
         btc("invalidateblock", [replacements[0]])
         btc("reconsiderblock", [original])
+        # A canonical same-owner spend conflicts with B's transfer. It preserves
+        # active ownership and prevents the orphan transaction returning through
+        # mempool relay or being mined again after reconnection.
+        canonical_before = self.state(self.a)
+        canonical_transfer = self.sign_pass_transfer(self.args.owner_address)
+        require(canonical_transfer["input_txid"] == self.event["input_txid"]
+                and canonical_transfer["input_vout"] == self.event["input_vout"], "canonical spend did not conflict with transfer")
+        self.a.rpc("bitcoin")("generateblock", [self.args.miner_address, [canonical_transfer["hex"]]])
+        require(self.a.rpc("bitcoin")("getblockcount") < self.event["height"], "canonical spend is too late for historical comparison")
+        balance_before = canonical_before["owners"][self.owner]["balance"][-1]["balance"]
+        require(balance_before // 100_000 == (balance_before - 1_000) // 100_000,
+                "canonical same-owner fee crossed an energy unit boundary")
+        self.event["canonical_txid"] = canonical_transfer["txid"]
+        self.event["canonical_expected_energy"] = int(canonical_before["passes"][self.args.pass_id]["profile"]["pass"]["raw_energy"]) + (
+            self.event["height"] - canonical_before["height"]) * (balance_before // 100_000)
+        self.write_json(self.args.output_dir / "ord-event.json", self.event)
         # A must exceed B's old fork tip so Ord sees a new trigger block after
         # reconnecting. No database is copied or reset on the recovered node.
-        self.mine_btc(2)
+        self.mine_btc(max(2, self.event["height"] + 12 - self.a.rpc("bitcoin")("getblockcount") + 1))
         btc("setnetworkactive", [True])
         btc("addnode", [f"127.0.0.1:{self.a.ports['btc-p2p']}", "onetry"])
         self.wait_btc(self.b)
@@ -789,6 +983,9 @@ class Matrix:
         self.passed("fork-recovery", blocks=blocks, state_sha256=self.compare_states("fork-recovery", [self.b]),
                     original_databases_reused=True, validator_restarted=True, interruptions=2, reorg_epoch=epoch)
 
+        self.phase("ord-event-rollback")
+        self.passed("ord-event-rollback", **self.verify_event_rollback(self.b))
+
         self.phase("fresh-replay")
         require(not self.c.root.exists(), "fresh replay root already exists")
         self.c.fresh_upstream()
@@ -807,7 +1004,8 @@ class Matrix:
         queried = {e["params"][0]["block_height"] for e in successes}
         require(set(anchors) <= queried, f"full replay skipped historical anchors: {set(anchors) - queried}")
         self.passed("fresh-replay", blocks=blocks, fresh_databases=True, historical_anchors=anchors,
-                    profile_successes=len(successes), state_sha256=self.compare_states("fresh-replay", [self.b, self.c]))
+                    profile_successes=len(successes), event_rollback=self.verify_event_rollback(self.c),
+                    state_sha256=self.compare_states("fresh-replay", [self.b, self.c]))
         require([case["name"] for case in self.report["cases"]] == list(CASES), "matrix coverage incomplete")
         self.check_alive()
 

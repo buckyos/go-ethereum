@@ -24,11 +24,14 @@ balance-history 和 usdb-indexer；只有 BTC/geth 的 P2P 连接共享规范链
 | ord-recovery | Ord 复用原数据库重启、补齐缺失块 | 精确高度及哈希收敛，补做故障期间延后的 Ord owner/content 对照 |
 | ord-source-outage | B 改用 Ord 解析铭文后 SIGKILL Ord，并推进 BTC | indexer 存活但报告 `CatchingUp`，同步高度落后；A 继续出块，B 实际查询未就绪错误并停滞 |
 | ord-source-recovery | Ord 复用原数据库重启，B 保持 Ord 解析模式 | indexer 追平并恢复共识就绪；重启 validator 后完整历史和状态一致 |
+| ord-event-outage | B 位于独立分支且采用 Ord 解析，SIGKILL Ord 后挖入一笔真实 pass 转移 | 区块中确实包含该交易，铭文输出发给新 owner；推进跨稳定前沿后，indexer 仍因 `CatchingUp` 未处理该事件 |
+| ord-event-catchup | Ord 复用原数据库追赶，随后再重启一次 indexer | Ord 与 indexer 的新 owner/satpoint 一致；pass 转为 Dormant，能量按独立数值断言结算并冻结；只有一条转移记录，重启前后完整状态不变 |
 | stable-fork | 隔离 B 的 Core，替换跨稳定前沿的分支，替代块排除 A 已确认的 1 BTC top-up | 同高度 BTC 哈希不同、实际余额相差 1 BTC；A 挖矿推进、B 对新 anchor 拒绝 |
 | recovery-interrupted | B 返回规范链，故障钩子将恢复停在能量回滚前，再 SIGKILL indexer | 持久化 recovery marker 存在，报告 `ReorgRecoveryPending`，实际 validator 查询返回 `-32041` 且不导入新块；强制退出后 marker 保留 |
 | recovery-reinterrupted | 原数据库重启，恢复推进到 transfer tracker 重载前，再 SIGKILL indexer | 第二个钩子确实触发；恢复目标、reorg epoch 保持不变；仍拒绝验证，强制退出后 marker 保留 |
 | fork-recovery | 清除故障注入参数，再次重启 B 的 indexer | pending marker 被清除且 epoch 不额外增加；原数据库恢复规范状态，重启 validator 后全历史一致 |
-| fresh-replay | C 在上述故障恢复后从全新目录加入 | BTC/Ord/两索引器全部重建；geth 从 genesis 以 full 模式执行；每个实际 anchor 都有成功查询；A/B/C 全量状态一致 |
+| ord-event-rollback | B 返回包含冲突交易的规范链，撤销停机窗口中的转移 | 旧 owner 与 Active 状态恢复，能量符合规范链投影；新 owner 无残留 pass/余额，孤块 selector 被原生 mismatch 拒绝，未受重组影响的历史 selector 仍可用 |
+| fresh-replay | C 在上述故障恢复后从全新目录加入 | BTC/Ord/两索引器全部重建；geth 从 genesis 以 full 模式执行；每个实际 anchor 都有成功查询；A/B/C 全量状态一致，C 也通过事件撤销与历史 selector 检查 |
 
 上游中断及分叉用例必须先证明健康节点继续出块，并让新块引用新的 BTC anchor，防止缓存
 旧 profile 使测试失去意义。失败记录必须来自 B 的 geth，而不是单独发送一个
@@ -47,8 +50,25 @@ BTC 稳定延迟固定为 10。标准 pass 在分叉点之前铸造；回滚分�
 `HISTORY_NOT_AVAILABLE`，不会把永久 selector 错误当作启动延迟。
 状态对照还比较各自 Ord 的铭文 owner、完整铭文信息和实际 mint 内容；仅在
 `ord-outage` 中暂缓 Ord 对照，恢复时必须补验。B 切换为 Ord 解析后一直保留
-该配置，A/C 使用 Core 解析。当前故障窗口主要推进空块；它覆盖上游可用性、
-落后追赶及既有铭文的重建，尚不覆盖故障窗口内新增铭文或转移的组合。
+该配置，A/C 使用 Core 解析。前两个 Ord 故障场景检查上游可用性；随后
+`ord-event-*` 场景在独立分支上增加真实转移，检查缺失事件追赶、重复处理与撤销。
+
+事件用例直接花费 offset 为 0 的 10,000 sat 铭文输出，将 9,000 sat 发给新
+owner、支付 1,000 sat 手续费。交易由 A 的隔离测试钱包签名，仅挖入 B 的分支。
+转移导致旧 owner 减少 10,000 sat，但余额的 `floor(balance / 100000)` 保持
+不变，所以该夹具不触发余额 unit 减少惩罚。按 UIP-0002/0003，事件高度能量
+应等于前一高度能量加一个区块的余额 unit 数，之后进入 Dormant 并保持不变。
+检查事件高度及两个区块后的结果，同时检查 active owner 集合、候选集合、
+完整历史和能量账本。完整历史必须只新增一条 `state_update` 和一条
+`owner_transfer`，顺序固定；同一数据库重启后的完整快照必须完全一致。
+
+返回规范链前，A 会把同一铭文输出花费回原 owner，形成与 B 转移冲突的规范
+交易。它保留 Active 状态，并阻止被撤销交易通过 mempool 再次广播或挖入。
+规范链费用同样不跨余额 unit 边界，恢复后的能量按重组前规范状态独立投影。
+B/C 在原事件高度重新查询规范状态：新 owner 无经济残留、旧 owner 为 Active，
+事件分支的历史 selector 必须返回永久 mismatch；`SNAPSHOT_NOT_READY`、
+`HISTORY_NOT_AVAILABLE` 或服务不通都不能满足这一拒绝门禁。分叉前保存的
+规范历史 selector 必须继续返回相同 profile。
 
 恢复中断复用 indexer 已有的 regtest 故障钩子：
 `USDB_INDEXER_INJECT_REORG_RECOVERY_ENERGY_FAILURES` 与
@@ -58,6 +78,7 @@ BTC 稳定延迟固定为 10。标准 pass 在分叉点之前铸造；回滚分�
 `miner_pass.db` 中的 `upstream_reorg_recovery_pending_height`，在每次强制退出
 前后核验。第二次中断位于能量回滚之后、transfer tracker 重载之前。普通重启
 及另一钩子的重启都会清除继承的注入参数，最终恢复不得残留 pending marker。
+真实转移的撤销也经过这两次恢复中断，最终由全新节点 C 的完整重放对照收尾。
 
 恢复分支编排时先停 B 的 balance-history，完成 Core 的 invalidate/reconsider、
 P2P 收敛与 Ord 触发块，再复用原 balance-history 数据库启动。这样它只接收
@@ -96,13 +117,19 @@ scripts/usdb/run_long_ci.sh weekly upstream-fault-matrix --run-only
 
 ## 后续扩展顺序
 
-1. 在 Ord 停机窗口中加入实际新铭文或转移，覆盖缺失事件的追赶与回滚。
-2. 增加上游恢复后 validator 不重启的缓存恢复专项，明确自动恢复保证。
+1. 增加上游恢复后 validator 不重启的缓存恢复专项，明确自动恢复保证。
+2. 按需扩展新 mint/remint、跨余额 unit 的转移，以及同区块事件排序组合。
 3. 在固定短矩阵稳定后，再加入不同重组深度与故障时点的有限种子。每个种子
    从空环境开始，单个种子内保留故障前后的状态联系。
 
 这些扩展不应通过延长 worldsim 轮次实现；K 的 50400 区块窗口边界由现有
 独立 K oracle 覆盖。
+
+更新到 USDB `afd21a7` 后，原子 snapshot anchor 发布可能在启动时使
+`get_readiness` 的 `btc_synced_block_height` 查询短暂返回 SQLite
+`database is locked`。矩阵仅对这个明确的 readiness 错误沿用有时限的重试，
+其他内部错误或 profile 查询中的同类错误仍立即失败，不扩大历史 selector
+拒绝门禁的允许错误集合。
 
 ## 本地验收记录（2026-09-06，v1 六阶段基线）
 
@@ -144,3 +171,30 @@ scripts/usdb/run_long_ci.sh weekly upstream-fault-matrix --run-only
 2500 轮 world-soak 和时间预算保持不变，本轮没有重跑完整 weekly。上游故障
 与重组恢复阶段仍明确重启 validator；仅 Core 解析模式的 Ord 停机阶段验证了
 validator 无需重启即可继续出块。上述结果不扩展为所有故障的自动恢复保证。
+
+## 本地验收记录（2026-09-06，v3 故障窗口真实转移）
+
+使用 CI lock 中的 USDB `afd21a7` 隔离源码，以 Rust 1.91.0 编译两索引器，
+搭配 Go 1.18.5、Core 28.1、Ord 0.23.3 和本地 Python 3.11.2，通过真实
+`run_long_ci.sh weekly upstream-fault-matrix --run-only` 入口验收。报告 schema
+为 `usdb-independent-upstream-matrix:v3`，17 个阶段全部通过，矩阵主体及清理
+耗时 307.67 秒，不含编译和 A 的初始化。
+
+- B 在 Ord 停机期间将真实转移挖入高度 181，indexer 停在 170；Ord 恢复后
+  追赶到稳定高度 183，新 owner/satpoint 与 Ord 一致。
+- 转移时 raw energy 按独立断言从 45000 增至 46000，Dormant 后保持 46000；
+  `state_update`、`owner_transfer` 各一条且顺序正确。原数据库重启后全量状态
+  摘要保持不变，未重复处理或结算。
+- 返回规范链期间的两次强制退出均保留高度 156 的恢复标记，epoch 保持 2。
+  最终恢复清除标记，规范链同 owner 冲突交易排除了孤块转移及其 mempool 复活。
+- B/C 在高度 181 的规范历史状态完全一致：旧 owner 为 Active，raw energy
+  独立投影为 60000，新 owner 无残留 pass/余额；孤块 selector 均返回 `-32042`，
+  分叉前的历史 selector 仍返回原 profile。
+- C 从空目录重放全部 12 个 USDB 区块，实际验证 6 个 payload anchor，另外
+  核验事件高度 181 的历史状态和 selector。最终稳定 BTC 高度 184 上的
+  A/B/C 全量状态、历史账本与 Ord 铭文信息一致。
+- 19 项矩阵门禁/生命周期测试、16 项 long-CI 测试、6 项 revision-lock 测试
+  和 ShellCheck 通过；无残留测试服务进程。未修改 2500 轮配置或执行完整 weekly。
+
+这条确定性用例覆盖真实 transfer；新 mint/remint 与跨余额 unit 惩罚组合仍按
+上述后续计划补充。validator 在故障恢复后仍显式重启，自动恢复保证不在本轮扩展内。

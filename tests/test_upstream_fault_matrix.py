@@ -8,13 +8,15 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/usdb"))
-from upstream_fault_matrix import (Matrix, Node, RECOVERY_ENV, compare_chain, ports, validate_fault,
-                                   validate_ord_independence, validate_interrupted_recovery)
+from upstream_fault_matrix import (Matrix, Node, RECOVERY_ENV, RPCError, compare_chain, ports, validate_fault,
+                                   validate_ord_independence, validate_interrupted_recovery,
+                                   validate_transfer_event, reject_orphan_selector)
 
 
 class FaultCoverageTests(unittest.TestCase):
@@ -145,7 +147,107 @@ class FullReplayTests(unittest.TestCase):
             self.assertFalse(list(Path(work).glob("run-*")))
 
 
+class TransferEventTests(unittest.TestCase):
+    def fixture(self):
+        mint = {"event_type": "mint", "block_height": 133, "owner": "old", "satpoint": "mint:0:0"}
+        before = {"height": 180, "passes": {"pass": {
+            "snapshot": {"owner": "old", "state": "active", "satpoint": "mint:0:0"}, "profile": {"pass": {"raw_energy": "45000"}}}},
+            "owners": {"old": {"balance": [{"balance": 100010000}]}},
+            "ledgers": {"pass": {"history": {"items": [mint]}}}}
+        transferred = {"height": 181, "passes": {"pass": {
+            "snapshot": {"owner": "new", "mint_owner": "old", "state": "dormant", "satpoint": "tx:0:0"},
+            "profile": {"pass": {"owner_script_hash": "new", "state": "dormant", "raw_energy": "46000", "effective_energy": "0"}}}},
+            "owners": {"old": {"active": None, "balance": [{"balance": 100000000}]},
+                       "new": {"active": None, "balance": [{"balance": 9000}]}},
+            "ledgers": {"pass": {"history": {"items": [mint,
+                {"event_type": "state_update", "block_height": 181, "state": "dormant", "owner": "old", "satpoint": "mint:0:0"},
+                {"event_type": "owner_transfer", "block_height": 181, "state": "dormant", "owner": "new", "satpoint": "tx:0:0"}]},
+                                  "energy": {"items": [{"record_block_height": 181, "energy": "46000"}]}}},
+            "candidates": {"items": []}}
+        later = copy.deepcopy(transferred)
+        later["height"] = 183
+        return before, transferred, later, {"height": 181, "txid": "tx"}
+
+    def check(self, fixture):
+        return validate_transfer_event(*fixture, "pass", "old", "new")
+
+    def test_transfer_settles_once_and_freezes_energy(self):
+        self.assertEqual(self.check(self.fixture()), 46000)
+
+    def test_rejects_wrong_owner_energy_or_retained_economic_capability(self):
+        mutations = (
+            lambda s: s["passes"]["pass"]["snapshot"].update(owner="old"),
+            lambda s: s["passes"]["pass"]["snapshot"].update(satpoint="wrong:0:0"),
+            lambda s: s["passes"]["pass"]["profile"]["pass"].update(raw_energy="45999"),
+            lambda s: s["passes"]["pass"]["profile"]["pass"].update(effective_energy="46000"),
+            lambda s: s["owners"]["old"].update(active={"inscription_id": "pass"}),
+            lambda s: s["owners"]["new"]["balance"][0].update(balance=0),
+            lambda s: s["candidates"]["items"].append({"pass_id": "pass"}),
+        )
+        for i, mutate in enumerate(mutations):
+            with self.subTest(mutation=i):
+                fixture = self.fixture()
+                mutate(fixture[1])
+                with self.assertRaises(ValueError):
+                    self.check(fixture)
+
+    def test_rejects_missing_duplicate_or_reapplied_transfer(self):
+        for mode in ("missing", "duplicate", "reordered", "growth", "ledger"):
+            with self.subTest(mode=mode):
+                fixture = self.fixture()
+                later = fixture[2]
+                rows = later["ledgers"]["pass"]["history"]["items"]
+                if mode == "missing":
+                    rows.pop()
+                elif mode == "duplicate":
+                    rows.append(copy.deepcopy(rows[-1]))
+                elif mode == "reordered":
+                    rows[-1], rows[-2] = rows[-2], rows[-1]
+                elif mode == "growth":
+                    later["passes"]["pass"]["profile"]["pass"]["raw_energy"] = "48000"
+                else:
+                    later["ledgers"]["pass"]["energy"]["items"].append({"record_block_height": 183, "energy": "46000"})
+                with self.assertRaises(ValueError):
+                    self.check(fixture)
+
+    def test_orphan_selector_needs_permanent_mismatch_not_unavailability(self):
+        for code in (-32041, -32049, -32098):
+            with self.subTest(code=code):
+                def rpc(_method, _params):
+                    raise RPCError("get_pass_economic_profile", {"code": code})
+                with self.assertRaisesRegex(ValueError, "unexpected orphan selector error"):
+                    reject_orphan_selector(rpc, {})
+        with self.assertRaisesRegex(ValueError, "was accepted"):
+            reject_orphan_selector(lambda *_: {}, {})
+        def mismatch(_method, _params):
+            raise RPCError("get_pass_economic_profile", {"code": -32042})
+        self.assertEqual(reject_orphan_selector(mismatch, {}), -32042)
+
+
 class RecoveryLifecycleTests(unittest.TestCase):
+    def test_startup_retries_only_the_known_readiness_lock(self):
+        matrix = Matrix.__new__(Matrix)
+        matrix.deadline = time.monotonic() + 3
+        matrix.check_alive = lambda: None
+        matrix.log = lambda _: None
+        busy = "Snapshot history storage failed: action=btc_synced_block_height, error=database is locked"
+        for method, message, retry in (("get_readiness", busy, True), ("get_pass_economic_profile", busy, False),
+                                       ("get_readiness", "database disk image is malformed", False)):
+            with self.subTest(method=method, message=message):
+                calls = []
+                def ready():
+                    calls.append(True)
+                    if len(calls) == 1:
+                        raise RPCError(method, {"code": -32603, "message": message})
+                    return True
+                if retry:
+                    matrix.wait("readiness", ready, seconds=1, interval=0)
+                    self.assertEqual(len(calls), 2)
+                else:
+                    with self.assertRaises(RPCError):
+                        matrix.wait("readiness", ready, seconds=1, interval=0)
+                    self.assertEqual(len(calls), 1)
+
     def test_fault_hooks_do_not_leak_into_later_restarts(self):
         args = SimpleNamespace(work_dir=Path("/tmp/unused-matrix-test"), port_base=22400,
                                balance_history=Path("/unused/balance-history"), indexer=Path("/unused/indexer"))
