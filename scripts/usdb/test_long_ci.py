@@ -60,6 +60,7 @@ class LongCiRunnerTests(unittest.TestCase):
             result.stdout.splitlines(),
             [
                 "world-soak",
+                "upstream-fault-matrix",
                 "economic-capacity",
                 "balance-history-extended",
                 "release-e2e",
@@ -185,6 +186,12 @@ main "$@"
         self.assertIn("weekly world-soak --prepare-only", integration)
         self.assertIn("weekly world-soak --run-only", integration)
         self.assertIn("matrix.shard == 'world-soak' && 300 || 360", integration)
+
+    def test_upstream_matrix_has_separate_build_and_short_simulation_budget(self) -> None:
+        integration = (WORKFLOWS / "usdb-integration.yml").read_text(encoding="utf-8")
+        self.assertIn("weekly upstream-fault-matrix --prepare-only", integration)
+        self.assertIn("weekly upstream-fault-matrix --run-only", integration)
+        self.assertIn("matrix.shard == 'upstream-fault-matrix' && 22", integration)
 
     def test_runner_builds_sourcedao_artifacts_for_activation_shard(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")

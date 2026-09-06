@@ -20,6 +20,7 @@ declare -a NIGHTLY_SHARDS=(
 )
 declare -a WEEKLY_SHARDS=(
   world-soak
+  upstream-fault-matrix
   economic-capacity
   balance-history-extended
   release-e2e
@@ -147,7 +148,7 @@ prepare_usdb_service_binaries() {
   local shard="$2"
 
   case "${tier}:${shard}" in
-    nightly:go-profile | nightly:go-activation | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:release-e2e)
+    nightly:go-profile | nightly:go-activation | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:upstream-fault-matrix | weekly:release-e2e)
       # Build each package with the same selection used by its later cargo run.
       # A combined build unifies dependency features and does not warm the
       # single-package fingerprints used inside the readiness window.
@@ -163,6 +164,16 @@ prepare_usdb_service_binaries() {
           --bin balance-history
       ;;
   esac
+  if [[ "${tier}:${shard}" == weekly:upstream-fault-matrix ]]; then
+    # Keep Go compilation outside the twenty-minute fault simulation budget.
+    source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
+    run_case go-upstream-matrix-build \
+      usdb_build_geth "$ROOT_DIR" "$WORK_ROOT/upstream-matrix/bin/geth"
+    local package
+    for package in balance-history usdb-indexer; do
+      cp "${CARGO_TARGET_DIR:-$USDB_REPO_DIR/src/btc/target}/debug/$package" "$WORK_ROOT/upstream-matrix/bin/$package"
+    done
+  fi
 }
 
 prepare_source_dao_artifacts() {
@@ -282,6 +293,16 @@ run_nightly() {
 run_weekly() {
   local shard="$1"
   case "$shard" in
+    upstream-fault-matrix)
+      require_regtest_tools
+      run_case upstream-fault-matrix \
+        env USDB_REPO_DIR="$USDB_REPO_DIR" BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          GETH_BIN="$WORK_ROOT/upstream-matrix/bin/geth" \
+          MATRIX_SKIP_BUILD=1 \
+          MATRIX_WORK_ROOT="$WORK_ROOT/upstream-matrix" \
+          MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/upstream-fault-matrix" \
+          bash "$ROOT_DIR/scripts/usdb/run_usdb_upstream_fault_matrix.sh"
+      ;;
     world-soak)
       require_regtest_tools
       run_case world-readiness \

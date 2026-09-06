@@ -194,6 +194,10 @@ jobs:
             shard: world-soak
             artifact_suffix: world-soak-seed-43
             world_soak_seeds: '43'
+          - name: upstream-fault-matrix
+            shard: upstream-fault-matrix
+            artifact_suffix: upstream-fault-matrix
+            world_soak_seeds: ''
           - name: economic-capacity
             shard: economic-capacity
             artifact_suffix: economic-capacity
@@ -276,10 +280,20 @@ jobs:
           USDB_WORKSPACE_ROOT: ${{ github.workspace }}
         run: go-ethereum/scripts/usdb/run_long_ci.sh weekly world-soak --prepare-only
 
+      - name: Build independent upstream matrix services
+        if: matrix.shard == 'upstream-fault-matrix'
+        timeout-minutes: 40
+        env:
+          USDB_LONG_CI_OUTPUT_DIR: ${{ runner.temp }}/long-ci-output
+          USDB_LONG_CI_WORK_DIR: ${{ runner.temp }}/long-ci-work
+          USDB_LONG_CI_ARTIFACT_NAME: usdb-weekly-${{ matrix.artifact_suffix }}-${{ github.sha }}
+          USDB_WORKSPACE_ROOT: ${{ github.workspace }}
+        run: go-ethereum/scripts/usdb/run_long_ci.sh weekly upstream-fault-matrix --prepare-only
+
       - name: Run weekly shard
         # Give all 2500 rounds their own budget after compilation, retaining
         # headroom for setup and log upload within the six-hour job limit.
-        timeout-minutes: ${{ matrix.shard == 'world-soak' && 300 || 360 }}
+        timeout-minutes: ${{ matrix.shard == 'upstream-fault-matrix' && 22 || matrix.shard == 'world-soak' && 300 || 360 }}
         env:
           BITCOIN_BIN_DIR: ${{ runner.temp }}/regtest-tools/bitcoin/bin
           ORD_BIN: ${{ runner.temp }}/regtest-tools/ord/ord
@@ -292,6 +306,8 @@ jobs:
           chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
           if [[ "${{ matrix.shard }}" == world-soak ]]; then
             go-ethereum/scripts/usdb/run_long_ci.sh weekly world-soak --run-only
+          elif [[ "${{ matrix.shard }}" == upstream-fault-matrix ]]; then
+            go-ethereum/scripts/usdb/run_long_ci.sh weekly upstream-fault-matrix --run-only
           else
             go-ethereum/scripts/usdb/run_long_ci.sh weekly "${{ matrix.shard }}"
           fi

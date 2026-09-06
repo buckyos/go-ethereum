@@ -88,7 +88,7 @@ USDB_FAST_SCOPE=sourcedao scripts/usdb/run_fast_ci.sh
 | Workflow | 默认触发 | 内容 |
 | --- | --- | --- |
 | `usdb-nightly.yml` | 每日 `08:37 UTC`，也可手工运行 | profile、activation/bootstrap、balance-history、indexer protocol/reorg/validator |
-| `usdb-weekly.yml` | 每周日 `09:23 UTC`，也可手工运行 | 完整 Nightly，加 world soak、economic capacity、balance-history extended、public release E2E |
+| `usdb-weekly.yml` | 每周日 `09:23 UTC`，也可手工运行 | 完整 Nightly，加 world soak、独立上游故障矩阵、economic capacity、balance-history extended、public release E2E |
 | `usdb-integration.yml` | reusable only | 校验 lock、准备固定 regtest 工具、按 shard 执行和归档 |
 
 Nightly / Weekly 始终以触发 workflow 的 Go SHA 为 coordinator，并按
@@ -119,6 +119,11 @@ World-soak 编译独立为 `Build world-soak services` 步骤，限时 40 分钟
 超时仍判失败。`seed-*-report.jsonl` 保存逐轮及分阶段耗时，成功的
 `seed-*-summary.json` 汇总均值、P95 和最后 100 轮均值，完整耗时为 `duration_seconds`。
 每轮含动作块和稳定确认块，不能把 2500 tick 当作只有 2500 个 BTC 块。
+
+Weekly 还运行独立的 [多节点上游故障矩阵](usdb-independent-upstream-matrix.md)：
+三个 geth 各用一套 BTC/Ord/balance-history/indexer，覆盖中断、稳定分叉、
+恢复与空目录完整重放。该 shard 单独编译，模拟内部预算 20 分钟；不改变
+world-soak 的轮次与种子。
 
 等待重组收敛时，模拟器只将精确的 `-32041 / SNAPSHOT_NOT_READY` 视为可重试状态；
 持续未就绪仍然超时，高度、哈希和 consensus readiness 校验保持严格。

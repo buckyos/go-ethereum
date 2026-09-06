@@ -198,6 +198,7 @@ run_go_checks() {
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_usdb_deep_reorg_guard.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_usdb_runtime_deep_reorg.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_long_ci.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_upstream_fault_matrix.py"
 }
 
 run_rust_checks() {
