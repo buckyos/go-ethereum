@@ -27,11 +27,13 @@ declare -a WEEKLY_SHARDS=(
 
 usage() {
   cat <<'EOF'
-Usage: scripts/usdb/run_long_ci.sh <nightly|weekly> <shard>
+Usage: scripts/usdb/run_long_ci.sh <nightly|weekly> <shard> [--prepare-only|--run-only]
        scripts/usdb/run_long_ci.sh <nightly|weekly> --list
 
 Run one deterministic long-CI shard. External Bitcoin Core and ord binaries are
 provided through BITCOIN_BIN_DIR and ORD_BIN for shards that require regtest.
+Use --prepare-only followed by --run-only in the same workspace/toolchain to
+give compilation and simulation independent CI step budgets. The default runs both.
 EOF
 }
 
@@ -282,6 +284,9 @@ run_weekly() {
   case "$shard" in
     world-soak)
       require_regtest_tools
+      run_case world-readiness \
+        env PYTHONDONTWRITEBYTECODE=1 \
+          python3 "$USDB_REPO_DIR/tests/test_regtest_world_readiness.py"
       run_case world-reorg-wallet-recovery \
         env PYTHONDONTWRITEBYTECODE=1 BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
           python3 "$USDB_REPO_DIR/tests/test_regtest_world_reorg.py"
@@ -337,6 +342,7 @@ run_weekly() {
 main() {
   local tier="${1:-}"
   local shard="${2:-}"
+  local phase="${3:-all}"
   [[ "$tier" == nightly || "$tier" == weekly ]] || {
     usage >&2
     exit 2
@@ -345,18 +351,27 @@ main() {
     list_shards "$tier"
     exit 0
   fi
-  [[ -n "$shard" && $# == 2 ]] || {
+  [[ -n "$shard" && ( $# == 2 || $# == 3 ) ]] || {
     usage >&2
     exit 2
   }
   validate_shard "$tier" "$shard"
+  case "$phase" in
+    all | --prepare-only | --run-only) ;;
+    *) usage >&2; exit 2 ;;
+  esac
 
   require_directory "$USDB_REPO_DIR" usdb
   require_directory "$SOURCE_DAO_REPO" SourceDAO
   mkdir -p "$OUTPUT_ROOT" "$WORK_ROOT"
   trap collect_diagnostics EXIT
-  prepare_usdb_service_binaries "$tier" "$shard"
-  prepare_source_dao_artifacts "$tier" "$shard"
+  if [[ "$phase" != --run-only ]]; then
+    prepare_usdb_service_binaries "$tier" "$shard"
+    prepare_source_dao_artifacts "$tier" "$shard"
+  fi
+  if [[ "$phase" == --prepare-only ]]; then
+    return 0
+  fi
 
   case "$tier" in
     nightly) run_nightly "$shard" ;;

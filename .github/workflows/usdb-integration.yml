@@ -266,8 +266,19 @@ jobs:
           name: usdb-regtest-tools-${{ github.sha }}
           path: ${{ runner.temp }}/regtest-tools
 
+      - name: Build world-soak services
+        if: matrix.shard == 'world-soak'
+        timeout-minutes: 40
+        env:
+          USDB_LONG_CI_OUTPUT_DIR: ${{ runner.temp }}/long-ci-output
+          USDB_LONG_CI_WORK_DIR: ${{ runner.temp }}/long-ci-work
+          USDB_LONG_CI_ARTIFACT_NAME: usdb-weekly-${{ matrix.artifact_suffix }}-${{ github.sha }}
+          USDB_WORKSPACE_ROOT: ${{ github.workspace }}
+        run: go-ethereum/scripts/usdb/run_long_ci.sh weekly world-soak --prepare-only
+
       - name: Run weekly shard
-        # Keep room for log upload before the hosted runner's six-hour job limit.
+        # Give all 2500 rounds their own budget after compilation, retaining
+        # headroom for setup and log upload within the six-hour job limit.
         timeout-minutes: ${{ matrix.shard == 'world-soak' && 300 || 360 }}
         env:
           BITCOIN_BIN_DIR: ${{ runner.temp }}/regtest-tools/bitcoin/bin
@@ -279,7 +290,11 @@ jobs:
           WORLD_SOAK_SEEDS: ${{ matrix.world_soak_seeds }}
         run: |
           chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
-          go-ethereum/scripts/usdb/run_long_ci.sh weekly "${{ matrix.shard }}"
+          if [[ "${{ matrix.shard }}" == world-soak ]]; then
+            go-ethereum/scripts/usdb/run_long_ci.sh weekly world-soak --run-only
+          else
+            go-ethereum/scripts/usdb/run_long_ci.sh weekly "${{ matrix.shard }}"
+          fi
 
       - name: Upload weekly logs and reports
         if: always()

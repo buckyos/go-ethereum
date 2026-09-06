@@ -102,10 +102,19 @@ commit/reveal 恢复与继续铭刻。默认 `ORD_POLLING_INTERVAL=200ms`、
 `USDB_UPSTREAM_POLL_INTERVAL_MS=200`，只压缩轮询等待，稳定确认深度与校验频率保持不变。
 需要做旧配置对照时，可分别覆盖为 `5s` 和 `5000`。
 
-World-soak 执行步骤限时 300 分钟，为 360 分钟 job 上限内的准备和日志上传留出空间；
+World-soak 编译独立为 `Build world-soak services` 步骤，限时 40 分钟；
+随后模拟执行步骤单独限时 300 分钟，为 360 分钟 job 上限内的其他准备和日志上传留出空间。
+两个步骤分别调用 `run_long_ci.sh weekly world-soak --prepare-only` 和 `--run-only`，
+共用同一 checkout、工具链和 Cargo target；省略参数的本地入口仍依次执行构建和测试。
 超时仍判失败。`seed-*-report.jsonl` 保存逐轮及分阶段耗时，成功的
 `seed-*-summary.json` 汇总均值、P95 和最后 100 轮均值，完整耗时为 `duration_seconds`。
 每轮含动作块和稳定确认块，不能把 2500 tick 当作只有 2500 个 BTC 块。
+
+等待重组收敛时，模拟器只将精确的 `-32041 / SNAPSHOT_NOT_READY` 视为可重试状态；
+持续未就绪仍然超时，高度、哈希和 consensus readiness 校验保持严格。
+runner 在真实钱包回归之前执行等待流程的错误注入测试。
+历史 Pass 查询让最新事件聚合驱动连接，避免 SQLite 先扫描状态/owner 索引后
+反复执行聚合；沿用 `MAX(id)`、历史高度边界和分页顺序，不使用当前状态代替历史结果。
 
 独立的较短 seed 不继承上一条链的累计状态；跨 job 延续同一条链则需要完整的
 Bitcoin/钱包、Ord、balance-history、indexer 和 simulator 一致 checkpoint，单独的

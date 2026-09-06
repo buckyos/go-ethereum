@@ -149,6 +149,43 @@ class LongCiRunnerTests(unittest.TestCase):
         self.assertIn("run_case rust-balance-history-build", runner)
         self.assertIn("-p balance-history \\\n          --bin balance-history", runner)
 
+    def test_runner_separates_preparation_from_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            env = os.environ.copy()
+            env.update({
+                "USDB_REPO_DIR": root,
+                "SOURCE_DAO_REPO": root,
+                "USDB_LONG_CI_OUTPUT_DIR": str(pathlib.Path(root) / "output"),
+                "USDB_LONG_CI_WORK_DIR": str(pathlib.Path(root) / "work"),
+            })
+            harness = f"""
+source {shlex.quote(str(RUNNER))}
+prepare_usdb_service_binaries() {{ echo services-built; }}
+prepare_source_dao_artifacts() {{ echo artifacts-prepared; }}
+run_weekly() {{ echo simulation-ran; }}
+main "$@"
+"""
+            for args, expected in (
+                ([], ["services-built", "artifacts-prepared", "simulation-ran"]),
+                (["--prepare-only"], ["services-built", "artifacts-prepared"]),
+                (["--run-only"], ["simulation-ran"]),
+            ):
+                with self.subTest(args=args):
+                    result = subprocess.run(
+                        ["bash", "-c", harness, "test", "weekly", "world-soak", *args],
+                        env=env, capture_output=True, text=True, check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), expected)
+
+    def test_world_soak_keeps_2500_rounds_after_separate_build(self) -> None:
+        runner = RUNNER.read_text(encoding="utf-8")
+        integration = (WORKFLOWS / "usdb-integration.yml").read_text(encoding="utf-8")
+        self.assertIn('WORLD_SOAK_BLOCKS="${WORLD_SOAK_BLOCKS:-2500}"', runner)
+        self.assertIn("weekly world-soak --prepare-only", integration)
+        self.assertIn("weekly world-soak --run-only", integration)
+        self.assertIn("matrix.shard == 'world-soak' && 300 || 360", integration)
+
     def test_runner_builds_sourcedao_artifacts_for_activation_shard(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertIn("prepare_source_dao_artifacts \"$tier\" \"$shard\"", runner)
