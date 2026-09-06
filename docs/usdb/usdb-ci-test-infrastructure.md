@@ -174,6 +174,12 @@ Fast、Nightly、Weekly 只表示证据等级，不改变 GitHub Release 的完�
 - ShellCheck 及 Python verifier/configuration、bootstrap fixture、deep-reorg
   guard/runtime 测试。
 
+chain 容器恢复验收位于 `tests/test_runtime_deep_reorg.py`，共享 fixture 位于
+`tests/common/runtime_guard.py`；原 `scripts/usdb/test_usdb_runtime_deep_reorg.py` 保留为 CI 入口。
+这些测试运行真实 shell 入口和 Python guard，使用回环 HTTP RPC 与可记录启动/停止的 geth 替身，覆盖
+启动依赖未就绪、运行中 HTTP 错误/超时/无效 JSON、原 miner 参数恢复、故障期间 epoch 前进/回退、
+持久停机及 SIGTERM 子进程回收。它们验证容器内部恢复，不替代真实 Docker 或整机重启验收。
+
 gofmt gate 排除 `crypto/secp256k1/libsecp256k1/**`。其中被跟踪的
 `dummy.go` 是上游 vendoring workaround，旧 gofmt 会对其产生无意义机械改写。
 

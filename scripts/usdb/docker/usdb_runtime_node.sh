@@ -118,21 +118,9 @@ guard_args=(
   --max-consecutive-errors "${guard_max_errors}"
 )
 
-hold_halted() {
-  echo "USDB node remains halted; preserve ${guard_state_dir} and replace this network generation before clearing chain data" >&2
-  trap 'exit 0' TERM INT
-  while true; do
-    sleep 3600 &
-    wait $! || true
-  done
-}
-
-if ! python3 "${guard_script}" check "${guard_args[@]}"; then
-  hold_halted
-fi
-
 geth_pid=""
 guard_pid=""
+sleep_pid=""
 # shellcheck disable=SC2317  # Invoked indirectly by the signal trap below.
 stop_children() {
   if [[ -n "${guard_pid}" ]] && kill -0 "${guard_pid}" 2>/dev/null; then
@@ -141,33 +129,90 @@ stop_children() {
   if [[ -n "${geth_pid}" ]] && kill -0 "${geth_pid}" 2>/dev/null; then
     kill -TERM "${geth_pid}" 2>/dev/null || true
   fi
+  if [[ -n "${sleep_pid}" ]] && kill -0 "${sleep_pid}" 2>/dev/null; then
+    kill -TERM "${sleep_pid}" 2>/dev/null || true
+  fi
 }
 trap 'stop_children; wait || true; exit 0' TERM INT
 
-"${geth_bin}" "${args[@]}" &
-geth_pid=$!
-python3 "${guard_script}" watch "${guard_args[@]}" &
-guard_pid=$!
+# Track every child so Docker SIGTERM also interrupts checks and retry delays.
+guard_sleep() {
+  sleep "$1" &
+  sleep_pid=$!
+  wait "${sleep_pid}" || true
+  sleep_pid=""
+}
 
-while kill -0 "${geth_pid}" 2>/dev/null && kill -0 "${guard_pid}" 2>/dev/null; do
-  sleep 1
+hold_halted() {
+  echo "USDB node remains halted; preserve ${guard_state_dir} and replace this network generation before clearing chain data" >&2
+  while true; do
+    guard_sleep 3600
+  done
+}
+
+# Guard exit codes are shared with usdb_deep_reorg_guard.py. Only a persisted
+# incident (42) latches the node. Monitoring failures (43) keep geth stopped
+# until a fresh check succeeds against the same baseline, without a controller.
+handle_guard_failure() {
+  local guard_status="$1"
+  case "${guard_status}" in
+    42)
+      hold_halted
+      ;;
+    43)
+      echo "USDB chain waiting for upstream guard recovery; geth is stopped, retry_delay_secs=${guard_poll_interval}" >&2
+      guard_sleep "${guard_poll_interval}"
+      ;;
+    *)
+      echo "USDB deep-reorg guard exited unexpectedly: status=${guard_status}; stopping container" >&2
+      # A monitor that exits successfully is also no longer protecting geth.
+      if [[ "${guard_status}" == "0" ]]; then
+        guard_status=1
+      fi
+      exit "${guard_status}"
+      ;;
+  esac
+}
+
+while true; do
+  python3 "${guard_script}" check "${guard_args[@]}" &
+  guard_pid=$!
+  guard_status=0
+  wait "${guard_pid}" || guard_status=$?
+  guard_pid=""
+  if [[ "${guard_status}" != "0" ]]; then
+    handle_guard_failure "${guard_status}"
+    continue
+  fi
+
+  echo "USDB upstream guard check passed; starting chain role=${role}"
+  "${geth_bin}" "${args[@]}" &
+  geth_pid=$!
+  python3 "${guard_script}" watch "${guard_args[@]}" &
+  guard_pid=$!
+
+  while kill -0 "${geth_pid}" 2>/dev/null && kill -0 "${guard_pid}" 2>/dev/null; do
+    guard_sleep 1
+  done
+
+  if ! kill -0 "${guard_pid}" 2>/dev/null; then
+    guard_status=0
+    wait "${guard_pid}" || guard_status=$?
+    guard_pid=""
+    echo "USDB deep-reorg guard stopped the chain process: status=${guard_status}" >&2
+    kill -TERM "${geth_pid}" 2>/dev/null || true
+    # Reap the old writer before retrying; never overlap two geth processes.
+    wait "${geth_pid}" 2>/dev/null || true
+    geth_pid=""
+    handle_guard_failure "${guard_status}"
+    continue
+  fi
+
+  geth_status=0
+  wait "${geth_pid}" || geth_status=$?
+  geth_pid=""
+  kill -TERM "${guard_pid}" 2>/dev/null || true
+  wait "${guard_pid}" 2>/dev/null || true
+  guard_pid=""
+  exit "${geth_status}"
 done
-
-if ! kill -0 "${guard_pid}" 2>/dev/null; then
-  set +e
-  wait "${guard_pid}"
-  guard_status=$?
-  set -e
-  echo "USDB deep-reorg guard stopped the chain process: status=${guard_status}" >&2
-  kill -TERM "${geth_pid}" 2>/dev/null || true
-  wait "${geth_pid}" 2>/dev/null || true
-  hold_halted
-fi
-
-set +e
-wait "${geth_pid}"
-geth_status=$?
-set -e
-kill -TERM "${guard_pid}" 2>/dev/null || true
-wait "${guard_pid}" 2>/dev/null || true
-exit "${geth_status}"
