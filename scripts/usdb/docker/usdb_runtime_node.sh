@@ -48,6 +48,9 @@ args=(
   --port "${USDB_P2P_PORT:-31303}"
   --discovery.port "${USDB_DISCOVERY_PORT:-${USDB_P2P_PORT:-31303}}"
   --maxpeers "${USDB_MAX_PEERS:-50}"
+  --bootnodes "${USDB_BOOTNODES:-}"
+  --discovery.dns ""
+  --log.json
   --http
   --http.addr "${USDB_HTTP_ADDR:-0.0.0.0}"
   --http.port "${USDB_HTTP_PORT:-8545}"
@@ -67,12 +70,13 @@ args=(
 if [[ -n "${USDB_NAT:-}" ]]; then
   args+=(--nat "${USDB_NAT}")
 fi
-if [[ -n "${USDB_BOOTNODES:-}" ]]; then
-  args+=(--bootnodes "${USDB_BOOTNODES}")
-fi
 
 if [[ "${role}" == "miner" ]]; then
   miner_address="${USDB_MINER_ADDRESS:?USDB_MINER_ADDRESS is required for miner role}"
+  if [[ ! "${USDB_MINER_THREADS:-1}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "USDB_MINER_THREADS must be positive; the testnet default is 1 CPU worker" >&2
+    exit 1
+  fi
   args+=(
     --mine
     --miner.threads "${USDB_MINER_THREADS:-1}"
@@ -84,6 +88,14 @@ fi
 
 if [[ -n "${USDB_CHAIN_EXTRA_ARGS:-}" ]]; then
   read -r -a extra_args <<<"${USDB_CHAIN_EXTRA_ARGS}"
+  for argument in "${extra_args[@]}"; do
+    case "${argument}" in
+      --mine|--mine=*|--miner.*|--datadir*|--config*|--networkid*|--usdb*|--mainnet*|--testnet*|--goerli*|--sepolia*|--ropsten*|--rinkeby*|--kiln*|--dev*|--bootnodes*|--discovery*|--nodiscover*|--nodekey*|--nat*|--port*|--maxpeers*|--ethash.usdb-indexer*|--http*|--syncmode*|--fakepow*|--override*)
+        echo "USDB_CHAIN_EXTRA_ARGS cannot override managed identity, discovery or mining: ${argument%%=*}" >&2
+        exit 1
+        ;;
+    esac
+  done
   args+=("${extra_args[@]}")
 fi
 
