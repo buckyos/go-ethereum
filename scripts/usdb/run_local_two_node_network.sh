@@ -68,7 +68,8 @@ NODE2_HTTP_PORT=${NODE2_HTTP_PORT:-18546}
 NODE2_P2P_PORT=${NODE2_P2P_PORT:-31304}
 NODE2_AUTHRPC_PORT=${NODE2_AUTHRPC_PORT:-18552}
 NODE2_LOG=${NODE2_LOG:-"$WORK_DIR/node2.log"}
-NODE2_GCMODE=${NODE2_GCMODE:-full}
+NODE1_GCMODE=${NODE1_GCMODE:-}
+NODE2_GCMODE=${NODE2_GCMODE:-}
 USDB_BOOTSTRAP_INDEXER_PORT=${USDB_BOOTSTRAP_INDEXER_PORT:-$((NODE2_HTTP_PORT + 1))}
 
 GETH_BIN=${GETH_BIN:-}
@@ -152,6 +153,23 @@ if [[ ! "$BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" && "$BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS" == "0" ]]; then
   echo "Public release E2E requires non-zero bootstrap acceptance confirmations" >&2
+  exit 1
+fi
+# Full bootstrap acceptance replays historical state after the fee probe and
+# restart. Full-mode pruning can discard H even while its block header survives.
+if [[ "$RUN_FULL_BOOTSTRAP" == "1" ]]; then
+  NODE1_GCMODE=${NODE1_GCMODE:-archive}
+  NODE2_GCMODE=${NODE2_GCMODE:-archive}
+  if [[ "$NODE1_GCMODE" != "archive" || "$NODE2_GCMODE" != "archive" ]]; then
+    echo "Full bootstrap lifecycle requires archive state on both test nodes" >&2
+    exit 1
+  fi
+else
+  NODE1_GCMODE=${NODE1_GCMODE:-full}
+  NODE2_GCMODE=${NODE2_GCMODE:-full}
+fi
+if [[ "$NODE1_GCMODE" != "full" && "$NODE1_GCMODE" != "archive" ]]; then
+  echo "NODE1_GCMODE must be full or archive" >&2
   exit 1
 fi
 if [[ "$NODE2_GCMODE" != "full" && "$NODE2_GCMODE" != "archive" ]]; then
@@ -324,7 +342,8 @@ block_hash_at() {
 
 block_identity_at() {
   local url=$1
-  local height=$2
+  local height
+  printf -v height '0x%x' "$2"
   rpc_call "$url" \
     "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getBlockByNumber\",\"params\":[\"${height}\",false],\"id\":1}" \
     | jq -r '[.result.hash // "", .result.stateRoot // ""] | @tsv'
@@ -389,6 +408,7 @@ start_node1() {
       --ipcpath "$NODE1_DATADIR/geth.ipc" \
       "${discovery_args[@]}" \
       "${POW_ARGS[@]}" \
+      --gcmode "$NODE1_GCMODE" \
       --miner.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL" \
       --miner.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
       --ethash.usdb-indexer.rpcurl "$USDB_INDEXER_RPC_URL" \
@@ -485,6 +505,10 @@ run_source_dao_validation() {
   local rpc_url=$1
   local state_file=$2
   local output_file=$3
+  local checkpoint=latest
+  if [[ -f "$BOOTSTRAP_ACCEPTANCE_FILE" ]]; then
+    checkpoint=$(jq -r '.checkpoint.number' "$BOOTSTRAP_ACCEPTANCE_FILE")
+  fi
   (
     cd "$SOURCE_DAO_DIR"
     usdb_load_node_toolchain
@@ -493,6 +517,7 @@ run_source_dao_validation() {
       --rpc-url "$rpc_url" \
       --state-file "$state_file" \
       --output "$output_file" \
+      --block "$checkpoint" \
       --strict
   )
 }
@@ -507,6 +532,7 @@ run_bootstrap_acceptance_create() {
     --bootstrap-config "$SOURCE_DAO_FULL_CONFIG" \
     --bootstrap-state "$BOOTSTRAP_STATE_FILE" \
     --validation "$validation_file" \
+    --contract-golden "$SOURCE_DAO_DIR/security/usdb-contract-golden.json" \
     --checkpoint-block "$checkpoint_block" \
     --min-confirmations "$BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS" \
     --artifact "$BOOTSTRAP_ACCEPTANCE_FILE"
@@ -522,6 +548,7 @@ run_bootstrap_acceptance_verify() {
     --bootstrap-config "$SOURCE_DAO_FULL_CONFIG" \
     --bootstrap-state "$BOOTSTRAP_STATE_FILE" \
     --validation "$validation_file" \
+    --contract-golden "$SOURCE_DAO_DIR/security/usdb-contract-golden.json" \
     --artifact "$artifact_file"
 }
 
@@ -714,28 +741,32 @@ assert_idempotent_replay_state() {
   if ! jq -e '
     .status == "completed"
     and .scope == "full"
-    and ([.operations[] | select(.status == "completed")] | length == 0)
+    and ([.operations[] | select(.status == "completed")] | length > 0)
     and ([.operations[] | select(.status == "error")] | length == 0)
   ' "$state_file" >/dev/null; then
     echo "Full-bootstrap replay was not idempotent; inspect $state_file" >&2
     return 1
   fi
-  echo "Full-bootstrap replay produced no completed or failed operations."
+  if [[ "$(jq -c '.operations' "$state_file")" != "$(jq -c '.operations' "$BOOTSTRAP_STATE_FILE")" ]]; then
+    echo "Full-bootstrap replay changed the original transaction evidence" >&2
+    return 1
+  fi
+  echo "Full-bootstrap replay retained the original completed transaction set."
 }
 
 assert_validation_summaries_match() {
   local node1_summary node2_summary
   node1_summary=$(jq -S -c \
-    '{status, chainId, mode, daoAddress, bootstrapAdmin, modules}' \
+    '{status, chainId, mode, daoAddress, bootstrapAdmin, modules, evidence}' \
     "$NODE1_VALIDATION_FILE")
   node2_summary=$(jq -S -c \
-    '{status, chainId, mode, daoAddress, bootstrapAdmin, modules}' \
+    '{status, chainId, mode, daoAddress, bootstrapAdmin, modules, evidence}' \
     "$NODE2_VALIDATION_FILE")
   if [[ "$node1_summary" != "$node2_summary" ]]; then
     echo "Strict bootstrap validation summaries differ between node 1 and node 2" >&2
     diff -u \
-      <(jq -S '{status, chainId, mode, daoAddress, bootstrapAdmin, modules}' "$NODE1_VALIDATION_FILE") \
-      <(jq -S '{status, chainId, mode, daoAddress, bootstrapAdmin, modules}' "$NODE2_VALIDATION_FILE") \
+      <(jq -S '{status, chainId, mode, daoAddress, bootstrapAdmin, modules, evidence}' "$NODE1_VALIDATION_FILE") \
+      <(jq -S '{status, chainId, mode, daoAddress, bootstrapAdmin, modules, evidence}' "$NODE2_VALIDATION_FILE") \
       >&2 || true
     return 1
   fi
@@ -749,7 +780,7 @@ run_full_bootstrap_lifecycle() {
   run_source_dao_full_bootstrap "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE"
   run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
 
-  bootstrap_height=$(wait_for_height "$NODE1_RPC" 1)
+  bootstrap_height=$(jq -r ".evidence.checkpoint.number" "$NODE1_VALIDATION_FILE")
   read -r bootstrap_hash bootstrap_state_root < <(block_identity_at "$NODE1_RPC" "$bootstrap_height")
   if [[ -z "$bootstrap_hash" || -z "$bootstrap_state_root" ]]; then
     echo "Failed to capture the post-bootstrap block identity at $bootstrap_height" >&2
@@ -823,6 +854,8 @@ run_full_bootstrap_lifecycle() {
   assert_validation_summaries_match
 
   echo "Replaying full bootstrap against node 1"
+  cp "$BOOTSTRAP_STATE_FILE" "$BOOTSTRAP_REPLAY_STATE_FILE"
+  cp "$BOOTSTRAP_STATE_FILE.transactions.json" "$BOOTSTRAP_REPLAY_STATE_FILE.transactions.json"
   run_source_dao_full_bootstrap "$NODE1_RPC" "$BOOTSTRAP_REPLAY_STATE_FILE"
   assert_idempotent_replay_state "$BOOTSTRAP_REPLAY_STATE_FILE"
   run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
@@ -837,6 +870,8 @@ rm -f \
   "$NODE2_LOG" \
   "$BOOTSTRAP_STATE_FILE" \
   "$BOOTSTRAP_REPLAY_STATE_FILE" \
+  "$BOOTSTRAP_STATE_FILE.transactions.json" \
+  "$BOOTSTRAP_REPLAY_STATE_FILE.transactions.json" \
   "$NODE1_VALIDATION_FILE" \
   "$NODE2_VALIDATION_FILE" \
   "$FEE_PROBE_FILE" \

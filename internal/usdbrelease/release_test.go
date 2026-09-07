@@ -277,6 +277,20 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 		BootstrapAdmin:  common.HexToAddress("0xabCd35AfbB4561213fEAfF01B5F91e18F8Df7c37"),
 		Modules:         modules,
 	}
+	validation.Evidence = usdbacceptance.ValidationEvidence{
+		SchemaVersion: "sourcedao-bootstrap-validation:v2",
+		Checkpoint:    usdbacceptance.BlockIdentity{Number: 100, Hash: common.HexToHash("0x" + strings.Repeat("2", 64)), StateRoot: common.HexToHash("0x" + strings.Repeat("3", 64))},
+		GenesisHash:   common.HexToHash("0x" + strings.Repeat("1", 64)), ConfigSHA256: strings.Repeat("a", 64), GoldenSHA256: strings.Repeat("c", 64),
+	}
+	addresses := []common.Address{validation.DAOAddress}
+	for _, module := range validation.Modules {
+		addresses = append(addresses, module.Address)
+	}
+	for _, address := range addresses {
+		validation.Evidence.Code = append(validation.Evidence.Code, usdbacceptance.CodeObservation{Address: address, Keccak256: dividendCodeHash})
+		validation.Evidence.Storage = append(validation.Evidence.Storage, usdbacceptance.StorageObservation{Address: address})
+		validation.Evidence.Calls = append(validation.Evidence.Calls, usdbacceptance.CallObservation{To: address, Data: []byte{1, 2, 3, 4}, Result: []byte{1}})
+	}
 	validationJSON, err := json.Marshal(validation)
 	if err != nil {
 		t.Fatal(err)

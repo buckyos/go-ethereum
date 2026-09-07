@@ -9,9 +9,12 @@
 package usdbacceptance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -153,7 +156,7 @@ func TestCreateRejectsDuplicateBootstrapInputKey(t *testing.T) {
 }
 
 func testChainIdentity() ChainIdentity {
-	return ChainIdentity{
+	chain := ChainIdentity{
 		ChainID:       testChainID,
 		GenesisHash:   common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111"),
 		HeadNumber:    20,
@@ -168,6 +171,8 @@ func testChainIdentity() ChainIdentity {
 			common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
 		},
 	}
+	chain.ValidationEvidenceSHA256 = evidenceDigest(testEvidence(chain))
+	return chain
 }
 
 func writeAcceptanceFixture(t *testing.T, validationAdmin string) InputFiles {
@@ -175,6 +180,7 @@ func writeAcceptanceFixture(t *testing.T, validationAdmin string) InputFiles {
 	dir := t.TempDir()
 	files := InputFiles{
 		GenesisJSON:     filepath.Join(dir, "genesis.json"),
+		ContractGolden:  filepath.Join(dir, "golden.json"),
 		BootstrapConfig: filepath.Join(dir, "bootstrap-config.json"),
 		BootstrapState:  filepath.Join(dir, "bootstrap-state.json"),
 		Validation:      filepath.Join(dir, "validation.json"),
@@ -182,17 +188,8 @@ func writeAcceptanceFixture(t *testing.T, validationAdmin string) InputFiles {
 	writeFixtureJSON(t, files.GenesisJSON, map[string]interface{}{
 		"config": map[string]interface{}{"chainId": testChainID},
 	})
-	writeFixtureJSON(t, files.BootstrapConfig, map[string]interface{}{
-		"schemaVersion":         1,
-		"chainId":               testChainID,
-		"rpcUrl":                "http://candidate:8545",
-		"artifactsDir":          "../../artifacts-usdb",
-		"daoAddress":            testDAO,
-		"dividendAddress":       testDividend,
-		"bootstrapAdminAddress": testAdmin,
-		"cycleMinLength":        60,
-		"expectedModules":       testModuleAddresses,
-	})
+	writeFixtureJSON(t, files.BootstrapConfig, testBootstrapConfig())
+	writeFixtureJSON(t, files.ContractGolden, map[string]interface{}{})
 	writeFixtureJSON(t, files.BootstrapState, map[string]interface{}{
 		"state_version":    "1",
 		"generated_at":     "2026-07-27T00:00:00Z",
@@ -239,6 +236,7 @@ func writeAcceptanceFixture(t *testing.T, validationAdmin string) InputFiles {
 	}
 	writeFixtureJSON(t, files.Validation, map[string]interface{}{
 		"status":         "ok",
+		"evidence":       testEvidence(testChainIdentity()),
 		"generatedAt":    "2026-07-27T00:01:30Z",
 		"chainId":        testChainID,
 		"rpcUrl":         "http://candidate:8545",
@@ -274,4 +272,71 @@ func readFixtureJSON(t *testing.T, path string) map[string]interface{} {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func testBootstrapConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"schemaVersion":         1,
+		"chainId":               testChainID,
+		"rpcUrl":                "http://candidate:8545",
+		"artifactsDir":          "../../artifacts-usdb",
+		"daoAddress":            testDAO,
+		"dividendAddress":       testDividend,
+		"bootstrapAdminAddress": testAdmin,
+		"cycleMinLength":        60,
+		"expectedModules":       testModuleAddresses,
+	}
+}
+
+func testEvidence(chain ChainIdentity) ValidationEvidence {
+	config := testBootstrapConfig()
+	for _, key := range []string{"rpcUrl", "artifactsDir", "outputPath"} {
+		delete(config, key)
+	}
+	encoded, _ := json.Marshal(config)
+	sum := sha256.Sum256(encoded)
+	e := ValidationEvidence{SchemaVersion: "sourcedao-bootstrap-validation:v2", Checkpoint: chain.Checkpoint, GenesisHash: chain.GenesisHash, ConfigSHA256: hex.EncodeToString(sum[:]), GoldenSHA256: "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"}
+	addresses := []string{testDAO}
+	for _, address := range testModuleAddresses {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+	for _, address := range addresses {
+		a := common.HexToAddress(address)
+		e.Code = append(e.Code, CodeObservation{Address: a, Keccak256: common.HexToHash("0x1234")})
+		e.Storage = append(e.Storage, StorageObservation{Address: a})
+		e.Calls = append(e.Calls, CallObservation{To: a, Data: []byte{1, 2, 3, 4}, Result: []byte{1}})
+	}
+	return e
+}
+
+func TestCreateRejectsLegacyAndUnboundValidationEvidence(t *testing.T) {
+	for _, change := range []string{"missing", "wrong_config", "wrong_golden", "local_golden", "wrong_checkpoint", "missing_module_code", "not_replayed"} {
+		t.Run(change, func(t *testing.T) {
+			files := writeAcceptanceFixture(t, testAdmin)
+			validation := readFixtureJSON(t, files.Validation)
+			evidence := validation["evidence"].(map[string]interface{})
+			chain := testChainIdentity()
+			switch change {
+			case "missing":
+				delete(validation, "evidence")
+			case "wrong_config":
+				evidence["config_sha256"] = strings.Repeat("d", 64)
+			case "wrong_golden":
+				evidence["golden_sha256"] = strings.Repeat("e", 64)
+			case "local_golden":
+				writeFixtureJSON(t, files.ContractGolden, map[string]interface{}{"modified": true})
+			case "wrong_checkpoint":
+				evidence["checkpoint"].(map[string]interface{})["number"] = 16
+			case "missing_module_code":
+				evidence["code"] = evidence["code"].([]interface{})[1:]
+			case "not_replayed":
+				chain.ValidationEvidenceSHA256 = ""
+			}
+			writeFixtureJSON(t, files.Validation, validation)
+			if _, err := Create(files, chain); err == nil {
+				t.Fatal("accepted unbound validation evidence")
+			}
+		})
+	}
 }

@@ -34,8 +34,8 @@ import (
 )
 
 const (
-	// SchemaVersion identifies the first frozen bootstrap acceptance artifact.
-	SchemaVersion = "uip-0010-bootstrap-acceptance:v1"
+	// SchemaVersion identifies acceptance with historical code and state evidence.
+	SchemaVersion = "uip-0010-bootstrap-acceptance:v2"
 
 	bootstrapConfigSchemaVersion = 1
 	bootstrapStateVersion        = "1"
@@ -53,6 +53,7 @@ var requiredModules = []string{
 
 // InputFiles names the release files committed by an acceptance artifact.
 type InputFiles struct {
+	ContractGolden  string
 	GenesisJSON     string
 	BootstrapConfig string
 	BootstrapState  string
@@ -62,12 +63,13 @@ type InputFiles struct {
 // ChainIdentity captures the immutable chain data observed while creating or
 // verifying an acceptance artifact.
 type ChainIdentity struct {
-	ChainID       uint64
-	GenesisHash   common.Hash
-	HeadNumber    uint64
-	Checkpoint    BlockIdentity
-	Confirmations uint64
-	Transactions  []common.Hash
+	ValidationEvidenceSHA256 string
+	ChainID                  uint64
+	GenesisHash              common.Hash
+	HeadNumber               uint64
+	Checkpoint               BlockIdentity
+	Confirmations            uint64
+	Transactions             []common.Hash
 }
 
 // BlockIdentity identifies one block and the state committed by its header.
@@ -86,6 +88,7 @@ type ModuleIdentity struct {
 // ValidationIdentity omits host paths, RPC URLs, and timestamps so independent
 // joiners can reproduce the same strict validation digest.
 type ValidationIdentity struct {
+	Evidence        ValidationEvidence        `json:"evidence"`
 	ChainID         uint64                    `json:"chain_id"`
 	DAOAddress      common.Address            `json:"dao_address"`
 	DividendAddress common.Address            `json:"dividend_address"`
@@ -158,11 +161,12 @@ type bootstrapState struct {
 }
 
 type validationSummary struct {
-	Status         string `json:"status"`
-	ChainID        uint64 `json:"chainId"`
-	Mode           string `json:"mode"`
-	DAOAddress     string `json:"daoAddress"`
-	BootstrapAdmin string `json:"bootstrapAdmin"`
+	Evidence       ValidationEvidence `json:"evidence"`
+	Status         string             `json:"status"`
+	ChainID        uint64             `json:"chainId"`
+	Mode           string             `json:"mode"`
+	DAOAddress     string             `json:"daoAddress"`
+	BootstrapAdmin string             `json:"bootstrapAdmin"`
 	Modules        map[string]struct {
 		Address         string  `json:"address"`
 		Version         string  `json:"version"`
@@ -195,6 +199,12 @@ func Create(files InputFiles, chain ChainIdentity) (*Artifact, error) {
 	}
 	if chain.Checkpoint.Number < inputs.maxOperationBlock {
 		return nil, fmt.Errorf("checkpoint block %d precedes bootstrap operation block %d", chain.Checkpoint.Number, inputs.maxOperationBlock)
+	}
+	if inputs.validation.Evidence.Checkpoint != chain.Checkpoint || inputs.validation.Evidence.GenesisHash != chain.GenesisHash {
+		return nil, errors.New("strict validation checkpoint or genesis does not match acceptance chain")
+	}
+	if chain.ValidationEvidenceSHA256 != evidenceDigest(inputs.validation.Evidence) {
+		return nil, errors.New("strict validation evidence was not independently replayed against RPC")
 	}
 	if !equalHashes(chain.Transactions, inputs.operationTxs) {
 		return nil, errors.New("candidate chain contains transactions outside the completed bootstrap operation set")
@@ -275,6 +285,9 @@ func Verify(artifact *Artifact, files InputFiles, chain ChainIdentity) error {
 	if !equalHashes(chain.Transactions, inputs.operationTxs) {
 		return errors.New("accepted checkpoint history contains transactions outside the bootstrap operation set")
 	}
+	if chain.ValidationEvidenceSHA256 != evidenceDigest(inputs.validation.Evidence) {
+		return errors.New("strict validation evidence was not independently replayed against RPC")
+	}
 	if !equalValidationIdentity(artifact.Bootstrap.Validation, inputs.validation) {
 		return errors.New("normalized strict validation result does not match acceptance artifact")
 	}
@@ -316,8 +329,8 @@ func WriteArtifact(path string, artifact *Artifact) error {
 }
 
 func normalizeInputs(files InputFiles) (*normalizedInputs, error) {
-	if files.GenesisJSON == "" || files.BootstrapConfig == "" || files.BootstrapState == "" || files.Validation == "" {
-		return nil, errors.New("genesis, bootstrap config, bootstrap state, and strict validation files are required")
+	if files.ContractGolden == "" || files.GenesisJSON == "" || files.BootstrapConfig == "" || files.BootstrapState == "" || files.Validation == "" {
+		return nil, errors.New("genesis, bootstrap config, bootstrap state, strict validation and reviewed contract golden files are required")
 	}
 	genesisHash, err := fileSHA256(files.GenesisJSON)
 	if err != nil {
@@ -346,6 +359,23 @@ func normalizeInputs(files InputFiles) (*normalizedInputs, error) {
 	}
 	identity, maxBlock, operationTxs, err := normalizeBootstrapIdentity(config, state, validation)
 	if err != nil {
+		return nil, err
+	}
+	publicDigest, err := publicConfigDigest(files.BootstrapConfig)
+	if err != nil {
+		return nil, err
+	}
+	if identity.Evidence.ConfigSHA256 != publicDigest {
+		return nil, errors.New("strict validation public config digest mismatch")
+	}
+	goldenDigest, err := canonicalFileDigest(files.ContractGolden, nil)
+	if err != nil {
+		return nil, err
+	}
+	if goldenDigest != identity.Evidence.GoldenSHA256 {
+		return nil, errors.New("strict validation golden digest does not match the locally reviewed artifact")
+	}
+	if err := validateEvidenceCoverage(identity); err != nil {
 		return nil, err
 	}
 	identityJSON, err := json.Marshal(identity)
@@ -469,6 +499,7 @@ func normalizeBootstrapIdentity(config bootstrapConfig, state bootstrapState, va
 		DividendAddress: dividend,
 		BootstrapAdmin:  admin,
 		Modules:         modules,
+		Evidence:        validation.Evidence,
 	}, maxBlock, operationTxs, nil
 }
 
@@ -525,6 +556,12 @@ func validateArtifact(artifact *Artifact) error {
 	}
 	if validation.Modules["dividend"].Address != validation.DividendAddress {
 		return errors.New("bootstrap acceptance Dividend module identity is inconsistent")
+	}
+	if err := validateEvidenceCoverage(validation); err != nil {
+		return err
+	}
+	if validation.Evidence.Checkpoint != artifact.Checkpoint || validation.Evidence.GenesisHash != artifact.Genesis.BlockHash {
+		return errors.New("accepted strict validation checkpoint or genesis mismatch")
 	}
 	identityJSON, err := json.Marshal(artifact.Bootstrap.Validation)
 	if err != nil {

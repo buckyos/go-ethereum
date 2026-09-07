@@ -61,6 +61,9 @@ var (
 		Usage:    "Successful SourceDAO strict validation summary",
 		Required: true,
 	}
+	bootstrapAcceptanceGoldenFlag = &cli.PathFlag{
+		Name: "contract-golden", Usage: "Locally reviewed SourceDAO contract golden including ERC1967Proxy", Required: true,
+	}
 	bootstrapAcceptanceArtifactFlag = &cli.PathFlag{
 		Name:     "artifact",
 		Usage:    "USDB bootstrap acceptance checkpoint artifact",
@@ -68,7 +71,7 @@ var (
 	}
 	bootstrapAcceptanceCheckpointFlag = &cli.StringFlag{
 		Name:  "checkpoint-block",
-		Usage: "Checkpoint block number in decimal/hex, or latest",
+		Usage: "Validated checkpoint in decimal/hex; latest uses the strict report checkpoint",
 		Value: "latest",
 	}
 	bootstrapAcceptanceConfirmationsFlag = &cli.Uint64Flag{
@@ -90,6 +93,7 @@ var (
 					bootstrapAcceptanceConfigFlag,
 					bootstrapAcceptanceStateFlag,
 					bootstrapAcceptanceValidationFlag,
+					bootstrapAcceptanceGoldenFlag,
 					bootstrapAcceptanceArtifactFlag,
 					bootstrapAcceptanceCheckpointFlag,
 					bootstrapAcceptanceConfirmationsFlag,
@@ -105,6 +109,7 @@ var (
 					bootstrapAcceptanceConfigFlag,
 					bootstrapAcceptanceStateFlag,
 					bootstrapAcceptanceValidationFlag,
+					bootstrapAcceptanceGoldenFlag,
 					bootstrapAcceptanceArtifactFlag,
 				},
 			},
@@ -117,12 +122,23 @@ func createUSDBBootstrapAcceptance(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	evidence, err := usdbacceptance.ReadValidationEvidence(ctx.Path(bootstrapAcceptanceValidationFlag.Name))
+	if err != nil {
+		return err
+	}
+	if checkpoint == nil {
+		checkpoint = &evidence.Checkpoint.Number
+	}
 	chain, err := observeAcceptanceChain(
 		ctx.Context,
 		ctx.String(bootstrapAcceptanceRPCURLFlag.Name),
 		checkpoint,
 		ctx.Uint64(bootstrapAcceptanceConfirmationsFlag.Name),
 	)
+	if err != nil {
+		return err
+	}
+	chain.ValidationEvidenceSHA256, err = replayAcceptanceEvidence(ctx, evidence)
 	if err != nil {
 		return err
 	}
@@ -158,6 +174,14 @@ func verifyUSDBBootstrapAcceptance(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	evidence, err := usdbacceptance.ReadValidationEvidence(ctx.Path(bootstrapAcceptanceValidationFlag.Name))
+	if err != nil {
+		return err
+	}
+	chain.ValidationEvidenceSHA256, err = replayAcceptanceEvidence(ctx, evidence)
+	if err != nil {
+		return err
+	}
 	if err := usdbacceptance.Verify(artifact, acceptanceInputFiles(ctx), chain); err != nil {
 		return fmt.Errorf("USDB bootstrap acceptance rejected: %w", err)
 	}
@@ -173,6 +197,7 @@ func verifyUSDBBootstrapAcceptance(ctx *cli.Context) error {
 
 func acceptanceInputFiles(ctx *cli.Context) usdbacceptance.InputFiles {
 	return usdbacceptance.InputFiles{
+		ContractGolden:  ctx.Path(bootstrapAcceptanceGoldenFlag.Name),
 		GenesisJSON:     ctx.Path(bootstrapAcceptanceGenesisFlag.Name),
 		BootstrapConfig: ctx.Path(bootstrapAcceptanceConfigFlag.Name),
 		BootstrapState:  ctx.Path(bootstrapAcceptanceStateFlag.Name),
@@ -265,4 +290,19 @@ func observeAcceptanceChain(parent context.Context, rpcURL string, checkpoint *u
 		Confirmations: confirmations,
 		Transactions:  transactions,
 	}, nil
+}
+
+// Replay from the same checkpoint before promoting a report to acceptance.
+func replayAcceptanceEvidence(ctx *cli.Context, evidence usdbacceptance.ValidationEvidence) (string, error) {
+	parent, cancel := context.WithTimeout(ctx.Context, bootstrapAcceptanceRPCTimeout)
+	defer cancel()
+	client, err := ethclient.DialContext(parent, ctx.String(bootstrapAcceptanceRPCURLFlag.Name))
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	if err := usdbacceptance.ObserveReviewedCode(parent, client, acceptanceInputFiles(ctx)); err != nil {
+		return "", err
+	}
+	return usdbacceptance.ObserveValidationEvidence(parent, client, evidence)
 }
