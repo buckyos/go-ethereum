@@ -493,6 +493,7 @@ EOF
     exec "${GETH_CMD[@]}" \
       --datadir "$NODE2_DATADIR" \
       --networkid "$NETWORK_ID" \
+      --syncmode full \
       --http \
       --http.addr "$NODE2_HTTP_ADDR" \
       --http.port "$NODE2_HTTP_PORT" \

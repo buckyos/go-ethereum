@@ -366,6 +366,7 @@ usdb_chain_start_validator() {
     exec "${command[@]}" \
       --datadir "$VALIDATOR_DATADIR" \
       --networkid "$NETWORK_ID" \
+      --syncmode full \
       --gcmode "$USDB_CHAIN_GCMODE" \
       --http \
       --http.addr "$VALIDATOR_HTTP_ADDR" \
@@ -945,7 +946,7 @@ EOF
 
 run_indexer_outage_recovery_check() {
   local validator_rpc="http://${VALIDATOR_HTTP_ADDR}:${VALIDATOR_HTTP_PORT}"
-  local stalled_height observed_height validator_height resumed_height
+  local stalled_height observed_height resumed_height validator_log_offset
 
   usdb_chain_log "Stopping mining before the usdb-indexer outage checkpoint"
   usdb_chain_stop_mining
@@ -958,24 +959,26 @@ run_indexer_outage_recovery_check() {
   usdb_chain_log "Starting a fresh validator while usdb-indexer is unavailable"
   usdb_chain_start_validator
   usdb_chain_wait_rpc_url_ready "$validator_rpc"
+  validator_log_offset="$(wc -c <"$VALIDATOR_LOG_FILE")"
   usdb_chain_connect_validator
 
   usdb_chain_log "Restarting mining while usdb-indexer is unavailable"
   usdb_chain_start_mining
   sleep 2
   stalled_height="$(usdb_chain_current_height)"
-  sleep "$OUTAGE_OBSERVE_SECONDS"
+  # A new validator may not attempt sync until the one-peer timer fires. Keep
+  # the upstream down until its own validation logs prove a real query failed,
+  # then observe the entire stall window before allowing recovery.
+  python3 "$ROOT_DIR/scripts/usdb/verify_profile_validator_outage.py" \
+    --log "$VALIDATOR_LOG_FILE" --offset "$validator_log_offset" --pid "$VALIDATOR_PID" \
+    --rpc "$validator_rpc" --upstream "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
+    --timeout "$RPC_WAIT_SECONDS" --observe-seconds "$OUTAGE_OBSERVE_SECONDS" \
+    --output "$USDB_CHAIN_WORK_DIR/validator-outage.json"
   observed_height="$(usdb_chain_current_height)"
   if (( observed_height != stalled_height )); then
     echo "USDB miner advanced while usdb-indexer was unavailable: ${stalled_height} -> ${observed_height}" >&2
     return 1
   fi
-  validator_height="$(usdb_chain_height_at "$validator_rpc")"
-  if (( validator_height != 0 )); then
-    echo "Fresh validator imported blocks without usdb-indexer: height=${validator_height}" >&2
-    return 1
-  fi
-
   regtest_log "Restarting usdb-indexer and verifying mining and fresh-validator recovery"
   regtest_start_usdb_indexer
   regtest_wait_usdb_rpc_ready

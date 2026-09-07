@@ -218,6 +218,18 @@ on the selected canonical branch.
 - Stops usdb-indexer while both the miner and a fresh validator are running.
 - Requires mining to stop and the validator to remain at genesis while the
   consensus dependency is unavailable.
+- Starts profile validators with explicit `--syncmode full`, including the
+  historical stability/same-height replacement runner and the shared
+  activation/anchor validator launcher.
+- Before restoring the indexer, requires the fresh validator's own validation
+  log to contain a failed `get_pass_economic_profile` transport call to that
+  indexer. Startup messages, miner errors and pre-connection log entries do not
+  count. After observing the failure, the validator must stay alive at genesis
+  for the full `OUTAGE_OBSERVE_SECONDS` window within `RPC_WAIT_SECONDS`.
+- Records the failure line, log offset, process identity and observation times
+  in `geth/validator-outage.json`, included in the long-CI diagnostics artifact.
+  Missing or erroneous validator RPC heights fail the gate instead of being
+  treated as genesis. Gate failure prevents upstream recovery.
 - Restarts usdb-indexer and requires both nodes to recover to the same head.
 - Exports one canonical block and imports it into a clean datadir as a control.
 - Mutates each selector field independently and requires offline import to

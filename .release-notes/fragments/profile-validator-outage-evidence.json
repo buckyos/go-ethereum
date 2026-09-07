@@ -1,0 +1,16 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "profile-validator-outage-evidence",
+  "type": "fixed",
+  "scopes": ["testing"],
+  "summary": "Require full profile validation and observed query failure before outage recovery",
+  "details": [
+    "Explicitly select full synchronization for profile validators, including historical replay and the shared activation and anchor validator launcher.",
+    "Keep the indexer unavailable until the fresh validator reports a real profile transport failure against the configured endpoint, followed by a complete observation window at genesis with the same live process.",
+    "Reject stale or unrelated logs, missing or erroneous RPC heights, process exits and incomplete observations; save the observed failure and timing evidence in long-CI diagnostics.",
+    "Add Fast CI regression coverage for delayed query attempts, fail-closed gate behavior and the actual shell recovery ordering."
+  ],
+  "operator_actions": [],
+  "compatibility": {"network_reset": false, "data_rebuild": false, "config_change": false, "restart_required": false},
+  "references": ["https://github.com/buckyos/go-ethereum/actions/runs/34095512166/job/101659400827"]
+}
