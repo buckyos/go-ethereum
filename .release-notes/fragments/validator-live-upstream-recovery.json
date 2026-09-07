@@ -1,0 +1,16 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "validator-live-upstream-recovery",
+  "type": "added",
+  "scopes": ["testing"],
+  "summary": "Verify automatic upstream recovery without restarting the validator",
+  "details": [
+    "Keep the validator process pinned across indexer, balance-history, Ord and interrupted reorg recovery, prohibiting restarts and manual peer reconnection after baseline sync.",
+    "Require each recovery to import the fixed canonical target within 90 seconds and successfully retry an identical previously rejected profile selector.",
+    "Exercise HTTP connection loss through the audit proxy and require a new connection for successful retry, then verify fresh work and full canonical replay with the same validator process.",
+    "Run the 18-stage matrix in the existing weekly shard without changing the 2500-tick world-soak workloads."
+  ],
+  "operator_actions": [],
+  "compatibility": {"network_reset": false, "data_rebuild": false, "config_change": false, "restart_required": false},
+  "references": []
+}

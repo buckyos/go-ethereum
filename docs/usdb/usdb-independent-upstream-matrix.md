@@ -10,6 +10,7 @@ balance-history 和 usdb-indexer；只有 BTC/geth 的 P2P 连接共享规范链
 这项验证检查跨进程隔离、故障时拒绝、回滚恢复与从创世完整执行之间的一致性。
 节点运行相同实现，因此它不是独立实现的协议公式 oracle，也不替代发布镜像、
 生产规模压力或深度超过保留窗口的重组测试。
+本专项直接运行 geth，验证进程内的自动恢复；容器及 runtime guard 的停机、重启策略由各自专项覆盖。
 
 ## 必过阶段
 
@@ -17,20 +18,21 @@ balance-history 和 usdb-indexer；只有 BTC/geth 的 P2P 连接共享规范链
 | --- | --- | --- |
 | baseline | A 挖矿，B 从空上游和空 geth 同步 | B 实际查询历史 profile；完整区块、系统合约历史关键槽位、矿工余额和上游语义状态一致 |
 | indexer-crash | SIGKILL B 的 indexer，BTC 推进到新 anchor，A 继续挖矿 | A 高度增长；B 在观察期内停滞；审计代理记录 B 的真实 profile 查询连接错误 |
-| crash-recovery | B 复用原 indexer 数据库重启，再重启 validator 重新连接 | BTC、Ord、balance-history、indexer 精确高度与哈希收敛；完整历史执行状态一致 |
+| crash-recovery | B 复用原 indexer 数据库重启，geth 保持原进程 | 90 秒内自动建立新 RPC 连接，成功重试相同 selector 并导入故障期积压区块；完整历史执行状态一致 |
 | balance-crash | SIGKILL B 的 balance-history，保留 indexer 进程 | indexer RPC 仍存活，报告 `UpstreamReadinessUnknown`；A 引用新 anchor 出块，B 实际收到 `-32041` 并停滞 |
-| balance-recovery | balance-history 复用原数据库重启 | indexer 无需重启即恢复共识就绪；重启 validator 后完整历史与上游状态一致 |
+| balance-recovery | balance-history 复用原数据库重启 | indexer 与 geth 都保持原进程；90 秒内恢复共识就绪、重试相同 selector 并追平；完整历史与上游状态一致 |
 | ord-outage | B 使用 Core 解析铭文时 SIGKILL Ord，并推进 BTC | indexer 保持共识就绪；B 不重启即验证新 anchor 并追平 A；经济状态一致 |
 | ord-recovery | Ord 复用原数据库重启、补齐缺失块 | 精确高度及哈希收敛，补做故障期间延后的 Ord owner/content 对照 |
 | ord-source-outage | B 改用 Ord 解析铭文后 SIGKILL Ord，并推进 BTC | indexer 存活但报告 `CatchingUp`，同步高度落后；A 继续出块，B 实际查询未就绪错误并停滞 |
-| ord-source-recovery | Ord 复用原数据库重启，B 保持 Ord 解析模式 | indexer 追平并恢复共识就绪；重启 validator 后完整历史和状态一致 |
+| ord-source-recovery | Ord 复用原数据库重启，B 保持 Ord 解析模式 | geth 不重启，90 秒内恢复相同 selector 查询并追平；完整历史和状态一致 |
 | ord-event-outage | B 位于独立分支且采用 Ord 解析，SIGKILL Ord 后挖入一笔真实 pass 转移 | 区块中确实包含该交易，铭文输出发给新 owner；推进跨稳定前沿后，indexer 仍因 `CatchingUp` 未处理该事件 |
 | ord-event-catchup | Ord 复用原数据库追赶，随后再重启一次 indexer | Ord 与 indexer 的新 owner/satpoint 一致；pass 转为 Dormant，能量按独立数值断言结算并冻结；只有一条转移记录，重启前后完整状态不变 |
 | stable-fork | 隔离 B 的 Core，替换跨稳定前沿的分支，替代块排除 A 已确认的 1 BTC top-up | 同高度 BTC 哈希不同、实际余额相差 1 BTC；A 挖矿推进、B 对新 anchor 拒绝 |
 | recovery-interrupted | B 返回规范链，故障钩子将恢复停在能量回滚前，再 SIGKILL indexer | 持久化 recovery marker 存在，报告 `ReorgRecoveryPending`，实际 validator 查询返回 `-32041` 且不导入新块；强制退出后 marker 保留 |
 | recovery-reinterrupted | 原数据库重启，恢复推进到 transfer tracker 重载前，再 SIGKILL indexer | 第二个钩子确实触发；恢复目标、reorg epoch 保持不变；仍拒绝验证，强制退出后 marker 保留 |
-| fork-recovery | 清除故障注入参数，再次重启 B 的 indexer | pending marker 被清除且 epoch 不额外增加；原数据库恢复规范状态，重启 validator 后全历史一致 |
+| fork-recovery | 清除故障注入参数，再次重启 B 的 indexer | pending marker 被清除且 epoch 不额外增加；geth 保持原进程，90 秒内重试先前拒绝的 selector 并恢复全历史一致 |
 | ord-event-rollback | B 返回包含冲突交易的规范链，撤销停机窗口中的转移 | 旧 owner 与 Active 状态恢复，能量符合规范链投影；新 owner 无残留 pass/余额，孤块 selector 被原生 mismatch 拒绝，未受重组影响的历史 selector 仍可用 |
+| steady-progress | 全部故障恢复后再推进 BTC 并产生新的 USDB 区块 | 同一个 B geth 实际查询更高 anchor、导入新块；完整历史和上游状态一致 |
 | fresh-replay | C 在上述故障恢复后从全新目录加入 | BTC/Ord/两索引器全部重建；geth 从 genesis 以 full 模式执行；每个实际 anchor 都有成功查询；A/B/C 全量状态一致，C 也通过事件撤销与历史 selector 检查 |
 
 上游中断及分叉用例必须先证明健康节点继续出块，并让新块引用新的 BTC anchor，防止缓存
@@ -39,9 +41,24 @@ balance-history 和 usdb-indexer；只有 BTC/geth 的 P2P 连接共享规范链
 中断时 validator 可以先在复验父块 profile 时拒绝，报告记录实际拒绝的 anchor；
 分叉用例则要求新 anchor 的原生 snapshot/hash/state selector 不匹配错误。
 注入前在上游健康时重启 A 的 geth，清除 `miner_stop` 保留的旧 anchor 待封块，
-并在 B 仍就绪时等待重新连接；Ord 依赖已经失效的阶段则通过实际拒绝确认连接尝试。
+并在 B 仍就绪时等待它通过基线登记的静态 peer 自动重新连接；Ord 依赖已经失效的阶段则通过实际拒绝确认连接尝试。
 否则合法的旧上下文块可能先被封出并被 B 接受，干扰本项
 对新上下文拒绝行为的判断。矿工运行中刷新 profile 的覆盖仍在原专项 E2E 中。
+
+从 baseline 完成到 fresh-replay 完成，B 的 geth 进程、PID 和 Linux 进程启动时刻必须保持不变，
+启动次数必须为 1；脚本在这段期间禁止停止 B 的 geth 或再次调用 `admin_addPeer`。
+两次 `ReorgRecoveryPending` 中断也保持同一 geth，仅中断并恢复上游 indexer。
+最终清理才解除该约束。A 的挖矿准备重启与 C 的首次启动不属于这个 validator 连续性范围。
+
+四个自动恢复阶段的 90 秒预算从恢复上游之前开始，包含上游 readiness、Ord 追平和 geth 同步等待。
+恢复期间 A 停止挖矿，目标 head 固定，B 必须自行重试，不能依靠新块通知或人工连接操作解除停滞。
+门禁比较恢复前后的完整 profile 请求参数，要求同一 selector 曾失败而后成功，并要求实际查询目标块的
+新 anchor；只恢复 RPC 存活、只查询旧缓存或只报告相同高度均不算通过。
+
+审计代理保留 HTTP keep-alive；上游连接失败时记录真实请求并断开 geth 的 HTTP 连接，
+不会将连接故障统一转换成 JSON-RPC 响应。`crash-recovery` 必须证明同一失败请求经新的
+连接成功；原生 readiness 和 selector 错误仍原样转发。连接编号和完整请求见 `b-rpc.jsonl`，
+PID、启动时刻、恢复耗时、重试请求摘要及状态摘要见 `summary.json`。
 
 BTC 稳定延迟固定为 10。标准 pass 在分叉点之前铸造；回滚分支移除真实余额
 变化，避免只比较空块重组。Ord 使用间隔 1、保留 64 个 savepoint；替代分支
@@ -117,9 +134,8 @@ scripts/usdb/run_long_ci.sh weekly upstream-fault-matrix --run-only
 
 ## 后续扩展顺序
 
-1. 增加上游恢复后 validator 不重启的缓存恢复专项，明确自动恢复保证。
-2. 按需扩展新 mint/remint、跨余额 unit 的转移，以及同区块事件排序组合。
-3. 在固定短矩阵稳定后，再加入不同重组深度与故障时点的有限种子。每个种子
+1. 按需扩展新 mint/remint、跨余额 unit 的转移，以及同区块事件排序组合。
+2. 在固定短矩阵稳定后，再加入不同重组深度与故障时点的有限种子。每个种子
    从空环境开始，单个种子内保留故障前后的状态联系。
 
 这些扩展不应通过延长 worldsim 轮次实现；K 的 50400 区块窗口边界由现有
@@ -198,3 +214,26 @@ validator 无需重启即可继续出块。上述结果不扩展为所有故障�
 
 这条确定性用例覆盖真实 transfer；新 mint/remint 与跨余额 unit 惩罚组合仍按
 上述后续计划补充。validator 在故障恢复后仍显式重启，自动恢复保证不在本轮扩展内。
+
+## 本地验收记录（2026-09-07，v4 validator 自动恢复）
+
+使用 Go `3bebdb7c7` 的服务代码和本次矩阵改动，搭配 CI lock 中的 USDB `335d9b7`
+（包含 SQLite WAL 修复），以 Go 1.18.5 / Rust 1.91.0 编译固定服务二进制；
+Core 28.1、Ord 0.23.3、本地 Python 3.11.2。经真实 `--prepare-only` / `--run-only`
+入口完成全部 18 阶段，矩阵主体与清理耗时 471.92 秒，不含编译和 A 的初始化。
+
+| 自动恢复场景 | 恢复耗时 | 验证结果 |
+| --- | --- | --- |
+| indexer SIGKILL 后恢复 | 19.587 秒 | HTTP 连接 4 被断开，相同 selector 经新连接重试成功，USDB 高度 2 → 4 |
+| balance-history SIGKILL 后恢复 | 27.607 秒 | indexer 和 geth 都不重启，原 `-32041` 请求成功，USDB 高度 4 → 6 |
+| Ord 解析依赖停机后恢复 | 34.926 秒 | 原进程成功重试两个 selector，USDB 高度 8 → 10 |
+| 重组恢复连续中断两次后恢复 | 35.124 秒 | pending 期间拒绝验证，清除 pending 后原进程追平，USDB 高度 10 → 12 |
+
+- 四个恢复时限均为 90 秒；从开始恢复上游到导入固定目标 head 计时。
+- B 全程 PID 为 `3208488`，Linux start ticks 为 `86567510`，启动次数为 1；
+  geth 日志也只出现一次 P2P 启动。基线之后没有手工 peer 重连。
+- 两次恢复中断保留 pending 高度 156、epoch 2；真实转移撤销与孤块 selector 拒绝仍通过。
+- 恢复后推进到 BTC stable height 187，B 实际验证新 anchor 并继续至 USDB 高度 14。
+- C 从空目录完整重放 14 个区块，成功查询覆盖 7 个历史 anchor；A/B/C 全量状态及历史一致。
+- 24 项矩阵门禁测试、16 项 long-CI 测试、6 项 revision-lock 测试，以及发布片段校验通过；
+  测试服务均已清理。本轮没有执行完整 weekly，2500 轮 world-soak 配置保持不变。

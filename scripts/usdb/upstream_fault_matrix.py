@@ -23,11 +23,12 @@ from configure_usdb_pow_calibration_genesis import configure_genesis
 from verify_usdb_profile_e2e import decode_selector, SYSTEM_STATE_SLOTS, USDB_SYSTEM_STATE_ADDRESS
 
 
-SCHEMA = "usdb-independent-upstream-matrix:v3"
+SCHEMA = "usdb-independent-upstream-matrix:v4"
+AUTO_RECOVERY_TIMEOUT_SEC = 90
 CASES = ("baseline", "indexer-crash", "crash-recovery", "balance-crash", "balance-recovery",
          "ord-outage", "ord-recovery", "ord-source-outage", "ord-source-recovery",
          "ord-event-outage", "ord-event-catchup", "stable-fork", "recovery-interrupted",
-         "recovery-reinterrupted", "fork-recovery", "ord-event-rollback", "fresh-replay")
+         "recovery-reinterrupted", "fork-recovery", "ord-event-rollback", "steady-progress", "fresh-replay")
 FAULT_CODES = {"indexer-crash": {-32098}, "balance-crash": {-32041},
                "ord-source-outage": {-32040, -32041}, "stable-fork": {-32042, -32043, -32045, -32046}}
 RECOVERY_ENV = ("USDB_INDEXER_INJECT_REORG_RECOVERY_ENERGY_FAILURES",
@@ -106,6 +107,33 @@ def validate_interrupted_recovery(evidence):
     require(evidence["profile_errors"] > 0 and evidence["validator_after"] == evidence["validator_before"],
             "validator did not reject while recovery was pending")
     require(evidence["exit_code"] == -signal.SIGKILL, "recovery process was not interrupted")
+
+
+def validate_auto_recovery(evidence, failures, successes):
+    """Require the same process to retry failed selectors and execute the stalled chain."""
+    identity = evidence["validator_before"]
+    require(identity == evidence["validator_after"] and identity["pid"] > 0
+            and identity["start_ticks"] > 0 and identity["starts"] == 1,
+            "automatic recovery replaced the validator process")
+    require(0 < evidence["budget_seconds"] <= AUTO_RECOVERY_TIMEOUT_SEC
+            and 0 <= evidence["elapsed_seconds"] <= evidence["budget_seconds"],
+            "automatic recovery exceeded its deadline")
+    require(evidence["blocks"] > evidence["stalled_height"] and evidence["head_hash"] == evidence["target_hash"],
+            "automatic recovery did not import the stalled canonical chain")
+    key = lambda call: json.dumps(call["params"], sort_keys=True)
+    failed = {key(call): call for call in failures if "error" in call}
+    recovered = {key(call): call for call in successes if "error" not in call}
+    retried = sorted(failed.keys() & recovered.keys())
+    require(retried, "no previously rejected selector was successfully retried")
+    require(any(call["params"][0]["block_height"] == evidence["target_anchor"] for call in recovered.values()),
+            "recovery only exercised cached historical anchors")
+    closed = {call["connection_id"] for call in failures if call.get("transport_closed")}
+    if closed:
+        require(any(failed[key].get("transport_closed") and recovered[key]["connection_id"] not in closed
+                    for key in retried), "failed transport was not replaced for the retried selector")
+    return [{"request_sha256": hashlib.sha256(key.encode()).hexdigest(),
+             "block_height": failed[key]["params"][0]["block_height"],
+             "previous_error_code": failed[key]["error"]["code"]} for key in retried]
 
 
 def compare_chain(expected, actual):
@@ -202,24 +230,42 @@ class AuditProxy:
     """Forward to this node's own indexer and record actual geth validation calls."""
     def __init__(self, port, upstream, output):
         self.events, self.lock = [], threading.Lock()
+        self.next_connection_id = 0
         self.phase = "startup"
         self.stream = output.open("w")
         proxy = self
 
         class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def setup(self):
+                super().setup()
+                self.connection.settimeout(5)
+                with proxy.lock:
+                    proxy.next_connection_id += 1
+                    self.connection_id = proxy.next_connection_id
+
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                event = {"phase": proxy.phase, "method": payload["method"], "params": payload.get("params", [])}
+                event = {"phase": proxy.phase, "method": payload["method"], "params": payload.get("params", []),
+                         "connection_id": self.connection_id}
                 try:
                     result = RPC(upstream)(payload["method"], payload.get("params", []))
                     reply = {"jsonrpc": "2.0", "id": payload["id"], "result": result}
                 except (OSError, ValueError) as error:
                     event["error"] = {"code": getattr(error, "code", -32098), "message": str(error)}
                     reply = {"jsonrpc": "2.0", "id": payload["id"], "error": event["error"]}
+                    if isinstance(error, OSError):
+                        # Preserve a real transport failure at geth's RPC client,
+                        # instead of replacing a dead upstream with a JSON error.
+                        event["transport_closed"] = True
                 with proxy.lock:
                     proxy.events.append(event)
                     proxy.stream.write(json.dumps(event) + "\n")
                     proxy.stream.flush()
+                if event.get("transport_closed"):
+                    self.close_connection = True
+                    return
                 body = json.dumps(reply).encode()
                 try:
                     self.send_response(200)
@@ -262,6 +308,8 @@ class Node:
         self.ports = ports(matrix.args.port_base, index)
         self.processes = {}
         self.proxy = None
+        self.pinned_geth = None
+        self.geth_starts = 0
 
     def url(self, service):
         return f"http://127.0.0.1:{self.ports[service]}"
@@ -277,10 +325,13 @@ class Node:
         try:
             self.processes[service] = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
                                                        start_new_session=True, env=env)
+            if service == "geth":
+                self.geth_starts += 1
         finally:
             log.close()
 
     def stop(self, service, *, crash=False):
+        require(service != "geth" or self.pinned_geth is None, f"{self.name}: validator restart is forbidden")
         process = self.processes.pop(service)
         require(process.poll() is None, f"{self.name}/{service} exited before requested fault/shutdown")
         os.killpg(process.pid, signal.SIGKILL if crash else signal.SIGTERM)
@@ -291,6 +342,13 @@ class Node:
             process.wait(timeout=5)
             require(False, f"{self.name}/{service} failed graceful shutdown")
         return process.returncode
+
+    def validator_identity(self):
+        """Check process continuity, including Linux start time to detect PID reuse."""
+        process = self.processes["geth"]
+        require(process is self.pinned_geth and process.poll() is None, f"{self.name}: validator process changed or exited")
+        fields = Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return {"pid": process.pid, "start_ticks": int(fields[19]), "starts": self.geth_starts}
 
     def start_indexer(self, recovery_stage=None):
         self.start_service("usdb-indexer", recovery_stage=recovery_stage)
@@ -411,11 +469,14 @@ class Matrix:
     def check_alive(self):
         require(time.monotonic() < self.deadline, "matrix time budget exceeded")
         for node in self.nodes:
+            if node.pinned_geth is not None:
+                node.validator_identity()
             for service, process in node.processes.items():
                 require(process.poll() is None, f"unexpected exit: {node.name}/{service}: {process.returncode}")
 
     def wait(self, label, predicate, seconds=180, interval=0.25):
-        deadline, next_log, last = min(self.deadline, time.monotonic() + seconds), 0, "not ready"
+        deadline = min(self.deadline, getattr(self, "recovery_deadline", self.deadline), time.monotonic() + seconds)
+        next_log, last = 0, "not ready"
         while time.monotonic() < deadline:
             self.check_alive()
             try:
@@ -545,17 +606,16 @@ class Matrix:
         return self.digest(expected)
 
     def connect_geth(self, node):
+        require(node.pinned_geth is None, f"{node.name}: manual validator reconnection is forbidden")
         enode = self.a.rpc("geth")("admin_nodeInfo")["enode"]
         # Discovery is disabled; the explicit loopback enode prevents accidental
         # external peers and keeps every validator attached to the healthy miner.
         enode = enode.split("@")[0] + f"@127.0.0.1:{self.a.ports['geth-p2p']}"
         require(node.rpc("geth")("admin_addPeer", [enode]) is True, "admin_addPeer rejected")
 
-    def converge_geth(self, node, *, restart=False):
-        if restart:
-            node.stop("geth")
-            node.start_geth()
-        self.connect_geth(node)
+    def converge_geth(self, node):
+        if node.pinned_geth is None:
+            self.connect_geth(node)
         target = self.a.block()
         self.wait(f"{node.name} geth canonical head {target['number']}", lambda: node.block()["hash"] == target["hash"])
         expected = [self.a.block(i) for i in range(self.a.height() + 1)]
@@ -573,6 +633,32 @@ class Matrix:
                     f"{node.name} historical miner balance mismatch at {tag}")
         self.write_json(self.args.output_dir / f"{node.name}-blocks.json", actual)
         return len(expected) - 1
+
+    def begin_auto_recovery(self, *fault_phases):
+        """Start the bound before restoring upstreams; recovery only polls geth."""
+        target = self.a.block()
+        started = time.monotonic()
+        self.recovery_deadline = started + AUTO_RECOVERY_TIMEOUT_SEC
+        return {"started": started, "validator_before": self.b.validator_identity(),
+                "stalled_height": self.b.height(), "target_hash": target["hash"],
+                "target_anchor": decode_selector(target)["btc_height"],
+                "budget_seconds": AUTO_RECOVERY_TIMEOUT_SEC,
+                "failures": [call for phase in fault_phases for call in self.b.proxy.profile_calls(phase, errors=True)]}
+
+    def finish_auto_recovery(self, name, recovery):
+        remaining = recovery["budget_seconds"] - (time.monotonic() - recovery["started"])
+        self.wait(f"{name}: validator retries without restart or peer RPC", lambda:
+                  self.b.block()["hash"] == recovery["target_hash"], seconds=remaining)
+        evidence = {key: value for key, value in recovery.items() if key not in {"started", "failures"}}
+        evidence.update(validator_after=self.b.validator_identity(), blocks=self.b.height(),
+                        head_hash=self.b.block()["hash"], elapsed_seconds=round(time.monotonic() - recovery["started"], 3))
+        successes = [call for call in self.b.proxy.profile_calls(name) if "error" not in call]
+        evidence["retried_profiles"] = validate_auto_recovery(evidence, recovery["failures"], successes)
+        evidence["profile_successes"] = len(successes)
+        del self.recovery_deadline
+        # Passive convergence also verifies every executed block and historical state.
+        self.converge_geth(self.b)
+        return evidence
 
     def mine_usdb(self, count=2):
         start = self.a.height()
@@ -592,7 +678,6 @@ class Matrix:
         # block. Live miner refresh has its own dedicated E2E coverage.
         self.a.stop("geth")
         self.a.start_geth()
-        self.connect_geth(self.b)
         if wait_for_peer:
             self.wait("validator attached before fault injection", lambda: bool(self.b.rpc("geth")("admin_peers")))
 
@@ -650,11 +735,12 @@ class Matrix:
         self.fault_observation("balance-crash", before, old_anchor, readiness=readiness)
 
         self.phase("balance-recovery")
+        recovery = self.begin_auto_recovery("balance-crash")
         self.b.start_service("balance-history")
         self.wait_upstream(self.b)
         require(self.b.processes["usdb-indexer"].pid == indexer_pid, "balance recovery restarted downstream indexer")
-        blocks = self.converge_geth(self.b, restart=True)
-        self.passed("balance-recovery", blocks=blocks, indexer_restarted=False, balance_database_reused=True,
+        evidence = self.finish_auto_recovery("balance-recovery", recovery)
+        self.passed("balance-recovery", **evidence, indexer_restarted=False, balance_database_reused=True,
                     state_sha256=self.compare_states("balance-recovery", [self.b]))
 
     def run_ord_outages(self):
@@ -698,11 +784,12 @@ class Matrix:
         self.fault_observation("ord-source-outage", before, old_anchor, readiness=readiness)
 
         self.phase("ord-source-recovery")
+        recovery = self.begin_auto_recovery("ord-source-outage")
         self.b.start_ord()
         self.wait_ord(self.b)
         self.wait_upstream(self.b)
-        blocks = self.converge_geth(self.b, restart=True)
-        self.passed("ord-source-recovery", blocks=blocks, source=self.b.inscription_source(),
+        evidence = self.finish_auto_recovery("ord-source-recovery", recovery)
+        self.passed("ord-source-recovery", **evidence, source=self.b.inscription_source(),
                     state_sha256=self.compare_states("ord-source-recovery", [self.b]))
 
     def sign_pass_transfer(self, address):
@@ -833,9 +920,7 @@ class Matrix:
         require(pending == expected_height, f"unexpected recovery rollback target: {pending}, expected {expected_height}")
         self.wait(f"{stage} recovery hook reached", lambda: self.recovery_hook_hits(stage, pending) > 0, seconds=30)
         before = self.b.height()
-        self.b.stop("geth")
-        self.b.start_geth()
-        self.connect_geth(self.b)
+        identity = self.b.validator_identity()
         def rejected():
             require(self.b.height() == before, "validator imported blocks while reorg recovery was pending")
             return bool(self.profile_errors(phase, {-32041}))
@@ -845,6 +930,7 @@ class Matrix:
                     "hook_hits": self.recovery_hook_hits(stage, pending),
                     "profile_errors": len(self.profile_errors(phase, {-32041})),
                     "validator_before": before, "validator_after": self.b.height(),
+                    "validator_identity": identity,
                     "exit_code": self.b.stop("usdb-indexer", crash=True), "pending_after": self.pending_recovery_height()}
         self.report["active_case"] = {"name": phase, **evidence}
         validate_interrupted_recovery(evidence)
@@ -866,6 +952,8 @@ class Matrix:
         self.b.start_geth()
         self.b.proxy.phase = "baseline"
         blocks = self.converge_geth(self.b)
+        self.b.pinned_geth = self.b.processes["geth"]
+        self.report["validator_identity"] = self.b.validator_identity()
         state_digest = self.compare_states("baseline", [self.b])
         require(self.b.proxy.profile_calls("baseline"), "baseline did not validate historical profiles")
         self.passed("baseline", blocks=blocks, state_sha256=state_digest)
@@ -881,12 +969,14 @@ class Matrix:
         self.fault_observation("indexer-crash", before, old_anchor)
 
         self.phase("crash-recovery")
+        recovery = self.begin_auto_recovery("indexer-crash")
         self.b.start_indexer()
         self.wait_upstream(self.b)
         self.wait_ord(self.b)
-        blocks = self.converge_geth(self.b, restart=True)
-        self.passed("crash-recovery", blocks=blocks, state_sha256=self.compare_states("crash-recovery", [self.b]),
-                    indexer_database_reused=True, validator_restarted=True)
+        evidence = self.finish_auto_recovery("crash-recovery", recovery)
+        require(any(call.get("transport_closed") for call in recovery["failures"]), "indexer outage did not close geth RPC transport")
+        self.passed("crash-recovery", **evidence, state_sha256=self.compare_states("crash-recovery", [self.b]),
+                    indexer_database_reused=True, transport_recovered=True)
 
         self.run_balance_outage()
         self.run_ord_outages()
@@ -974,17 +1064,35 @@ class Matrix:
         require(resumed_epoch == epoch, "resuming the same recovery incremented reorg epoch")
 
         self.phase("fork-recovery")
+        recovery = self.begin_auto_recovery("stable-fork", "recovery-interrupted", "recovery-reinterrupted")
         self.b.start_indexer()
         self.wait_upstream(self.b)
         require(self.pending_recovery_height() is None, "successful recovery retained pending marker")
         readiness = self.b.rpc("usdb-indexer")("get_readiness")
         require(readiness["upstream_reorg_epoch"] == epoch, "final recovery changed reorg epoch")
-        blocks = self.converge_geth(self.b, restart=True)
-        self.passed("fork-recovery", blocks=blocks, state_sha256=self.compare_states("fork-recovery", [self.b]),
-                    original_databases_reused=True, validator_restarted=True, interruptions=2, reorg_epoch=epoch)
+        evidence = self.finish_auto_recovery("fork-recovery", recovery)
+        self.passed("fork-recovery", **evidence, state_sha256=self.compare_states("fork-recovery", [self.b]),
+                    original_databases_reused=True, interruptions=2, reorg_epoch=epoch)
 
         self.phase("ord-event-rollback")
         self.passed("ord-event-rollback", **self.verify_event_rollback(self.b))
+
+        self.phase("steady-progress")
+        old_anchor, before = decode_selector(self.a.block())["btc_height"], self.b.height()
+        self.mine_btc(3)
+        self.wait_btc(self.b)
+        for node in (self.a, self.b):
+            self.wait_upstream(node)
+        self.prepare_miner()
+        self.mine_usdb()
+        blocks = self.converge_geth(self.b)
+        anchor = decode_selector(self.a.block())["btc_height"]
+        calls = [call for call in self.b.proxy.profile_calls("steady-progress")
+                 if "error" not in call and call["params"][0]["block_height"] == anchor]
+        require(blocks > before and anchor > old_anchor and calls, "recovered validator did not validate fresh work")
+        self.passed("steady-progress", validator_identity=self.b.validator_identity(), before=before, blocks=blocks,
+                    old_anchor=old_anchor, new_anchor=anchor, profile_successes=len(calls),
+                    state_sha256=self.compare_states("steady-progress", [self.b]))
 
         self.phase("fresh-replay")
         require(not self.c.root.exists(), "fresh replay root already exists")
@@ -1007,11 +1115,14 @@ class Matrix:
                     profile_successes=len(successes), event_rollback=self.verify_event_rollback(self.c),
                     state_sha256=self.compare_states("fresh-replay", [self.b, self.c]))
         require([case["name"] for case in self.report["cases"]] == list(CASES), "matrix coverage incomplete")
+        require(self.b.validator_identity() == self.report["validator_identity"], "validator continuity lost")
         self.check_alive()
 
     def close(self):
         errors = []
         for node in reversed(self.nodes):
+            # The continuity guard remains active until validation has finished.
+            node.pinned_geth = None
             for service in reversed(list(node.processes)):
                 try:
                     node.stop(service)

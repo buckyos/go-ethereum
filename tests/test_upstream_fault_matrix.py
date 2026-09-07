@@ -16,7 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/usdb"))
 from upstream_fault_matrix import (Matrix, Node, RECOVERY_ENV, RPCError, compare_chain, ports, validate_fault,
                                    validate_ord_independence, validate_interrupted_recovery,
-                                   validate_transfer_event, reject_orphan_selector)
+                                   validate_transfer_event, reject_orphan_selector, validate_auto_recovery)
 
 
 class FaultCoverageTests(unittest.TestCase):
@@ -97,6 +97,78 @@ class FaultCoverageTests(unittest.TestCase):
         broken["readiness"]["query_ready"] = True
         with self.assertRaises(ValueError):
             validate_interrupted_recovery(broken)
+
+
+class AutomaticRecoveryTests(unittest.TestCase):
+    def fixture(self):
+        identity = {"pid": 123, "start_ticks": 456, "starts": 1}
+        evidence = {"validator_before": identity, "validator_after": dict(identity), "elapsed_seconds": 12,
+                    "budget_seconds": 90, "blocks": 4, "stalled_height": 2,
+                    "head_hash": "canonical", "target_hash": "canonical", "target_anchor": 153}
+        failed = {"params": [{"block_height": 150, "context": {"state_id": "parent"}}],
+                  "error": {"code": -32098}, "transport_closed": True, "connection_id": 1}
+        retry = {"params": copy.deepcopy(failed["params"]), "connection_id": 2}
+        head = {"params": [{"block_height": 153, "context": {"state_id": "head"}}], "connection_id": 2}
+        return evidence, [failed], [retry, head]
+
+    def test_same_process_retries_identical_selector_over_new_connection(self):
+        retries = validate_auto_recovery(*self.fixture())
+        self.assertEqual(len(retries), 1)
+        self.assertEqual(retries[0]["block_height"], 150)
+        self.assertEqual(retries[0]["previous_error_code"], -32098)
+
+    def test_rejects_restart_pid_reuse_or_extended_deadline(self):
+        for field, value in (("pid", 124), ("start_ticks", 457), ("starts", 2)):
+            with self.subTest(field=field):
+                evidence, failed, success = self.fixture()
+                evidence["validator_after"][field] = value
+                with self.assertRaisesRegex(ValueError, "replaced"):
+                    validate_auto_recovery(evidence, failed, success)
+        for field, value in (("elapsed_seconds", 90.1), ("budget_seconds", 91), ("budget_seconds", 0),
+                             ("blocks", 2), ("head_hash", "fork")):
+            with self.subTest(field=field, value=value):
+                evidence, failed, success = self.fixture()
+                evidence[field] = value
+                with self.assertRaises(ValueError):
+                    validate_auto_recovery(evidence, failed, success)
+
+    def test_equal_height_does_not_replace_failed_selector_or_transport_evidence(self):
+        for mutation in ("selector", "still-fails", "old-anchor", "closed-connection", "no-failure"):
+            with self.subTest(mutation=mutation):
+                evidence, failed, success = self.fixture()
+                if mutation == "selector":
+                    success[0]["params"][0]["context"]["state_id"] = "different"
+                elif mutation == "still-fails":
+                    success[0]["error"] = {"code": -32041}
+                elif mutation == "old-anchor":
+                    success.pop()
+                elif mutation == "closed-connection":
+                    success[0]["connection_id"] = 1
+                else:
+                    failed.clear()
+                with self.assertRaises(ValueError):
+                    validate_auto_recovery(evidence, failed, success)
+
+    def test_process_pin_prevents_stop_or_manual_peer_reconnection(self):
+        node = Node(SimpleNamespace(args=SimpleNamespace(work_dir=Path("/tmp/unused"), port_base=22400)), "b", 1)
+        process = SimpleNamespace(pid=123, poll=lambda: None)
+        node.processes["geth"] = node.pinned_geth = process
+        with self.assertRaisesRegex(ValueError, "restart is forbidden"):
+            node.stop("geth")
+        self.assertIs(node.processes["geth"], process)
+        with self.assertRaisesRegex(ValueError, "manual validator reconnection"):
+            Matrix.__new__(Matrix).connect_geth(node)
+        node.processes["geth"] = SimpleNamespace(pid=123, poll=lambda: None)
+        with self.assertRaisesRegex(ValueError, "changed or exited"):
+            node.validator_identity()
+
+    def test_upstream_waits_share_the_recovery_deadline(self):
+        matrix = Matrix.__new__(Matrix)
+        matrix.deadline = time.monotonic() + 60
+        matrix.recovery_deadline = time.monotonic() - 1
+        matrix.check_alive = lambda: self.fail("expired recovery should not keep polling")
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            matrix.wait("upstream recovery", lambda: self.fail("must not extend recovery budget"))
 
 
 class FullReplayTests(unittest.TestCase):
