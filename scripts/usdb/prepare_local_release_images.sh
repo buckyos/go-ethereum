@@ -18,7 +18,7 @@ usage() {
 Usage: scripts/usdb/prepare_local_release_images.sh <action>
 
 Actions:
-  build   Export committed sources, build/push three images, and create a local candidate.
+  build   Export committed sources, build/push four images, and create a local candidate.
   status  Show the local registry and the generated execution plan.
   stop    Stop only the temporary local registry container.
 
@@ -134,10 +134,11 @@ build_candidate() {
   export_revision "$SOURCE_DAO_REPO" "$source_dao_revision" "$WORK_DIR/contexts/SourceDAO"
   ensure_registry
 
-  local chain_tag services_tag bitcoin_tag
+  local chain_tag services_tag bitcoin_tag tools_tag
   chain_tag="$REGISTRY/buckyos/usdb-chain:git-$go_revision"
   services_tag="$REGISTRY/buckyos/usdb-services:git-$usdb_revision"
   bitcoin_tag="$REGISTRY/buckyos/usdb-bitcoin-core:git-$usdb_revision"
+  tools_tag="$REGISTRY/buckyos/sourcedao-bootstrap-tools:git-$source_dao_revision"
 
   echo "Building USDB chain image from $go_revision"
   build_image \
@@ -166,10 +167,19 @@ build_candidate() {
     "$usdb_revision" \
     "$WORK_DIR/metadata/bitcoin-core.json"
 
-  local chain_digest services_digest bitcoin_digest local_lock manifest plan
+  echo "Building SourceDAO tools image from $source_dao_revision"
+  build_image \
+    "$WORK_DIR/contexts/SourceDAO" \
+    "$WORK_DIR/contexts/SourceDAO/Dockerfile.usdb-tools" \
+    "$tools_tag" \
+    "$source_dao_revision" \
+    "$WORK_DIR/metadata/sourcedao-tools.json"
+
+  local chain_digest services_digest bitcoin_digest tools_digest local_lock manifest plan
   chain_digest=$(metadata_digest "$WORK_DIR/metadata/usdb-chain.json")
   services_digest=$(metadata_digest "$WORK_DIR/metadata/usdb-services.json")
   bitcoin_digest=$(metadata_digest "$WORK_DIR/metadata/bitcoin-core.json")
+  tools_digest=$(metadata_digest "$WORK_DIR/metadata/sourcedao-tools.json")
   local_lock="$WORK_DIR/local-ci-revisions.json"
   manifest="$WORK_DIR/release-manifest.json"
   plan="$WORK_DIR/execution-plan.json"
@@ -191,7 +201,8 @@ build_candidate() {
     --source-dao-revision "$source_dao_revision" \
     --services-image "ghcr.io/buckyos/usdb-services@${services_digest}" \
     --chain-image "ghcr.io/buckyos/usdb-chain@${chain_digest}" \
-    --bitcoin-image "ghcr.io/buckyos/usdb-bitcoin-core@${bitcoin_digest}"
+    --bitcoin-image "ghcr.io/buckyos/usdb-bitcoin-core@${bitcoin_digest}" \
+    --sourcedao-tools-image "ghcr.io/buckyos/sourcedao-bootstrap-tools@${tools_digest}"
 
   python3 "$TOOL" plan \
     --manifest "$manifest" \

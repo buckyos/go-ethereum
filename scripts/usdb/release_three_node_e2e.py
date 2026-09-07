@@ -17,6 +17,11 @@ SCHEMA_VERSION = "usdb-release-manifest:v6"
 QUALIFICATION_SCHEMA_VERSION = "usdb-ci-qualification:v1"
 QUALIFICATION_LEVELS = {"fast", "nightly", "weekly"}
 IMAGE_SPECS = {
+    "sourcedao_tools": {
+        "canonical_name": "ghcr.io/buckyos/sourcedao-bootstrap-tools",
+        "env_key": None,
+        "source": "source_dao",
+    },
     "usdb_services": {
         "canonical_name": "ghcr.io/buckyos/usdb-services",
         "env_key": "USDB_SERVICES_IMAGE",
@@ -241,6 +246,8 @@ def validate_node_env(plan: dict[str, Any], node_env_path: Path) -> None:
     env = load_env(node_env_path)
     for image in plan["images"].values():
         key = image["env_key"]
+        if key is None:
+            continue  # One-shot tools are release inputs, not Compose services.
         require(env.get(key) == image["canonical_reference"], f"{key} does not match the release manifest")
 
 
@@ -251,7 +258,8 @@ def render_node_env(
     require(role in {"bootnode", "full", "miner"}, "unsupported node role")
     env = load_env(base_path)
     for image in plan["images"].values():
-        env[image["env_key"]] = image["canonical_reference"]
+        if image["env_key"] is not None:
+            env[image["env_key"]] = image["canonical_reference"]
 
     offset = node_index - 1
     env.update(

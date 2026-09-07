@@ -295,7 +295,7 @@ render_node_envs() {
 
 pull_and_verify_images() {
   local key reference inspect_file
-  for key in usdb_services usdb_chain bitcoin_core; do
+  for key in usdb_services usdb_chain bitcoin_core sourcedao_tools; do
     reference=$(plan_value ".images.${key}.execution_reference")
     echo "Pulling ${key}: ${reference}"
     docker pull "$reference" >/dev/null

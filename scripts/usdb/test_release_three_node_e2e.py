@@ -45,6 +45,10 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
                 "source_dao": {"revision": "c" * 40},
             },
             "images": {
+                "sourcedao_tools": {
+                    "reference": "ghcr.io/buckyos/sourcedao-bootstrap-tools@sha256:" + "1" * 64,
+                    "source_revision": "c" * 40,
+                },
                 "usdb_services": {
                     "reference": "ghcr.io/buckyos/usdb-services@sha256:" + "d" * 64,
                     "source_revision": usdb_revision,
@@ -135,6 +139,7 @@ class ReleaseThreeNodeE2ETests(unittest.TestCase):
             "\n".join(
                 f"{entry['env_key']}={entry['canonical_reference']}"
                 for entry in plan["images"].values()
+                if entry["env_key"] is not None
             )
             + "\n",
             encoding="utf-8",
