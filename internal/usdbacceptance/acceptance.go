@@ -141,6 +141,14 @@ type bootstrapOperation struct {
 }
 
 type bootstrapState struct {
+	RecordSchema     string `json:"record_schema,omitempty"`
+	CeremonyIdentity *struct {
+		ChainID      uint64         `json:"chain_id"`
+		GenesisHash  common.Hash    `json:"genesis_hash"`
+		ConfigSHA256 string         `json:"config_sha256"`
+		GoldenSHA256 string         `json:"golden_sha256"`
+		Signer       common.Address `json:"signer"`
+	} `json:"ceremony_identity,omitempty"`
 	StateVersion    string               `json:"state_version"`
 	Status          string               `json:"status"`
 	Scope           string               `json:"scope"`
@@ -353,6 +361,14 @@ func normalizeInputs(files InputFiles) (*normalizedInputs, error) {
 	if err := readJSON(files.BootstrapState, &state); err != nil {
 		return nil, fmt.Errorf("read bootstrap state: %w", err)
 	}
+	if state.RecordSchema != "" {
+		if state.RecordSchema != "sourcedao-bootstrap-public-state:v1" {
+			return nil, errors.New("unsupported public bootstrap state schema")
+		}
+		if err := readStrictJSON(files.BootstrapState, &state); err != nil {
+			return nil, fmt.Errorf("public bootstrap state contains unsupported fields: %w", err)
+		}
+	}
 	var validation validationSummary
 	if err := readJSON(files.Validation, &validation); err != nil {
 		return nil, fmt.Errorf("read strict validation summary: %w", err)
@@ -367,6 +383,13 @@ func normalizeInputs(files InputFiles) (*normalizedInputs, error) {
 	}
 	if identity.Evidence.ConfigSHA256 != publicDigest {
 		return nil, errors.New("strict validation public config digest mismatch")
+	}
+	if state.RecordSchema != "" {
+		ceremony := state.CeremonyIdentity
+		if ceremony == nil || ceremony.ChainID != state.ChainID || ceremony.GenesisHash != identity.Evidence.GenesisHash ||
+			ceremony.ConfigSHA256 != publicDigest || ceremony.GoldenSHA256 != identity.Evidence.GoldenSHA256 || ceremony.Signer != identity.BootstrapAdmin {
+			return nil, errors.New("public bootstrap state ceremony identity mismatch")
+		}
 	}
 	goldenDigest, err := canonicalFileDigest(files.ContractGolden, nil)
 	if err != nil {

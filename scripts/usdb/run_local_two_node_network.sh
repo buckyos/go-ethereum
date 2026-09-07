@@ -24,6 +24,7 @@ RESTART_NODE1_AFTER_BOOTSTRAP=${RESTART_NODE1_AFTER_BOOTSTRAP:-$RUN_FULL_BOOTSTR
 RUN_PUBLIC_RELEASE_E2E=${RUN_PUBLIC_RELEASE_E2E:-0}
 BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS=${BOOTSTRAP_ACCEPTANCE_CONFIRMATIONS:-0}
 BOOTSTRAP_STATE_FILE=${BOOTSTRAP_STATE_FILE:-"$WORK_DIR/sourcedao-bootstrap-state.json"}
+BOOTSTRAP_PUBLIC_STATE_FILE=${BOOTSTRAP_PUBLIC_STATE_FILE:-"$WORK_DIR/sourcedao-bootstrap-public-state.json"}
 BOOTSTRAP_REPLAY_STATE_FILE=${BOOTSTRAP_REPLAY_STATE_FILE:-"$WORK_DIR/sourcedao-bootstrap-replay-state.json"}
 NODE1_VALIDATION_FILE=${NODE1_VALIDATION_FILE:-"$WORK_DIR/node1-bootstrap-validation.json"}
 NODE2_VALIDATION_FILE=${NODE2_VALIDATION_FILE:-"$WORK_DIR/node2-bootstrap-validation.json"}
@@ -501,6 +502,17 @@ run_source_dao_full_bootstrap() {
   )
 }
 
+export_source_dao_public_state() {
+  (
+    cd "$SOURCE_DAO_DIR"
+    usdb_load_node_toolchain
+    npx tsx scripts/usdb_export_bootstrap_state.ts \
+      --config "$SOURCE_DAO_FULL_CONFIG" \
+      --state-file "$BOOTSTRAP_STATE_FILE" \
+      --output "$BOOTSTRAP_PUBLIC_STATE_FILE"
+  )
+}
+
 run_source_dao_validation() {
   local rpc_url=$1
   local state_file=$2
@@ -530,7 +542,7 @@ run_bootstrap_acceptance_create() {
     --rpc-url "$rpc_url" \
     --genesis "$GENESIS_JSON" \
     --bootstrap-config "$SOURCE_DAO_FULL_CONFIG" \
-    --bootstrap-state "$BOOTSTRAP_STATE_FILE" \
+    --bootstrap-state "$BOOTSTRAP_PUBLIC_STATE_FILE" \
     --validation "$validation_file" \
     --contract-golden "$SOURCE_DAO_DIR/security/usdb-contract-golden.json" \
     --checkpoint-block "$checkpoint_block" \
@@ -546,7 +558,7 @@ run_bootstrap_acceptance_verify() {
     --rpc-url "$rpc_url" \
     --genesis "$GENESIS_JSON" \
     --bootstrap-config "$SOURCE_DAO_FULL_CONFIG" \
-    --bootstrap-state "$BOOTSTRAP_STATE_FILE" \
+    --bootstrap-state "$BOOTSTRAP_PUBLIC_STATE_FILE" \
     --validation "$validation_file" \
     --contract-golden "$SOURCE_DAO_DIR/security/usdb-contract-golden.json" \
     --artifact "$artifact_file"
@@ -778,7 +790,8 @@ run_full_bootstrap_lifecycle() {
 
   echo "Running SourceDAO full bootstrap against node 1"
   run_source_dao_full_bootstrap "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE"
-  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
+  export_source_dao_public_state
+  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_PUBLIC_STATE_FILE" "$NODE1_VALIDATION_FILE"
 
   bootstrap_height=$(jq -r ".evidence.checkpoint.number" "$NODE1_VALIDATION_FILE")
   read -r bootstrap_hash bootstrap_state_root < <(block_identity_at "$NODE1_RPC" "$bootstrap_height")
@@ -805,7 +818,7 @@ run_full_bootstrap_lifecycle() {
   accelerate_fake_pow_after_bootstrap
   echo "Running UIP-0011 fee split and Dividend ledger-sync probe"
   run_source_dao_fee_probe "$NODE1_RPC" "$FEE_PROBE_FILE"
-  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
+  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_PUBLIC_STATE_FILE" "$NODE1_VALIDATION_FILE"
 
   if [[ "$RESTART_NODE1_AFTER_BOOTSTRAP" == "1" ]]; then
     echo "Restarting node 1 with its existing datadir"
@@ -818,7 +831,7 @@ run_full_bootstrap_lifecycle() {
       "$bootstrap_height" \
       "$bootstrap_hash" \
       "$bootstrap_state_root"
-    run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
+    run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_PUBLIC_STATE_FILE" "$NODE1_VALIDATION_FILE"
     run_bootstrap_acceptance_verify "$NODE1_RPC" "$NODE1_VALIDATION_FILE"
     if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
       run_public_release_verify
@@ -845,7 +858,7 @@ run_full_bootstrap_lifecycle() {
     "$bootstrap_height" \
     "$bootstrap_hash" \
     "$bootstrap_state_root"
-  run_source_dao_validation "$NODE2_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE2_VALIDATION_FILE"
+  run_source_dao_validation "$NODE2_RPC" "$BOOTSTRAP_PUBLIC_STATE_FILE" "$NODE2_VALIDATION_FILE"
   run_bootstrap_acceptance_verify "$NODE2_RPC" "$NODE2_VALIDATION_FILE"
   if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
     run_public_release_verify
@@ -858,7 +871,8 @@ run_full_bootstrap_lifecycle() {
   cp "$BOOTSTRAP_STATE_FILE.transactions.json" "$BOOTSTRAP_REPLAY_STATE_FILE.transactions.json"
   run_source_dao_full_bootstrap "$NODE1_RPC" "$BOOTSTRAP_REPLAY_STATE_FILE"
   assert_idempotent_replay_state "$BOOTSTRAP_REPLAY_STATE_FILE"
-  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_STATE_FILE" "$NODE1_VALIDATION_FILE"
+  export_source_dao_public_state
+  run_source_dao_validation "$NODE1_RPC" "$BOOTSTRAP_PUBLIC_STATE_FILE" "$NODE1_VALIDATION_FILE"
   assert_cross_node_checkpoint "post-full-bootstrap-replay"
 }
 
@@ -869,6 +883,7 @@ rm -f \
   "$NODE1_LOG" \
   "$NODE2_LOG" \
   "$BOOTSTRAP_STATE_FILE" \
+  "$BOOTSTRAP_PUBLIC_STATE_FILE" \
   "$BOOTSTRAP_REPLAY_STATE_FILE" \
   "$BOOTSTRAP_STATE_FILE.transactions.json" \
   "$BOOTSTRAP_REPLAY_STATE_FILE.transactions.json" \
@@ -964,7 +979,8 @@ fi
 if [[ "$RUN_FULL_BOOTSTRAP" == "1" ]]; then
   run_full_bootstrap_lifecycle
   echo "Full-bootstrap restart/joiner lifecycle test passed."
-  echo "bootstrap state: $BOOTSTRAP_STATE_FILE"
+  echo "private state:   $BOOTSTRAP_STATE_FILE"
+  echo "public state:    $BOOTSTRAP_PUBLIC_STATE_FILE"
   echo "acceptance:      $BOOTSTRAP_ACCEPTANCE_FILE"
   echo "replay state:    $BOOTSTRAP_REPLAY_STATE_FILE"
   echo "fee probe:       $FEE_PROBE_FILE"

@@ -95,7 +95,12 @@ func TestVerifyRejectsArtifactDrift(t *testing.T) {
 			tamper: func(t *testing.T, fixture *releaseFixture) {
 				replacement := *fixture.acceptance
 				replacement.Checkpoint.Hash = common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-				if err := usdbacceptance.WriteArtifact(fixture.files.AcceptanceArtifact, &replacement); err != nil {
+				// Write raw tampered bytes: the validated writer correctly rejects an inconsistent checkpoint.
+				data, err := json.Marshal(&replacement)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(fixture.files.AcceptanceArtifact, data, 0o644); err != nil {
 					t.Fatal(err)
 				}
 			},

@@ -78,6 +78,41 @@ func TestCreateAndVerifyAcceptance(t *testing.T) {
 	}
 }
 
+func TestPublicBootstrapStateRejectsPrivateFieldsAndIdentityChanges(t *testing.T) {
+	files := writeAcceptanceFixture(t, testAdmin)
+	state := readFixtureJSON(t, files.BootstrapState)
+	for _, key := range []string{"generated_at", "completed_at", "message", "rpc_url"} {
+		delete(state, key)
+	}
+	state["record_schema"] = "sourcedao-bootstrap-public-state:v1"
+	evidence := testEvidence(testChainIdentity())
+	state["ceremony_identity"] = map[string]interface{}{
+		"chain_id": testChainID, "genesis_hash": evidence.GenesisHash,
+		"config_sha256": evidence.ConfigSHA256, "golden_sha256": evidence.GoldenSHA256, "signer": testAdmin,
+	}
+	writeFixtureJSON(t, files.BootstrapState, state)
+	artifact, err := Create(files, testChainIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(artifact, files, testChainIdentity()); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"rpc_url", "config_path", "raw_transaction", "last_error", "privateKey"} {
+		state[key] = "private runtime fixture"
+		writeFixtureJSON(t, files.BootstrapState, state)
+		if _, err := Create(files, testChainIdentity()); err == nil || !strings.Contains(err.Error(), "unsupported fields") {
+			t.Fatalf("expected rejection for %s, got %v", key, err)
+		}
+		delete(state, key)
+	}
+	state["ceremony_identity"].(map[string]interface{})["signer"] = testDAO
+	writeFixtureJSON(t, files.BootstrapState, state)
+	if _, err := Create(files, testChainIdentity()); err == nil || !strings.Contains(err.Error(), "ceremony identity mismatch") {
+		t.Fatalf("expected public ceremony identity rejection, got %v", err)
+	}
+}
+
 func TestCreateRejectsBootstrapAdminMismatch(t *testing.T) {
 	files := writeAcceptanceFixture(t, "0x0000000000000000000000000000000000009999")
 	_, err := Create(files, testChainIdentity())
