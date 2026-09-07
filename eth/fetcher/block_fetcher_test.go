@@ -193,6 +193,124 @@ func (f *fetcherTester) dropPeer(peer string) {
 	f.drops[peer] = true
 }
 
+// A downloader import does not itself generate a fetcher event. Its completion
+// must release the queued tip without another announcement, while preserving
+// both header verification and block execution.
+func TestSyncCompletionImportsQueuedBlock(t *testing.T) {
+	for _, failure := range []string{"none", "header", "execution"} {
+		t.Run(failure, func(t *testing.T) {
+			hashes, blocks := makeChain(6, 0, genesis)
+			tip := blocks[hashes[0]]
+			tester := newTester(false)
+			defer tester.fetcher.Stop()
+
+			queued := make(chan struct{}, 4)
+			verified := make(chan struct{}, 1)
+			executed := make(chan struct{}, 1)
+			imported := make(chan *types.Block, 1)
+			dropped := make(chan string, 1)
+			tester.fetcher.queueChangeHook = func(hash common.Hash, added bool) {
+				if added {
+					queued <- struct{}{}
+				}
+			}
+			tester.fetcher.verifyHeader = func(header *types.Header) error {
+				verified <- struct{}{}
+				if failure == "header" {
+					return errors.New("invalid queued header")
+				}
+				return nil
+			}
+			tester.fetcher.insertChain = func(blocks types.Blocks) (int, error) {
+				defer func() { executed <- struct{}{} }()
+				if failure == "execution" {
+					return 0, errors.New("invalid queued block state")
+				}
+				return tester.insertChain(blocks)
+			}
+			tester.fetcher.importedHook = func(_ *types.Header, block *types.Block) { imported <- block }
+			tester.fetcher.dropPeer = func(peer string) { dropped <- peer }
+
+			if err := tester.fetcher.Enqueue("miner", tip); err != nil {
+				t.Fatal(err)
+			}
+			// Observe both initial enqueue and requeue behind missing parents.
+			for i := 0; i < 2; i++ {
+				select {
+				case <-queued:
+				case <-time.After(time.Second):
+					t.Fatal("tip was not queued behind missing parents")
+				}
+			}
+			var prefix types.Blocks
+			for i := 5; i >= 1; i-- {
+				prefix = append(prefix, blocks[hashes[i]])
+			}
+			if _, err := tester.insertChain(prefix); err != nil {
+				t.Fatal(err)
+			}
+			// No further peer events: only the downloader completion notification.
+			tester.fetcher.NotifySyncComplete()
+			select {
+			case <-verified:
+			case <-time.After(time.Second):
+				t.Fatal("sync completion did not wake queued tip verification")
+			}
+			if failure == "header" {
+				select {
+				case peer := <-dropped:
+					if peer != "miner" {
+						t.Fatalf("dropped wrong peer: %s", peer)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("invalid header was not rejected")
+				}
+			} else {
+				select {
+				case <-executed:
+				case <-time.After(time.Second):
+					t.Fatal("queued tip did not reach block execution")
+				}
+			}
+			if failure != "none" {
+				if tester.chainHeight() != 5 || tester.getBlock(tip.Hash()) != nil {
+					t.Fatal("sync completion imported an invalid tip")
+				}
+				return
+			}
+			select {
+			case block := <-imported:
+				if block.Hash() != tip.Hash() || tester.chainHeight() != 6 {
+					t.Fatal("sync completion imported the wrong tip")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("sync completion did not import the queued tip")
+			}
+		})
+	}
+}
+
+func TestSyncCompletionNotificationDoesNotBlock(t *testing.T) {
+	f := NewBlockFetcher(false, nil, nil, nil, nil, nil, nil, nil, nil)
+	done := make(chan struct{})
+	go func() {
+		// Coalesce notifications while the loop cannot receive, including shutdown.
+		for i := 0; i < 100; i++ {
+			f.NotifySyncComplete()
+		}
+		f.Stop()
+		for i := 0; i < 100; i++ {
+			f.NotifySyncComplete()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("sync completion blocked on an inactive fetcher")
+	}
+}
+
 // makeHeaderFetcher retrieves a block header fetcher associated with a simulated peer.
 func (f *fetcherTester) makeHeaderFetcher(peer string, blocks map[common.Hash]*types.Block, drift time.Duration) headerRequesterFn {
 	closure := make(map[common.Hash]*types.Block)

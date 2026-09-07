@@ -264,6 +264,10 @@ func (h *handler) doSync(op *chainSyncOp) error {
 		log.Info("Snap sync complete, auto disabling")
 		atomic.StoreUint32(&h.snapSync, 0)
 	}
+	// A propagated tip can be queued above the downloaded head. Wake the
+	// fetcher only after snap sync stops rejecting propagated block imports,
+	// so a quiet network does not leave that tip waiting for another message.
+	h.blockFetcher.NotifySyncComplete()
 	// If we've successfully finished a sync cycle and passed any required checkpoint,
 	// enable accepting transactions from the network.
 	head := h.chain.CurrentBlock()

@@ -1,0 +1,9 @@
+{
+  "github.com/ethereum/go-ethereum/eth": [
+    "TestSyncCompletionImportsQueuedTip"
+  ],
+  "github.com/ethereum/go-ethereum/eth/fetcher": [
+    "TestSyncCompletionImportsQueuedBlock",
+    "TestSyncCompletionNotificationDoesNotBlock"
+  ]
+}

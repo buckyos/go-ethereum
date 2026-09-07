@@ -164,8 +164,9 @@ type BlockFetcher struct {
 	headerFilter chan chan *headerFilterTask
 	bodyFilter   chan chan *bodyFilterTask
 
-	done chan common.Hash
-	quit chan struct{}
+	done     chan common.Hash
+	syncDone chan struct{}
+	quit     chan struct{}
 
 	// Announce states
 	announces  map[string]int                   // Per peer blockAnnounce counts to prevent memory exhaustion
@@ -206,6 +207,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		headerFilter:   make(chan chan *headerFilterTask),
 		bodyFilter:     make(chan chan *bodyFilterTask),
 		done:           make(chan common.Hash),
+		syncDone:       make(chan struct{}, 1),
 		quit:           make(chan struct{}),
 		announces:      make(map[string]int),
 		announced:      make(map[common.Hash][]*blockAnnounce),
@@ -236,6 +238,17 @@ func (f *BlockFetcher) Start() {
 // operations.
 func (f *BlockFetcher) Stop() {
 	close(f.quit)
+}
+
+// NotifySyncComplete rechecks queued blocks after the downloader advances the
+// chain. The caller must enable normal block imports before notifying. Signals
+// are coalesced because the loop always reads the latest chain height; notifying
+// must not block the downloader, including during shutdown.
+func (f *BlockFetcher) NotifySyncComplete() {
+	select {
+	case f.syncDone <- struct{}{}:
+	default:
+	}
 }
 
 // Notify announces the fetcher of the potential availability of a new block in
@@ -381,6 +394,10 @@ func (f *BlockFetcher) loop() {
 		case <-f.quit:
 			// BlockFetcher terminating, abort all operations
 			return
+
+		case <-f.syncDone:
+			// Parents may have arrived through the downloader without another
+			// peer announcement. Revisit the queue through normal validation.
 
 		case notification := <-f.notify:
 			// A block was announced, make sure the peer isn't DOSing us

@@ -36,6 +36,13 @@ parent price 状态，以及激活边界 expected version 校验。漏选、skip
 新增这些关键测试族的用例时必须同步登记清单；新增其他关键用例也应显式登记。
 报告保存在 `USDB_FAST_OUTPUT_DIR/consensus-*.jsonl`，并输出到 CI 日志。
 
+canonical lane 同时运行 `eth` 和 `eth/fetcher` 的 `TestSyncCompletion*` 回归，
+以 `fast_go_sync_required_tests.json` 校验实际执行结果，报告为
+`USDB_FAST_OUTPUT_DIR/sync-completion.jsonl`。用例预先排队区块 6，再由 downloader
+同步父链至区块 5，要求 ETH/66、ETH/67 的 full/snap 同步完成后自动导入末块，
+无需新块消息或 peer 重连；另验证非法 header、执行失败仍被拒绝，以及通知不会
+阻塞停机。此门禁覆盖通用同步代码，不依赖 BTC/Ord 服务或 world-sim 轮次。
+
 ## Go 工具链策略
 
 USDB geth 的正式构建使用项目 canonical Go 1.18.5。由于继承的

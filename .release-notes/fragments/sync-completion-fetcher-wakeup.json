@@ -1,0 +1,15 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "sync-completion-fetcher-wakeup",
+  "type": "fixed",
+  "scopes": ["node-runtime", "testing"],
+  "summary": "Wake queued block imports after downloader synchronization completes",
+  "details": [
+    "Notify the block fetcher after successful legacy synchronization and after disabling snap sync, so an already queued tip can be imported without another block announcement or peer reconnection.",
+    "Coalesce completion notifications without blocking the downloader and retain normal header verification and block execution for queued blocks.",
+    "Add deterministic ETH/66 and ETH/67 regressions for full and snap synchronization, invalid block rejection and shutdown behavior, with required execution coverage in Fast CI."
+  ],
+  "operator_actions": [],
+  "compatibility": {"network_reset": false, "data_rebuild": false, "config_change": false, "restart_required": true},
+  "references": ["https://github.com/buckyos/go-ethereum/actions/runs/34095512166/job/101659400827"]
+}
