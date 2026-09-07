@@ -1,0 +1,15 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "profile-sync-timeout-diagnostics",
+  "type": "changed",
+  "scopes": ["testing"],
+  "summary": "Capture both nodes' sync state when profile validation times out",
+  "details": [
+    "Collect canonical heads and total difficulty, peer advertised heads and total difficulty, peer counts and sync progress before profile runner cleanup.",
+    "Save bounded read-only diagnostics to stderr and incremental JSON artifacts, preserving RPC errors and the original failure when collection fails.",
+    "Retain strict final height and head-hash equality, reject empty or invalid expected hashes, and exercise these assertions and timeout paths in Fast CI."
+  ],
+  "operator_actions": [],
+  "compatibility": {"network_reset": false, "data_rebuild": false, "config_change": false, "restart_required": false},
+  "references": []
+}

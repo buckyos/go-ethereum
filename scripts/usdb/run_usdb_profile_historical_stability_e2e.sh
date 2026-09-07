@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=lib/go_toolchain.sh
 source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
+# shellcheck source=lib/sync_diagnostics.sh
+source "$ROOT_DIR/scripts/usdb/lib/sync_diagnostics.sh"
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
 
 E2E_WORK_DIR=${WORK_DIR:-/tmp/usdb-profile-historical-stability-e2e}
@@ -79,6 +81,14 @@ usdb_chain_log() {
   echo "[usdb-profile-historical/geth] $*"
 }
 
+usdb_chain_dump_sync_diagnostics() {
+  local reason="$1"
+  shift
+  usdb_dump_sync_diagnostics "$USDB_CHAIN_WORK_DIR/sync-diagnostics.json" "$reason" \
+    --node miner "http://${NODE1_HTTP_ADDR}:${NODE1_HTTP_PORT}" \
+    --node validator "http://${NODE2_HTTP_ADDR}:${NODE2_HTTP_PORT}" "$@"
+}
+
 rpc_call() {
   local url="$1"
   local method="$2"
@@ -103,6 +113,7 @@ wait_chain_id() {
     sleep 1
   done
   echo "Timed out waiting for USDB-chain RPC at ${url}" >&2
+  usdb_chain_dump_sync_diagnostics "RPC readiness timeout at ${url}"
   return 1
 }
 
@@ -122,6 +133,7 @@ wait_block_height() {
     sleep 0.2
   done
   echo "Timed out waiting for block height >= ${target_height} on ${url}" >&2
+  usdb_chain_dump_sync_diagnostics "block height timeout at ${url}" --expected-height "$target_height"
   return 1
 }
 
@@ -151,6 +163,7 @@ fetch_enode() {
     sleep 1
   done
   echo "Timed out waiting for admin_nodeInfo on ${url}" >&2
+  usdb_chain_dump_sync_diagnostics "peer discovery timeout at ${url}"
   return 1
 }
 
@@ -171,6 +184,7 @@ wait_peers() {
     sleep 1
   done
   echo "Timed out waiting for ${min_peers} peers on ${url}" >&2
+  usdb_chain_dump_sync_diagnostics "peer connection timeout at ${url}"
   return 1
 }
 
@@ -527,12 +541,14 @@ EOF
     node2_tip_height="$(wait_block_height "$node2_rpc" "$node1_tip_height")"
     node2_tip_hash="$(fetch_head_hash "$node2_rpc")"
 
-    if [[ "$node2_tip_hash" != "$node1_tip_hash" ]]; then
+    if [[ ! "$node1_tip_hash" =~ ^0x[0-9a-fA-F]{64}$ || "$node2_tip_hash" != "$node1_tip_hash" ]]; then
       echo "Node 2 synced to unexpected head hash: have ${node2_tip_hash} want ${node1_tip_hash}" >&2
+      usdb_chain_dump_sync_diagnostics "validator head hash mismatch" --expected-height "$node1_tip_height" --expected-hash "$node1_tip_hash"
       exit 1
     fi
     if (( node2_tip_height != node1_tip_height )); then
       echo "Node 2 synced to unexpected block height: have ${node2_tip_height} want ${node1_tip_height}" >&2
+      usdb_chain_dump_sync_diagnostics "validator height mismatch" --expected-height "$node1_tip_height" --expected-hash "$node1_tip_hash"
       exit 1
     fi
 

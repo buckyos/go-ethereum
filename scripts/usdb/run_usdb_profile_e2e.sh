@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 # shellcheck source=lib/go_toolchain.sh
 source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
+# shellcheck source=lib/sync_diagnostics.sh
+source "$ROOT_DIR/scripts/usdb/lib/sync_diagnostics.sh"
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
 
 E2E_WORK_DIR=${WORK_DIR:-/tmp/usdb-profile-e2e}
@@ -124,6 +126,14 @@ usdb_chain_log() {
   echo "[usdb-profile-e2e/geth] $*"
 }
 
+usdb_chain_dump_sync_diagnostics() {
+  local reason="$1"
+  shift
+  usdb_dump_sync_diagnostics "$USDB_CHAIN_WORK_DIR/sync-diagnostics.json" "$reason" \
+    --node miner "http://${HTTP_ADDR}:${HTTP_PORT}" \
+    --node validator "http://${VALIDATOR_HTTP_ADDR}:${VALIDATOR_HTTP_PORT}" "$@"
+}
+
 usdb_chain_rpc_call() {
   local method="$1"
   local params="${2:-[]}"
@@ -166,6 +176,7 @@ usdb_chain_wait_rpc_ready() {
     sleep 1
   done
   echo "Timed out waiting for USDB-chain RPC at http://${HTTP_ADDR}:${HTTP_PORT}" >&2
+  usdb_chain_dump_sync_diagnostics "miner RPC readiness timeout"
   return 1
 }
 
@@ -183,6 +194,7 @@ usdb_chain_wait_rpc_url_ready() {
     sleep 1
   done
   echo "Timed out waiting for USDB-chain RPC at ${url}" >&2
+  usdb_chain_dump_sync_diagnostics "RPC readiness timeout at ${url}"
   return 1
 }
 
@@ -201,6 +213,7 @@ usdb_chain_wait_block_height() {
     sleep 0.2
   done
   echo "Timed out waiting for USDB block height >= ${target_height}" >&2
+  usdb_chain_dump_sync_diagnostics "miner block height timeout" --expected-height "$target_height"
   return 1
 }
 
@@ -220,6 +233,7 @@ usdb_chain_wait_block_height_url() {
     sleep 0.2
   done
   echo "Timed out waiting for USDB block height >= ${target_height} at ${url}" >&2
+  usdb_chain_dump_sync_diagnostics "block height timeout at ${url}" --expected-height "$target_height"
   return 1
 }
 
@@ -355,6 +369,7 @@ usdb_chain_fetch_enode() {
     sleep 1
   done
   echo "Timed out waiting for admin_nodeInfo at ${url}" >&2
+  usdb_chain_dump_sync_diagnostics "peer discovery timeout at ${url}"
   return 1
 }
 
@@ -408,10 +423,12 @@ usdb_chain_assert_validator_synced() {
   validator_hash="$(usdb_chain_head_hash_at "$validator_rpc")"
   if (( validator_height != expected_height )); then
     echo "Validator reached unexpected height: have ${validator_height}, want ${expected_height}" >&2
+    usdb_chain_dump_sync_diagnostics "validator height mismatch" --expected-height "$expected_height" --expected-hash "$node_hash"
     return 1
   fi
-  if [[ "$validator_hash" != "$node_hash" ]]; then
+  if [[ ! "$node_hash" =~ ^0x[0-9a-fA-F]{64}$ || "$validator_hash" != "$node_hash" ]]; then
     echo "Validator reached unexpected head: have ${validator_hash}, want ${node_hash}" >&2
+    usdb_chain_dump_sync_diagnostics "validator head hash mismatch" --expected-height "$expected_height" --expected-hash "$node_hash"
     return 1
   fi
 }

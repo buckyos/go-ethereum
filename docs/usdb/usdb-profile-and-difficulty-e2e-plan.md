@@ -231,6 +231,20 @@ on the selected canonical branch.
   Missing or erroneous validator RPC heights fail the gate instead of being
   treated as genesis. Gate failure prevents upstream recovery.
 - Restarts usdb-indexer and requires both nodes to recover to the same head.
+- On RPC/peer/block-height timeouts or final height/hash mismatches, the profile
+  and historical runners capture both nodes before process cleanup. The
+  `geth/sync-diagnostics.json` artifact and stderr include latest blocks
+  (height, hash, total difficulty), `eth_syncing`, `net_peerCount`,
+  `admin_nodeInfo`, and `admin_peers`. Peer `protocols.eth.head` and
+  `protocols.eth.difficulty` are the locally tracked advertised head/TD, which
+  can lag the remote node's actual canonical head. A `false` syncing result
+  does not establish that the validator reached the expected head.
+- Diagnostic reads have one-second RPC timeouts and a twelve-second process
+  deadline, followed by forced termination after one second if needed. Each
+  observation is timestamped and saved incrementally, with RPC failures kept
+  explicit. Collection failure preserves the original test failure. These
+  successive observations do not replace the exact final height and valid,
+  identical head-hash assertions.
 - Exports one canonical block and imports it into a clean datadir as a control.
 - Mutates each selector field independently and requires offline import to
   reject `payload_version`, `difficulty_policy_version`, `btc_height`,

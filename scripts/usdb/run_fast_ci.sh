@@ -206,6 +206,7 @@ run_go_checks() {
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_long_ci.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_upstream_fault_matrix.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_profile_validator_outage.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_sync_diagnostics.py"
 }
 
 run_rust_checks() {
