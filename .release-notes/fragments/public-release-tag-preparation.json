@@ -1,0 +1,21 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "public-release-tag-preparation",
+  "type": "added",
+  "scopes": ["deployment", "documentation", "testing"],
+  "summary": "Prepare standalone public-service tags through the existing release tool",
+  "details": [
+    "Route usdb-public-vX.Y.Z releases to USDB only, without requiring SourceDAO or reading and updating the Go compatibility lock; node release preparation retains its coordinated scope.",
+    "Require a clean USDB master matching origin/master, the canonical origin, tracked public release entry points and a matching public network catalog before creating the annotated tag.",
+    "Retain explicit create and push flags and reject existing local or remote tags; a failed push preserves the local tag and reports how to push that exact tag again.",
+    "Document the independent tag-triggered Public CI and build pipeline, draft publication and separate assets within the shared GitHub Releases list."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": false
+  },
+  "references": []
+}

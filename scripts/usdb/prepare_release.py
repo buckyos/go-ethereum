@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the pinned revisions and immutable tags for a USDB release."""
+"""Prepare immutable tags for coordinated USDB node or standalone public releases."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import ci_revisions
 
 
 RELEASE_ID_RE = re.compile(r"^usdb-(?:testnet|mainnet)-v[0-9]+-r[1-9][0-9]*$")
+PUBLIC_RELEASE_ID_RE = re.compile(r"^usdb-public-v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?$")
 SCRIPT_GO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 REPOSITORY_SPECS = {
     "go_ethereum": ("go-ethereum", "buckyos/go-ethereum", "master"),
@@ -145,8 +146,9 @@ def discover_workspace(
     *,
     expected_go_root: pathlib.Path = SCRIPT_GO_ROOT,
     strict_remotes: bool = True,
+    repository_names: Sequence[str] = tuple(REPOSITORY_SPECS),
 ) -> dict[str, Repository]:
-    """Validate sibling layout and return canonical repository checkouts."""
+    """Validate only the checkouts participating in the selected release family."""
 
     root = workspace_root.expanduser().resolve()
     expected_go = expected_go_root.resolve()
@@ -158,7 +160,8 @@ def discover_workspace(
         )
 
     repositories: dict[str, Repository] = {}
-    for name, (directory, github_repository, branch) in REPOSITORY_SPECS.items():
+    for name in repository_names:
+        directory, github_repository, branch = REPOSITORY_SPECS[name]
         path = (root / directory).resolve()
         if not path.is_dir():
             raise ReleasePreparationError(f"missing {name} checkout: {path}")
@@ -323,11 +326,16 @@ def sync_lock(
         print(f"pushed_go_ethereum_revision={committed_revision}")
 
 
-def _ensure_release_id(release_id: str) -> None:
-    if RELEASE_ID_RE.fullmatch(release_id) is None:
-        raise ReleasePreparationError(
-            "release ID must use usdb-{testnet|mainnet}-vN-rN"
-        )
+def release_repository_names(release_id: str) -> tuple[str, ...]:
+    """Select the repository scope before discovery, fetching or any mutation."""
+    if RELEASE_ID_RE.fullmatch(release_id):
+        return tuple(REPOSITORY_SPECS)
+    if PUBLIC_RELEASE_ID_RE.fullmatch(release_id):
+        return ("usdb",)
+    raise ReleasePreparationError(
+        "release ID must use usdb-{testnet|mainnet}-vN-rN or "
+        "usdb-public-vX.Y.Z (optionally with a lowercase prerelease suffix)"
+    )
 
 
 def _ensure_tag_available(repository: Repository, release_id: str) -> None:
@@ -341,6 +349,58 @@ def _ensure_tag_available(repository: Repository, release_id: str) -> None:
         )
 
 
+def _create_public_release_tag(
+    repository: Repository,
+    *,
+    release_id: str,
+    create: bool,
+    push: bool,
+) -> None:
+    """Freeze only USDB; public releases do not consume the Go dependency lock."""
+    revision = repository.ensure_published_head()
+    # Refuse a commit that predates the independent release entry points.
+    for path in (
+        ".github/workflows/usdb-public-release.yml",
+        "public-services/package_release.py",
+    ):
+        repository.git("cat-file", "-e", f"{revision}:{path}")
+    _ensure_tag_available(repository, release_id)
+    completed = _run(
+        (sys.executable, "-B", "public-services/package_release.py", "--check-network"),
+        cwd=repository.path,
+    )
+    if completed.stdout.strip():
+        print(completed.stdout.strip())
+    print(f"release_id={release_id}")
+    print("release_family=public")
+    print(f"usdb_revision={revision}")
+    print("release_workflow=usdb-public-release.yml")
+    if not create:
+        print("dry run: pass --create to create one local annotated tag in usdb")
+        return
+
+    repository.git(
+        "tag", "-a", release_id, revision, "-m",
+        f"Freeze USDB public services release {release_id}\n\nUSDB: {revision}",
+    )
+    tag_ref = f"refs/tags/{release_id}"
+    if (repository.output("cat-file", "-t", tag_ref) != "tag"
+            or repository.output("rev-list", "-n", "1", tag_ref) != revision):
+        raise ReleasePreparationError("created public tag verification failed in usdb")
+    print("created_local_tags=true")
+    if push:
+        try:
+            repository.git("push", "origin", tag_ref)
+        except ReleasePreparationError as error:
+            raise ReleasePreparationError(
+                "public tag was created locally but push failed; keep the existing tag "
+                f"and retry from the USDB checkout: git push origin {tag_ref}; {error}"
+            ) from error
+        print("pushed_usdb_tag=true")
+        print("release_url=https://github.com/buckyos/usdb/actions/workflows/usdb-public-release.yml")
+        print("release_result=CI and build will create a draft release for review")
+
+
 def create_release_tags(
     repositories: dict[str, Repository],
     *,
@@ -349,14 +409,20 @@ def create_release_tags(
     push: bool,
     fetch: bool,
 ) -> None:
-    """Create the same annotated release tag on the frozen USDB and Go commits."""
+    """Create annotated tags within the selected node or public release scope."""
 
     if push and not create:
         raise ReleasePreparationError("--push requires --create")
-    _ensure_release_id(release_id)
+    names = release_repository_names(release_id)
+    repositories = {name: repositories[name] for name in names}
     _fetch_repositories(repositories, fetch)
     for repository in repositories.values():
         repository.ensure_clean()
+    if names == ("usdb",):
+        _create_public_release_tag(
+            repositories["usdb"], release_id=release_id, create=create, push=push,
+        )
+        return
 
     go_repository = repositories["go_ethereum"]
     usdb_repository = repositories["usdb"]
@@ -455,8 +521,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--workspace-root",
         type=pathlib.Path,
         help=(
-            "directory containing go-ethereum, usdb, and SourceDAO; defaults to "
-            "the parent of this go-ethereum checkout"
+            "parent of this go-ethereum checkout and sibling usdb; node releases "
+            "also require SourceDAO; defaults to the script's workspace"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -482,10 +548,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync.add_argument("--no-fetch", action="store_true", help="use existing origin refs")
 
-    tag = subparsers.add_parser("tag", help="create coordinated immutable release tags")
-    tag.add_argument("--release-id", required=True)
-    tag.add_argument("--create", action="store_true", help="create both local annotated tags")
-    tag.add_argument("--push", action="store_true", help="push both release tags")
+    tag = subparsers.add_parser("tag", help="prepare node or standalone public release tags")
+    tag.add_argument("--release-id", required=True,
+                     help="usdb-{testnet|mainnet}-vN-rN or usdb-public-vX.Y.Z[-prerelease]")
+    tag.add_argument("--create", action="store_true",
+                     help="create annotated tags (node: USDB and Go; public: USDB only)")
+    tag.add_argument("--push", action="store_true", help="push the selected release tags; requires --create")
     tag.add_argument("--no-fetch", action="store_true", help="use existing origin refs")
     return parser
 
@@ -494,7 +562,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(arguments)
     workspace_root = args.workspace_root or default_workspace_root()
     try:
-        repositories = discover_workspace(workspace_root)
+        names = (release_repository_names(args.release_id) if args.command == "tag"
+                 else tuple(REPOSITORY_SPECS))
+        repositories = discover_workspace(workspace_root, repository_names=names)
         if args.command == "status":
             show_status(repositories, fetch=args.fetch)
         elif args.command == "sync-lock":
