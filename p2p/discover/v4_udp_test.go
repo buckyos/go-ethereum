@@ -495,6 +495,71 @@ func TestUDPv4_EIP868(t *testing.T) {
 	})
 }
 
+// An ENR update must not replace a working IPv6 contact with its preferred IPv4
+// address (or vice versa) before the caller can select among multiple endpoints.
+func TestUDPv4_ENRPreservesContactFamily(t *testing.T) {
+	for _, tc := range []struct {
+		name, contact, advertised string
+		keepContact, wrongKey     bool
+	}{
+		{"ipv6-to-ipv4", "2001:4860::1", "8.8.8.8", true, false},
+		{"ipv4-to-ipv6", "8.8.8.8", "2001:4860::1", true, false},
+		{"ipv6-update", "2001:4860::1", "2001:4860::2", false, false},
+		{"ipv4-update", "8.8.8.8", "8.8.4.4", false, false},
+		{"wrong-identity", "2001:4860::1", "8.8.8.8", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			test := newUDPTest(t)
+			defer test.close()
+			test.remoteaddr.IP = net.ParseIP(tc.contact)
+			contact := enode.NewV4(&test.remotekey.PublicKey, test.remoteaddr.IP, 31303, test.remoteaddr.Port)
+			test.db.UpdateLastPingReceived(contact.ID(), contact.IP(), time.Now())
+			var record enr.Record
+			record.Set(enr.IP(net.ParseIP(tc.advertised)))
+			record.Set(enr.TCP(31304))
+			record.Set(enr.UDP(31304))
+			record.SetSeq(1)
+			key := test.remotekey
+			if tc.wrongKey {
+				key = newkey()
+			}
+			if err := enode.SignV4(&record, key); err != nil {
+				t.Fatal(err)
+			}
+			type response struct {
+				node *enode.Node
+				err  error
+			}
+			result := make(chan response, 1)
+			go func() { n, err := test.udp.RequestENR(contact); result <- response{n, err} }()
+			test.waitPacketOut(func(_ *v4wire.ENRRequest, _ *net.UDPAddr, hash []byte) {
+				test.packetIn(nil, &v4wire.ENRResponse{ReplyTok: hash, Record: record})
+			})
+			select {
+			case got := <-result:
+				if tc.wrongKey {
+					if got.err == nil {
+						t.Fatal("accepted another node's record")
+					}
+					return
+				}
+				if got.err != nil {
+					t.Fatal(got.err)
+				}
+				wantIP, wantPort := net.ParseIP(tc.advertised), 31304
+				if tc.keepContact {
+					wantIP, wantPort = contact.IP(), contact.TCP()
+				}
+				if !got.node.IP().Equal(wantIP) || got.node.TCP() != wantPort {
+					t.Fatalf("endpoint = %s:%d, want %s:%d", got.node.IP(), got.node.TCP(), wantIP, wantPort)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("ENR response timed out")
+			}
+		})
+	}
+}
+
 // This test verifies that a small network of nodes can boot up into a healthy state.
 func TestUDPv4_smallNetConvergence(t *testing.T) {
 	t.Parallel()

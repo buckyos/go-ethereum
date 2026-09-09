@@ -372,6 +372,13 @@ func (t *UDPv4) RequestENR(n *enode.Node) (*enode.Node, error) {
 	if err := netutil.CheckRelayIP(addr.IP, respN.IP()); err != nil {
 		return nil, fmt.Errorf("invalid IP in response record: %v", err)
 	}
+	// Node.IP prefers IPv4 in a dual-stack ENR. Replacing a proven IPv6 contact
+	// with that address can strand IPv6-only callers. Keep the contacted endpoint
+	// until discovery/dialing supports selecting among the record's addresses.
+	// Signature, identity, sequence, and relay checks still apply above.
+	if (addr.IP.To4() == nil) != (respN.IP().To4() == nil) {
+		return n, nil
+	}
 	return respN, nil
 }
 
