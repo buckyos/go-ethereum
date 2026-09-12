@@ -41,10 +41,74 @@ case "${role}" in
     ;;
 esac
 
+# Query policy is independent of mining and network identity. Preserve legacy
+# --gcmode only when it agrees with the explicit setting (or none was set).
+state_mode="${USDB_CHAIN_GCMODE:-}"
+tracing="${USDB_CHAIN_TRACING:-0}"
+case "${state_mode}" in
+  ""|full|archive) ;;
+  *) echo "USDB_CHAIN_GCMODE must be full or archive" >&2; exit 1 ;;
+esac
+case "${tracing}" in
+  0|1) ;;
+  *) echo "USDB_CHAIN_TRACING must be 0 or 1" >&2; exit 1 ;;
+esac
+extra_args=()
+remaining_args=()
+legacy_mode=""
+read -r -a extra_args <<<"${USDB_CHAIN_EXTRA_ARGS:-}"
+for ((i=0; i<${#extra_args[@]}; i++)); do
+  argument="${extra_args[i]}"
+  case "${argument}" in
+    --gcmode|--gcmode=*)
+      if [[ -n "${legacy_mode}" ]]; then
+        echo "USDB_CHAIN_EXTRA_ARGS contains duplicate --gcmode" >&2; exit 1
+      fi
+      if [[ "${argument}" == "--gcmode" ]]; then
+        i=$((i + 1))
+        legacy_mode="${extra_args[i]:-}"
+      else
+        legacy_mode="${argument#*=}"
+      fi
+      case "${legacy_mode}" in
+        full|archive) ;;
+        *) echo "--gcmode must be full or archive" >&2; exit 1 ;;
+      esac
+      ;;
+    *) remaining_args+=("${argument}") ;;
+  esac
+done
+if [[ -n "${state_mode}" && -n "${legacy_mode}" && "${state_mode}" != "${legacy_mode}" ]]; then
+  echo "USDB_CHAIN_GCMODE conflicts with legacy --gcmode; remove the legacy argument" >&2
+  exit 1
+fi
+state_mode="${state_mode:-${legacy_mode:-full}}"
+http_apis="${USDB_HTTP_APIS:-eth,net,web3,admin,miner,txpool}"
+ws_apis="${USDB_WS_APIS:-eth,net,web3}"
+# Geth drops empty module names; an empty allowlist registers every namespace.
+for api_list in "${http_apis}" "${ws_apis}"; do
+  if [[ -z "${api_list//[[:space:],]/}" ]]; then
+    echo "HTTP and WS API lists must contain an explicit namespace" >&2; exit 1
+  fi
+done
+# The node kit publishes HTTP only to host loopback. Never add debug to WS,
+# and require the explicit opt-in even for custom HTTP namespace lists.
+if [[ ",${ws_apis//[[:space:]]/}," == *,debug,* ]]; then
+  echo "Private tracing is HTTP-only; USDB_WS_APIS cannot contain debug" >&2; exit 1
+fi
+if [[ ",${http_apis//[[:space:]]/}," == *,debug,* ]]; then
+  if [[ "${tracing}" != "1" ]]; then
+    echo "HTTP debug requires USDB_CHAIN_TRACING=1" >&2; exit 1
+  fi
+elif [[ "${tracing}" == "1" ]]; then
+  http_apis+=",debug"
+fi
+
 args=(
   --datadir "${data_dir}"
   --networkid "${network_id}"
   --syncmode full
+  --gcmode "${state_mode}"
   --port "${USDB_P2P_PORT:-31303}"
   --discovery.port "${USDB_DISCOVERY_PORT:-${USDB_P2P_PORT:-31303}}"
   --maxpeers "${USDB_MAX_PEERS:-50}"
@@ -54,12 +118,12 @@ args=(
   --http
   --http.addr "${USDB_HTTP_ADDR:-0.0.0.0}"
   --http.port "${USDB_HTTP_PORT:-8545}"
-  --http.api "${USDB_HTTP_APIS:-eth,net,web3,admin,miner,txpool}"
+  --http.api "${http_apis}"
   --http.vhosts "${USDB_HTTP_VHOSTS:-localhost,127.0.0.1,usdb-chain}"
   --ws
   --ws.addr "${USDB_WS_ADDR:-0.0.0.0}"
   --ws.port "${USDB_WS_PORT:-8546}"
-  --ws.api "${USDB_WS_APIS:-eth,net,web3}"
+  --ws.api "${ws_apis}"
   --ws.origins "${USDB_WS_ORIGINS:-http://localhost}"
   --authrpc.addr "${USDB_AUTHRPC_ADDR:-127.0.0.1}"
   --authrpc.port "${USDB_AUTHRPC_PORT:-8551}"
@@ -86,20 +150,19 @@ if [[ "${role}" == "miner" ]]; then
   )
 fi
 
-if [[ -n "${USDB_CHAIN_EXTRA_ARGS:-}" ]]; then
-  read -r -a extra_args <<<"${USDB_CHAIN_EXTRA_ARGS}"
-  for argument in "${extra_args[@]}"; do
+if [[ ${#remaining_args[@]} -gt 0 ]]; then
+  for argument in "${remaining_args[@]}"; do
     case "${argument}" in
-      --mine|--mine=*|--miner.*|--datadir*|--config*|--networkid*|--usdb*|--mainnet*|--testnet*|--goerli*|--sepolia*|--ropsten*|--rinkeby*|--kiln*|--dev*|--bootnodes*|--discovery*|--nodiscover*|--nodekey*|--nat*|--port*|--maxpeers*|--ethash.usdb-indexer*|--http*|--syncmode*|--fakepow*|--override*)
-        echo "USDB_CHAIN_EXTRA_ARGS cannot override managed identity, discovery or mining: ${argument%%=*}" >&2
+      --mine|--mine=*|--miner.*|--datadir*|--config*|--networkid*|--usdb*|--mainnet*|--testnet*|--goerli*|--sepolia*|--ropsten*|--rinkeby*|--kiln*|--dev*|--bootnodes*|--discovery*|--nodiscover*|--nodekey*|--nat*|--port*|--maxpeers*|--ethash.usdb-indexer*|--http*|--ws*|--syncmode*|--fakepow*|--override*)
+        echo "USDB_CHAIN_EXTRA_ARGS cannot override managed identity, discovery, mining or RPC: ${argument%%=*}" >&2
         exit 1
         ;;
     esac
   done
-  args+=("${extra_args[@]}")
+  args+=("${remaining_args[@]}")
 fi
 
-echo "Starting USDB node role=${role}, chain_id=${chain_id}, network_id=${network_id}"
+echo "Starting USDB node role=${role}, chain_id=${chain_id}, network_id=${network_id}, state_mode=${state_mode}, private_http_tracing=${tracing}"
 if [[ "${USDB_DEEP_REORG_GUARD_ENABLED:-0}" != "1" ]]; then
   exec "${geth_bin}" "${args[@]}"
 fi
