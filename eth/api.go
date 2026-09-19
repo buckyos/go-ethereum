@@ -43,12 +43,13 @@ import (
 
 // EthereumAPI provides an API to access Ethereum full node-related information.
 type EthereumAPI struct {
-	e *Ethereum
+	e         *Ethereum
+	economics economicsCache
 }
 
 // NewEthereumAPI creates a new Ethereum protocol API for full nodes.
 func NewEthereumAPI(e *Ethereum) *EthereumAPI {
-	return &EthereumAPI{e}
+	return &EthereumAPI{e: e}
 }
 
 // Etherbase is the address that mining rewards will be send to.

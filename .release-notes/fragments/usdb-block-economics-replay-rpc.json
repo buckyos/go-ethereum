@@ -1,0 +1,18 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "usdb-block-economics-replay-rpc",
+  "type": "added",
+  "scopes": ["node-runtime", "testing", "documentation"],
+  "summary": "Expose canonical block economics verified against execution commitments",
+  "details": [
+    "Add eth_getUSDBBlockEconomics with an explicit canonical block hash. Replay transactions and existing reward finalization against retained parent state; return exact emission and fee accounting only when state root, receipt root, bloom and gas usage match the block.",
+    "Bind Miner Pass references and economic policies to the target block, preserve per-transaction fee rounding and fee-gate behavior, and measure emission credit separately from ordinary transfers and fee income. Genesis has no mined-reward report; unknown policy combinations fail closed.",
+    "Bound concurrent replays, block size, EVM execution time and successful-report cache; recheck canonical identity including cache hits. Missing history, incompatible policies, reorgs and verification failures have stable privacy-safe RPC errors.",
+    "The read-only method neither commits replay state nor changes consensus, chain identity or persistent storage. The issued counter includes genesis allocations and emission and is not a circulating-supply estimate."
+  ],
+  "operator_actions": [
+    "Upgrade the Explorer read node to this runtime and retain parent archive state and the selector-pinned historical indexer data. Use the new Explorer block economics page for representative-block checks; enabling archive does not restore previously pruned state."
+  ],
+  "compatibility": {"network_reset": false, "data_rebuild": false, "config_change": false, "restart_required": true},
+  "references": []
+}
