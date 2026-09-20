@@ -33,6 +33,9 @@ func init() {
 		if name == "node.example.org" {
 			return []net.IP{{33, 44, 55, 66}}, nil
 		}
+		if name == "empty.example.org" {
+			return nil, nil
+		}
 		return nil, errors.New("no such host")
 	}
 }
@@ -196,5 +199,29 @@ func TestNodeString(t *testing.T) {
 				t.Errorf("test %d: Node.String() mismatch:\ngot:  %s\nwant: %s", i, str, test.input)
 			}
 		}
+	}
+}
+
+func TestDNSHostnameSurvivesURLRoundTrip(t *testing.T) {
+	key := "1dd9d65c4552b5eb43d5ad55a2ee3f56c6cbc1c64a5c8d659f51fcd51bace24351232b8d7821617d2b29b54b81cdefb9b3e9c37d7fd5f63270bcc9e1a6f6a439"
+	url := "enode://" + key + "@node.example.org:31303?discport=31304"
+	n, err := ParseV4(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Hostname() != "node.example.org" || n.String() != url || n.URLv4() != url {
+		t.Fatalf("configured DNS endpoint was lost: %s / %s", n.Hostname(), n.String())
+	}
+	literal := NewV4(hexPubkey(key), net.IPv4(33, 44, 55, 66), 31303, 31304)
+	if n.ID() != literal.ID() || !reflect.DeepEqual(n.Record(), literal.Record()) {
+		t.Fatal("local hostname metadata changed the node identity or ENR")
+	}
+	text, _ := n.MarshalText()
+	var decoded Node
+	if err := decoded.UnmarshalText(text); err != nil || decoded.Hostname() != n.Hostname() {
+		t.Fatalf("configured DNS endpoint lost during text persistence: %v", err)
+	}
+	if _, err := ParseV4(strings.Replace(url, "node.example.org", "empty.example.org", 1)); err == nil {
+		t.Fatal("empty DNS response must fail without a panic")
 	}
 }

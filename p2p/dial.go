@@ -135,6 +135,7 @@ type dialConfig struct {
 	maxActiveDials int              // maximum number of active dials
 	netRestrict    *netutil.Netlist // IP netrestrict list, disabled if nil
 	resolver       nodeResolver
+	lookupIP       func(context.Context, string) ([]net.IPAddr, error)
 	dialer         NodeDialer
 	log            log.Logger
 	clock          mclock.Clock
@@ -142,6 +143,9 @@ type dialConfig struct {
 }
 
 func (cfg dialConfig) withDefaults() dialConfig {
+	if cfg.lookupIP == nil {
+		cfg.lookupIP = net.DefaultResolver.LookupIPAddr
+	}
 	if cfg.maxActiveDials == 0 {
 		cfg.maxActiveDials = defaultMaxPendingPeers
 	}
@@ -401,7 +405,8 @@ func (d *dialScheduler) checkDial(n *enode.Node) error {
 	if _, ok := d.peers[n.ID()]; ok {
 		return errAlreadyConnected
 	}
-	if d.netRestrict != nil && !d.netRestrict.Contains(n.IP()) {
+	// DNS destinations are checked against netrestrict after each fresh lookup.
+	if n.Hostname() == "" && d.netRestrict != nil && !d.netRestrict.Contains(n.IP()) {
 		return errNetRestrict
 	}
 	if d.history.contains(string(n.ID().Bytes())) {
@@ -481,6 +486,10 @@ type dialError struct {
 }
 
 func (t *dialTask) run(d *dialScheduler) {
+	if t.dest.Hostname() != "" {
+		t.dialDNS(d)
+		return
+	}
 	if t.needResolve() && !t.resolve(d) {
 		return
 	}
@@ -535,13 +544,68 @@ func (t *dialTask) resolve(d *dialScheduler) bool {
 
 // dial performs the actual connection attempt.
 func (t *dialTask) dial(d *dialScheduler, dest *enode.Node) error {
-	fd, err := d.dialer.Dial(d.ctx, t.dest)
+	return t.dialContext(d.ctx, d, dest)
+}
+
+// dialContext also bounds individual DNS candidates within the whole dial budget.
+func (t *dialTask) dialContext(ctx context.Context, d *dialScheduler, dest *enode.Node) error {
+	fd, err := d.dialer.Dial(ctx, dest)
 	if err != nil {
-		d.log.Trace("Dial error", "id", t.dest.ID(), "addr", nodeAddr(t.dest), "conn", t.flags, "err", cleanupDialErr(err))
+		d.log.Trace("Dial error", "id", dest.ID(), "addr", nodeAddr(dest), "conn", t.flags, "err", cleanupDialErr(err))
 		return &dialError{err}
 	}
 	mfd := newMeteredConn(fd, false, &net.TCPAddr{IP: dest.IP(), Port: dest.TCP()})
 	return d.setupFunc(mfd, t.flags, dest)
+}
+
+// dialDNS re-resolves operator-configured names on every dial attempt. The
+// original destination keeps its hostname and identity across failed lookups and
+// disconnects. Multiple A/AAAA candidates share a bounded, cancellable budget.
+func (t *dialTask) dialDNS(d *dialScheduler) {
+	ctx, cancel := context.WithTimeout(d.ctx, defaultDialTimeout)
+	defer cancel()
+	host := t.dest.Hostname()
+	addresses, err := d.lookupIP(ctx, host)
+	if err != nil {
+		d.log.Debug("DNS peer lookup failed", "id", t.dest.ID(), "host", host, "err", err)
+		return
+	}
+	var candidates []net.IP
+	seen := make(map[string]bool)
+	for _, address := range addresses {
+		ip := address.IP
+		if ip.To16() == nil || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || address.Zone != "" {
+			continue
+		}
+		if seen[ip.String()] || (d.netRestrict != nil && !d.netRestrict.Contains(ip)) {
+			continue
+		}
+		seen[ip.String()] = true
+		candidates = append(candidates, ip)
+		if len(candidates) == 16 {
+			break
+		}
+	}
+	if len(candidates) == 0 {
+		d.log.Debug("DNS peer has no allowed addresses", "id", t.dest.ID(), "host", host)
+		return
+	}
+	deadline, _ := ctx.Deadline()
+	for i, ip := range candidates {
+		if ctx.Err() != nil {
+			return
+		}
+		// Reserve time for the remaining candidates if the first address blackholes.
+		attempt, stop := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(candidates)-i))
+		dest := enode.NewV4(t.dest.Pubkey(), ip, t.dest.TCP(), t.dest.UDP())
+		d.log.Debug("Dialing DNS peer", "id", dest.ID(), "host", host, "addr", nodeAddr(dest))
+		err := t.dialContext(attempt, d, dest)
+		stop()
+		if _, dialFailed := err.(*dialError); !dialFailed {
+			// Connected or rejected by the authenticated handshake; preserve its result.
+			return
+		}
+	}
 }
 
 func (t *dialTask) String() string {

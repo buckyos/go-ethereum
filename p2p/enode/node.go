@@ -36,6 +36,8 @@ var errMissingPrefix = errors.New("missing 'enr:' prefix for base64-encoded reco
 type Node struct {
 	r  enr.Record
 	id ID
+	// hostname is local configuration metadata, never part of a signed ENR.
+	hostname string
 }
 
 // New wraps a node record. The record must be valid according to the given
@@ -82,6 +84,12 @@ func Parse(validSchemes enr.IdentityScheme, input string) (*Node, error) {
 // ID returns the node identifier.
 func (n *Node) ID() ID {
 	return n.id
+}
+
+// Hostname returns the DNS name from a configured enode URL, if any. Dialers must
+// resolve it again when reconnecting instead of trusting the initial IP forever.
+func (n *Node) Hostname() string {
+	return n.hostname
 }
 
 // Seq returns the sequence number of the underlying record.

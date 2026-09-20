@@ -646,6 +646,13 @@ func (srv *Server) setupDialScheduler() {
 	for _, n := range srv.StaticNodes {
 		srv.dialsched.addStatic(n)
 	}
+	// Keep configured DNS bootstrap URLs available even when discovery retains an
+	// obsolete IP or has no live peers. Re-dials resolve the original hostname.
+	for _, n := range srv.BootstrapNodes {
+		if n.Hostname() != "" {
+			srv.dialsched.addStatic(n)
+		}
+	}
 }
 
 func (srv *Server) maxInboundConns() int {

@@ -133,6 +133,9 @@ func parseComplete(rawurl string) (*Node, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(ips) == 0 {
+			return nil, errors.New("DNS hostname has no IP addresses")
+		}
 		ip = ips[0]
 	}
 	// Ensure the IP is 4 bytes long for IPv4 addresses.
@@ -151,7 +154,11 @@ func parseComplete(rawurl string) (*Node, error) {
 			return nil, errors.New("invalid discport in query")
 		}
 	}
-	return NewV4(id, ip, int(tcpPort), int(udpPort)), nil
+	n := NewV4(id, ip, int(tcpPort), int(udpPort))
+	if net.ParseIP(u.Hostname()) == nil {
+		n.hostname = u.Hostname()
+	}
+	return n, nil
 }
 
 // parsePubkey parses a hex-encoded secp256k1 public key.
@@ -187,6 +194,9 @@ func (n *Node) URLv4() string {
 		addr := net.TCPAddr{IP: n.IP(), Port: n.TCP()}
 		u.User = url.User(nodeid)
 		u.Host = addr.String()
+		if n.hostname != "" {
+			u.Host = net.JoinHostPort(n.hostname, strconv.Itoa(n.TCP()))
+		}
 		if n.UDP() != n.TCP() {
 			u.RawQuery = "discport=" + strconv.Itoa(n.UDP())
 		}
