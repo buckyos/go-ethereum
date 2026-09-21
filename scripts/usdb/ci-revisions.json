@@ -8,7 +8,7 @@
     "usdb": {
       "repository": "buckyos/usdb",
       "directory": "usdb",
-      "revision": "8456cebe472e59eede604ca47c985825b508f03d"
+      "revision": "b84638f5eb8f28b0a36373e40a1912005ce85e25"
     },
     "source_dao": {
       "repository": "buckyos/SourceDAO",
