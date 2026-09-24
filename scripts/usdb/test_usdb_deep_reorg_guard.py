@@ -62,6 +62,15 @@ class DeepReorgGuardTest(unittest.TestCase):
         self.assertEqual(incident["observed_epoch"], 3)
         self.assertEqual(incident["reason"], "upstream_reorg_epoch_advanced")
         self.assertEqual(incident["usdb_chain_head"], {"number": "0x9"})
+        self.assertRegex(incident["incident_id"], r"^[0-9a-f]{32}$")
+        self.assertEqual(incident["code"], "DEEP_REORG_HALTED")
+        self.assertEqual(incident["severity"], "critical")
+        self.assertEqual(incident["recovery"], "manual_intervention")
+        before = self.guard.incident_path.read_bytes()
+        restarted = GUARD.DeepReorgGuard(self.state_dir, "http://indexer.test", "http://chain.test", 1.0)
+        with self.assertRaisesRegex(GUARD.GuardError, "persisted"):
+            restarted.check_once()
+        self.assertEqual(restarted.incident_path.read_bytes(), before)
 
     @mock.patch.object(GUARD, "read_chain_head", return_value=None)
     @mock.patch.object(GUARD, "read_reorg_epoch")

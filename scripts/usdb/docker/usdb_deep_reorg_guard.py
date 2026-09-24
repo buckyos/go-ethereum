@@ -10,6 +10,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,12 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         output.flush()
         os.fsync(output.fileno())
     os.replace(temporary, path)
+    # The incident must survive a host crash, not only a process restart.
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -163,6 +170,11 @@ class DeepReorgGuard:
             self.incident_path,
             {
                 "schema_version": INCIDENT_SCHEMA,
+                # Additive v1 fields: older readers still latch on this marker.
+                "incident_id": uuid.uuid4().hex,
+                "code": "DEEP_REORG_HALTED",
+                "severity": "critical",
+                "recovery": "manual_intervention",
                 "reason": f"upstream_reorg_epoch_{relation}",
                 "baseline_epoch": baseline_epoch,
                 "observed_epoch": current_epoch,
