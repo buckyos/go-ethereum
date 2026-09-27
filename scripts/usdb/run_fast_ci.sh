@@ -135,8 +135,8 @@ run_go_checks() {
         ./params
       usdb_go_with_geth_linker_compat test ./core/forkid
       usdb_go_with_geth_linker_compat test ./p2p/enode ./p2p -run 'TestDNS|TestDialDNS|TestDialSched|TestServerDNS'
-      usdb_go_with_geth_linker_compat test ./p2p/discover -run '^TestUDPv4_(ENRPreservesContactFamily|EIP868)$'
-      usdb_go_with_geth_linker_compat test ./tests -run '^TestP2PTransportBootstrap$' -timeout=150s
+      usdb_go_with_geth_linker_compat test ./p2p/discover -run '^TestDNSBootstrap|^TestUDPv4_(ENRPreservesContactFamily|EIP868)$'
+      usdb_go_with_geth_linker_compat test ./tests -run '^TestP2P(Transport|DNS)Bootstrap$' -timeout=180s
       usdb_go_with_geth_linker_compat test ./core -run 'USDB|Usdb'
       usdb_go_with_geth_linker_compat test ./eth -run '^TestUSDBEconomics'
       run_consensus_checks "$consensus_tests"
@@ -145,6 +145,7 @@ run_go_checks() {
       usdb_go_with_geth_linker_compat test -json ./eth ./eth/fetcher -run '^TestSyncCompletion' | tee "$sync_report"
       python3 "$ROOT_DIR/scripts/usdb/check_fast_go_coverage.py" \
         --required "$ROOT_DIR/scripts/usdb/fast_go_sync_required_tests.json" --report "$sync_report"
+      usdb_go_with_geth_linker_compat test ./node -run '^Test(AdminPeersWithUnresolvedDNS|PersistentNodesKeepUnresolvedDNS)$'
       usdb_go_with_geth_linker_compat test ./eth/ethconfig ./cmd/utils
       usdb_go_with_geth_linker_compat test ./cmd/geth -run "$geth_tests"
       usdb_go_with_geth_linker_compat test ./cmd/usdb-genesis-hash
@@ -176,6 +177,7 @@ run_go_checks() {
           ./internal/usdb \
           ./internal/usdbacceptance \
           ./internal/usdbrelease
+        usdb_go_with_geth_linker_compat test ./node -run '^Test(AdminPeersWithUnresolvedDNS|PersistentNodesKeepUnresolvedDNS)$'
         usdb_go_with_geth_linker_compat test ./eth/ethconfig ./cmd/utils
         usdb_go_with_geth_linker_compat test ./cmd/geth \
           -run 'USDB|Usdb|Acceptance|CanonicalPositiveBigInt|ChainCommand.*USDB'

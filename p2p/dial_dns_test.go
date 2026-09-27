@@ -13,14 +13,16 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
 
-// DNS lookups after parsing are injected; localhost only supplies the initial,
-// deliberately obsolete endpoint without depending on an external DNS service.
+// Configuration parsing never resolves DNS; dial tests inject resolver results.
 func dnsTestNode(t *testing.T) *enode.Node {
 	t.Helper()
 	n := enode.NewV4(&newkey().PublicKey, net.IPv4(127, 0, 0, 1), 31303, 31304)
-	n, err := enode.ParseV4(strings.Replace(n.URLv4(), "127.0.0.1", "localhost", 1))
+	n, err := enode.ParseForConfig(enode.ValidSchemes, strings.Replace(n.URLv4(), "127.0.0.1", "localhost", 1))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n.IP() != nil {
+		t.Fatal("configuration unexpectedly resolved DNS")
 	}
 	return n
 }
@@ -167,6 +169,29 @@ func TestDialSchedDNSReconnect(t *testing.T) {
 		{peersRemoved: []enode.ID{n.ID()},
 			wantNewDials: []*enode.Node{enode.NewV4(n.Pubkey(), net.ParseIP("2001:db8::2"), n.TCP(), n.UDP())}},
 	})
+}
+
+func TestDialSchedDNSInitialFailureRecovery(t *testing.T) {
+	n := dnsTestNode(t)
+	lookups := 0
+	config := dialConfig{maxActiveDials: 1, maxDialPeers: 1,
+		lookupIP: func(context.Context, string) ([]net.IPAddr, error) {
+			lookups++
+			if lookups == 1 {
+				return nil, &net.DNSError{Name: n.Hostname(), Err: "no such host", IsNotFound: true}
+			}
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
+		}}
+	runDialTest(t, config, []dialTestRound{
+		{update: func(d *dialScheduler) { d.addStatic(n) }},
+		{}, // No tight retry while DNS is down.
+		{}, // Cross the normal 35-second dial history throttle.
+		{wantNewDials: []*enode.Node{enode.NewV4(n.Pubkey(), net.ParseIP("192.0.2.1"), n.TCP(), n.UDP())}},
+		{succeeded: []enode.ID{n.ID()}},
+	})
+	if lookups != 2 || n.IP() != nil || n.Hostname() != "localhost" {
+		t.Fatalf("DNS source lost or retry not throttled: lookups=%d, source=%s", lookups, n)
+	}
 }
 
 func TestServerDNSBootstrapWithoutDiscoveryPeers(t *testing.T) {

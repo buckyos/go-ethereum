@@ -393,10 +393,9 @@ func (d *dialScheduler) checkDial(n *enode.Node) error {
 	if n.ID() == d.self {
 		return errSelf
 	}
-	if n.IP() != nil && n.TCP() == 0 {
-		// This check can trigger if a non-TCP node is found
-		// by discovery. If there is no IP, the node is a static
-		// node and the actual endpoint will be resolved later in dialTask.
+	if (n.IP() != nil || n.Hostname() != "") && n.TCP() == 0 {
+		// Discovery-only endpoints cannot be dialed. Only ID-only static
+		// nodes may defer their TCP port to a later discovery lookup.
 		return errNoPort
 	}
 	if _, ok := d.dialing[n.ID()]; ok {
@@ -475,6 +474,7 @@ type dialTask struct {
 	dest         *enode.Node
 	lastResolved mclock.AbsTime
 	resolveDelay time.Duration
+	dnsFailed    bool
 }
 
 func newDialTask(dest *enode.Node, flags connFlag) *dialTask {
@@ -567,7 +567,7 @@ func (t *dialTask) dialDNS(d *dialScheduler) {
 	host := t.dest.Hostname()
 	addresses, err := d.lookupIP(ctx, host)
 	if err != nil {
-		d.log.Debug("DNS peer lookup failed", "id", t.dest.ID(), "host", host, "err", err)
+		t.dnsLookupFailed(d, err)
 		return
 	}
 	var candidates []net.IP
@@ -587,8 +587,12 @@ func (t *dialTask) dialDNS(d *dialScheduler) {
 		}
 	}
 	if len(candidates) == 0 {
-		d.log.Debug("DNS peer has no allowed addresses", "id", t.dest.ID(), "host", host)
+		t.dnsLookupFailed(d, errors.New("no allowed IP addresses"))
 		return
+	}
+	if t.dnsFailed {
+		d.log.Info("DNS peer lookup recovered", "id", t.dest.ID(), "host", host)
+		t.dnsFailed = false
 	}
 	deadline, _ := ctx.Deadline()
 	for i, ip := range candidates {
@@ -606,6 +610,18 @@ func (t *dialTask) dialDNS(d *dialScheduler) {
 			return
 		}
 	}
+}
+
+func (t *dialTask) dnsLookupFailed(d *dialScheduler, err error) {
+	if d.ctx.Err() != nil {
+		return // Shutdown is not a DNS outage.
+	}
+	if !t.dnsFailed {
+		d.log.Warn("DNS peer lookup failed; will retry", "id", t.dest.ID(), "host", t.dest.Hostname(), "err", err)
+	} else {
+		d.log.Debug("DNS peer lookup still failing", "id", t.dest.ID(), "host", t.dest.Hostname(), "err", err)
+	}
+	t.dnsFailed = true
 }
 
 func (t *dialTask) String() string {

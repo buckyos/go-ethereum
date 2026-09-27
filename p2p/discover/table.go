@@ -23,6 +23,7 @@
 package discover
 
 import (
+	"context"
 	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -65,19 +66,22 @@ const (
 // itself up-to-date by verifying the liveness of neighbors and requesting their node
 // records when announcements of a new record version are received.
 type Table struct {
-	mutex   sync.Mutex        // protects buckets, bucket content, nursery, rand
-	buckets [nBuckets]*bucket // index of known nodes by distance
-	nursery []*node           // bootstrap nodes
-	rand    *mrand.Rand       // source of randomness, periodically reseeded
-	ips     netutil.DistinctNetSet
+	mutex        sync.Mutex        // protects buckets, bucket content, nursery, rand
+	buckets      [nBuckets]*bucket // index of known nodes by distance
+	nursery      []*node           // bootstrap nodes
+	dnsBootnodes []*dnsBootnode    // hostname sources; resolved endpoints protected by mutex
+	rand         *mrand.Rand       // source of randomness, periodically reseeded
+	ips          netutil.DistinctNetSet
 
-	log        log.Logger
-	db         *enode.DB // database of known nodes
-	net        transport
-	refreshReq chan chan struct{}
-	initDone   chan struct{}
-	closeReq   chan struct{}
-	closed     chan struct{}
+	log         log.Logger
+	lookupIP    func(context.Context, string) ([]net.IPAddr, error)
+	netrestrict *netutil.Netlist
+	db          *enode.DB // database of known nodes
+	net         transport
+	refreshReq  chan chan struct{}
+	initDone    chan struct{}
+	closeReq    chan struct{}
+	closed      chan struct{}
 
 	nodeAddedHook func(*node) // for testing
 }
@@ -99,19 +103,22 @@ type bucket struct {
 	ips          netutil.DistinctNetSet
 }
 
-func newTable(t transport, db *enode.DB, bootnodes []*enode.Node, log log.Logger) (*Table, error) {
+func newTable(t transport, db *enode.DB, cfg Config) (*Table, error) {
+	cfg = cfg.withDefaults()
 	tab := &Table{
-		net:        t,
-		db:         db,
-		refreshReq: make(chan chan struct{}),
-		initDone:   make(chan struct{}),
-		closeReq:   make(chan struct{}),
-		closed:     make(chan struct{}),
-		rand:       mrand.New(mrand.NewSource(0)),
-		ips:        netutil.DistinctNetSet{Subnet: tableSubnet, Limit: tableIPLimit},
-		log:        log,
+		net:         t,
+		db:          db,
+		refreshReq:  make(chan chan struct{}),
+		initDone:    make(chan struct{}),
+		closeReq:    make(chan struct{}),
+		closed:      make(chan struct{}),
+		rand:        mrand.New(mrand.NewSource(0)),
+		ips:         netutil.DistinctNetSet{Subnet: tableSubnet, Limit: tableIPLimit},
+		log:         cfg.Log,
+		lookupIP:    net.DefaultResolver.LookupIPAddr,
+		netrestrict: cfg.NetRestrict,
 	}
-	if err := tab.setFallbackNodes(bootnodes); err != nil {
+	if err := tab.setFallbackNodes(cfg.Bootnodes); err != nil {
 		return nil, err
 	}
 	for i := range tab.buckets {
@@ -186,11 +193,16 @@ func (tab *Table) close() {
 // are no known nodes in the database.
 func (tab *Table) setFallbackNodes(nodes []*enode.Node) error {
 	for _, n := range nodes {
+		if n.Hostname() != "" && n.UDP() != 0 && n.Pubkey() != nil {
+			// DNS endpoints are resolved in the background, never during startup.
+			tab.dnsBootnodes = append(tab.dnsBootnodes, &dnsBootnode{source: n})
+			continue
+		}
 		if err := n.ValidateComplete(); err != nil {
 			return fmt.Errorf("bad bootstrap node %q: %v", n, err)
 		}
+		tab.nursery = append(tab.nursery, wrapNode(n))
 	}
-	tab.nursery = wrapNodes(nodes)
 	return nil
 }
 
@@ -228,6 +240,14 @@ func (tab *Table) loop() {
 	defer revalidate.Stop()
 	defer copyNodes.Stop()
 
+	// DNS cannot delay normal seeding from literal IPs or the node database.
+	dnsCtx, cancelDNS := context.WithCancel(context.Background())
+	dnsDone := make(chan struct{})
+	go func() {
+		defer close(dnsDone)
+		tab.dnsBootstrapLoop(dnsCtx)
+	}()
+
 	// Start initial refresh.
 	go tab.doRefresh(refreshDone)
 
@@ -264,6 +284,8 @@ loop:
 		}
 	}
 
+	cancelDNS()
+	<-dnsDone
 	if refreshDone != nil {
 		<-refreshDone
 	}
@@ -302,7 +324,14 @@ func (tab *Table) doRefresh(done chan struct{}) {
 
 func (tab *Table) loadSeedNodes() {
 	seeds := wrapNodes(tab.db.QuerySeeds(seedCount, seedMaxAge))
+	tab.mutex.Lock()
 	seeds = append(seeds, tab.nursery...)
+	for _, seed := range tab.dnsBootnodes {
+		if seed.resolved != nil {
+			seeds = append(seeds, seed.resolved)
+		}
+	}
+	tab.mutex.Unlock()
 	for i := range seeds {
 		seed := seeds[i]
 		age := log.Lazy{Fn: func() interface{} { return time.Since(tab.db.LastPongReceived(seed.ID(), seed.IP())) }}

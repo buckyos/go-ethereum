@@ -350,6 +350,23 @@ KEEP_RUNNING=1 \
 - `HTTP / WS / Auth` 暂沿用通用默认值
 - `bootnodes / DNS` 暂不内置
 
+### 3.3.4 域名 Seed 的故障处理
+
+`--bootnodes`、TOML 节点列表、旧版 `static-nodes.json` / `trusted-nodes.json` 和
+`admin_addPeer` 等管理接口只做 enode 配置校验，不在加载配置时查询 DNS。
+无效公钥、非法主机名和端口仍会被拒绝；域名暂时无法解析不会导致 Geth 退出，也不会删除该 Seed。
+
+- TCP 拨号保留域名、公钥和端口，每次尝试重新解析，沿用拨号调度器约 35 秒的重试节流。
+  一次 DNS 查询及后续多个 A/AAAA 地址的连接尝试共享有上限的时间预算。
+- UDP discovery 在后台解析域名 Seed，最多同时进行 4 个 DNS 查询，每个查询超时 5 秒，
+  每轮结束后等待 30 秒再重试。解析结果经过地址和 `netrestrict` 检查后才进入发现表。
+  IP Seed 和本地节点缓存不等待这些查询；域名恢复后无须重启即可继续引导。
+- 首次失败记录 `Bootstrap DNS lookup failed; will retry` 或 `DNS peer lookup failed; will retry`，
+  持续失败降为 debug 日志，解析恢复时记录 `lookup recovered`。解析恢复不等于连接或同步成功。
+
+全部 Seed 不可用时，节点仍能启动，但可能没有任何 peer；应检查实际连接、链身份和同步状态，
+不能据此认定入网完成或允许挖矿。节点身份验证、discovery Ping/Pong 和链协议握手检查继续生效。
+
 ## 3.4 genesis：默认不做预挖与预分配
 
 结论：

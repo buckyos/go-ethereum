@@ -296,6 +296,38 @@ func TestStartRPC(t *testing.T) {
 	}
 }
 
+func TestAdminPeersWithUnresolvedDNS(t *testing.T) {
+	cfg := testNodeConfig()
+	cfg.P2P.NoDiscovery = true
+	cfg.P2P.NoDial = true
+	stack, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stack.Close()
+	if err := stack.Start(); err != nil {
+		t.Fatal(err)
+	}
+	api := &adminAPI{node: stack}
+	url := "enode://1dd9d65c4552b5eb43d5ad55a2ee3f56c6cbc1c64a5c8d659f51fcd51bace24351232b8d7821617d2b29b54b81cdefb9b3e9c37d7fd5f63270bcc9e1a6f6a439@offline.invalid:31303"
+	for _, call := range []struct {
+		name string
+		fn   func(string) (bool, error)
+	}{
+		{"add", api.AddPeer}, {"remove", api.RemovePeer},
+		{"trust", api.AddTrustedPeer}, {"untrust", api.RemoveTrustedPeer},
+	} {
+		t.Run(call.name, func(t *testing.T) {
+			if ok, err := call.fn(url); !ok || err != nil {
+				t.Fatalf("DNS unavailability blocked peer configuration: %v", err)
+			}
+			if ok, err := call.fn("enode://bad@offline.invalid:31303"); ok || err == nil {
+				t.Fatal("malformed enode accepted")
+			}
+		})
+	}
+}
+
 // checkReachable checks if the TCP endpoint in rawurl is open.
 func checkReachable(rawurl string) bool {
 	u, err := url.Parse(rawurl)

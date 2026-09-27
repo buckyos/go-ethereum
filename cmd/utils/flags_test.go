@@ -28,6 +28,8 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/urfave/cli/v2"
 )
@@ -86,6 +88,27 @@ func newCLIContext(t *testing.T, flagsList []cli.Flag, args ...string) *cli.Cont
 		t.Fatalf("failed to parse args %v: %v", args, err)
 	}
 	return cli.NewContext(cli.NewApp(), set, nil)
+}
+
+func TestBootstrapNodesKeepUnresolvedDNS(t *testing.T) {
+	key := "1dd9d65c4552b5eb43d5ad55a2ee3f56c6cbc1c64a5c8d659f51fcd51bace24351232b8d7821617d2b29b54b81cdefb9b3e9c37d7fd5f63270bcc9e1a6f6a439"
+	dns := "enode://" + key + "@offline.invalid:31303"
+	ip := "enode://" + key + "@127.0.0.1:31303"
+	for _, urls := range []string{dns, dns + "," + ip} {
+		ctx := newCLIContext(t, []cli.Flag{BootnodesFlag}, "--bootnodes", urls)
+		var cfg p2p.Config
+		setBootstrapNodes(ctx, &cfg)
+		setBootstrapNodesV5(ctx, &cfg)
+		wantCount := len(SplitAndTrim(urls))
+		if len(cfg.BootstrapNodes) != wantCount || len(cfg.BootstrapNodesV5) != wantCount {
+			t.Fatal("DNS failure discarded a configured bootstrap node")
+		}
+		for _, nodes := range [][]*enode.Node{cfg.BootstrapNodes, cfg.BootstrapNodesV5} {
+			if nodes[0].IP() != nil || nodes[0].Hostname() != "offline.invalid" || nodes[0].String() != dns {
+				t.Fatalf("DNS bootstrap source was not retained: %s", nodes[0])
+			}
+		}
+	}
 }
 
 func TestSetMinerAppliesUSDBFlags(t *testing.T) {

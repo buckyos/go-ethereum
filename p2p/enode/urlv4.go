@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -70,6 +71,10 @@ func MustParseV4(rawurl string) *Node {
 //
 //    enode://<hex node id>@10.3.58.6:30303?discport=30301
 func ParseV4(rawurl string) (*Node, error) {
+	return parseV4(rawurl, true)
+}
+
+func parseV4(rawurl string, resolveDNS bool) (*Node, error) {
 	if m := incompleteNodeURL.FindStringSubmatch(rawurl); m != nil {
 		id, err := parsePubkey(m[1])
 		if err != nil {
@@ -77,7 +82,7 @@ func ParseV4(rawurl string) (*Node, error) {
 		}
 		return NewV4(id, nil, 0, 0), nil
 	}
-	return parseComplete(rawurl)
+	return parseComplete(rawurl, resolveDNS)
 }
 
 // NewV4 creates a node from discovery v4 node information. The record
@@ -107,7 +112,7 @@ func isNewV4(n *Node) bool {
 	return n.r.IdentityScheme() == "" && n.r.Load(&k) == nil && len(n.r.Signature()) == 0
 }
 
-func parseComplete(rawurl string) (*Node, error) {
+func parseComplete(rawurl string, resolveDNS bool) (*Node, error) {
 	var (
 		id               *ecdsa.PublicKey
 		tcpPort, udpPort uint64
@@ -129,14 +134,19 @@ func parseComplete(rawurl string) (*Node, error) {
 	// Parse the IP address.
 	ip := net.ParseIP(u.Hostname())
 	if ip == nil {
-		ips, err := lookupIPFunc(u.Hostname())
-		if err != nil {
-			return nil, err
+		if !validHostname(u.Hostname()) {
+			return nil, errors.New("invalid hostname")
 		}
-		if len(ips) == 0 {
-			return nil, errors.New("DNS hostname has no IP addresses")
+		if resolveDNS {
+			ips, err := lookupIPFunc(u.Hostname())
+			if err != nil {
+				return nil, err
+			}
+			if len(ips) == 0 {
+				return nil, errors.New("DNS hostname has no IP addresses")
+			}
+			ip = ips[0]
 		}
-		ip = ips[0]
 	}
 	// Ensure the IP is 4 bytes long for IPv4 addresses.
 	if ipv4 := ip.To4(); ipv4 != nil {
@@ -159,6 +169,26 @@ func parseComplete(rawurl string) (*Node, error) {
 		n.hostname = u.Hostname()
 	}
 	return n, nil
+}
+
+// validHostname checks DNS syntax without making configuration depend on DNS
+// availability. International names must use their ASCII (punycode) form.
+func validHostname(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // parsePubkey parses a hex-encoded secp256k1 public key.
@@ -188,7 +218,7 @@ func (n *Node) URLv4() string {
 		nodeid = fmt.Sprintf("%s.%x", scheme, n.id[:])
 	}
 	u := url.URL{Scheme: "enode"}
-	if n.Incomplete() {
+	if n.Incomplete() && n.hostname == "" {
 		u.Host = nodeid
 	} else {
 		addr := net.TCPAddr{IP: n.IP(), Port: n.TCP()}

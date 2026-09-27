@@ -64,8 +64,21 @@ func MustParse(rawurl string) *Node {
 
 // Parse decodes and verifies a base64-encoded node record.
 func Parse(validSchemes enr.IdentityScheme, input string) (*Node, error) {
+	return parse(validSchemes, input, true)
+}
+
+// ParseForConfig validates a node record or enode URL without querying DNS.
+// Hostname endpoints retain their identity and ports with a nil IP, so a temporary
+// resolver failure cannot prevent loading configuration. Dialing and discovery
+// must resolve these endpoints before use. Parse retains eager DNS resolution for
+// callers that need an immediately usable address (such as diagnostic tools).
+func ParseForConfig(validSchemes enr.IdentityScheme, input string) (*Node, error) {
+	return parse(validSchemes, input, false)
+}
+
+func parse(validSchemes enr.IdentityScheme, input string, resolveDNS bool) (*Node, error) {
 	if strings.HasPrefix(input, "enode://") {
-		return ParseV4(input)
+		return parseV4(input, resolveDNS)
 	}
 	if !strings.HasPrefix(input, "enr:") {
 		return nil, errMissingPrefix
@@ -187,7 +200,7 @@ func (n *Node) MarshalText() ([]byte, error) {
 
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (n *Node) UnmarshalText(text []byte) error {
-	dec, err := Parse(ValidSchemes, string(text))
+	dec, err := ParseForConfig(ValidSchemes, string(text))
 	if err == nil {
 		*n = *dec
 	}

@@ -18,6 +18,7 @@ package node
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,21 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p"
 )
+
+func TestPersistentNodesKeepUnresolvedDNS(t *testing.T) {
+	url := "enode://1dd9d65c4552b5eb43d5ad55a2ee3f56c6cbc1c64a5c8d659f51fcd51bace24351232b8d7821617d2b29b54b81cdefb9b3e9c37d7fd5f63270bcc9e1a6f6a439@offline.invalid:31303"
+	cfg := Config{DataDir: t.TempDir()}
+	path := filepath.Join(cfg.DataDir, "static-nodes.json")
+	data, _ := json.Marshal([]string{url})
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	warned := false
+	nodes := cfg.parsePersistentNodes(&warned, path)
+	if len(nodes) != 1 || nodes[0].IP() != nil || nodes[0].String() != url {
+		t.Fatalf("DNS unavailability discarded persistent peer: %v", nodes)
+	}
+}
 
 // Tests that datadirs can be successfully created, be them manually configured
 // ones or automatically generated temporary ones.

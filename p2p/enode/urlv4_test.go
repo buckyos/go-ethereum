@@ -225,3 +225,36 @@ func TestDNSHostnameSurvivesURLRoundTrip(t *testing.T) {
 		t.Fatal("empty DNS response must fail without a panic")
 	}
 }
+
+func TestDNSConfigParsingWithoutLookup(t *testing.T) {
+	oldLookup := lookupIPFunc
+	lookupIPFunc = func(string) ([]net.IP, error) {
+		t.Fatal("configuration parsing must not query DNS")
+		return nil, nil
+	}
+	defer func() { lookupIPFunc = oldLookup }()
+	key := "1dd9d65c4552b5eb43d5ad55a2ee3f56c6cbc1c64a5c8d659f51fcd51bace24351232b8d7821617d2b29b54b81cdefb9b3e9c37d7fd5f63270bcc9e1a6f6a439"
+	url := "enode://" + key + "@offline.invalid:31303?discport=31304"
+	n, err := ParseForConfig(ValidSchemes, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.IP() != nil || n.Hostname() != "offline.invalid" || n.TCP() != 31303 || n.UDP() != 31304 || n.ID() != PubkeyToIDV4(hexPubkey(key)) {
+		t.Fatalf("unresolved configuration lost endpoint or identity: %s", n)
+	}
+	text, _ := n.MarshalText()
+	var decoded Node
+	if err := decoded.UnmarshalText(text); err != nil || !reflect.DeepEqual(n, &decoded) || decoded.String() != url {
+		t.Fatalf("unresolved endpoint did not survive persistence: %s, %v", &decoded, err)
+	}
+	for _, endpoint := range []string{":31303", "-bad.invalid:31303", "bad..invalid:31303", "bad_host:31303", "offline.invalid:65536", "offline.invalid:31303?discport=bad"} {
+		if _, err := ParseForConfig(ValidSchemes, "enode://"+key+"@"+endpoint); err == nil {
+			t.Errorf("invalid endpoint accepted: %s", endpoint)
+		}
+	}
+	for _, badKey := range []string{"01010101", strings.Repeat("0", 128)} {
+		if _, err := ParseForConfig(ValidSchemes, "enode://"+badKey+"@offline.invalid:31303"); err == nil {
+			t.Errorf("invalid public key accepted: %s", badKey)
+		}
+	}
+}
