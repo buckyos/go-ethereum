@@ -108,6 +108,7 @@ run_go_checks() {
       ./internal/usdb
       ./internal/usdbacceptance
       ./internal/usdbrelease
+      ./internal/peercheck
       ./core/usdbstate
       ./core
       ./params
@@ -134,6 +135,8 @@ run_go_checks() {
         ./core/usdbstate \
         ./params
       usdb_go_with_geth_linker_compat test ./core/forkid
+      usdb_go_with_geth_linker_compat test ./internal/peercheck ./cmd/geth -run 'TestResolve|TestPeerCheck'
+      usdb_go_with_geth_linker_compat test -race ./tests -run '^TestPeerCheck' -timeout=90s
       usdb_go_with_geth_linker_compat test ./p2p/enode ./p2p -run 'TestDNS|TestDialDNS|TestDialSched|TestServerDNS'
       usdb_go_with_geth_linker_compat test ./p2p/discover -run '^TestDNSBootstrap|^TestUDPv4_(ENRPreservesContactFamily|EIP868)$'
       usdb_go_with_geth_linker_compat test ./tests -run '^TestP2P(Transport|DNS)Bootstrap$' -timeout=180s
