@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 )
 
 const (
-	activeVersionSetHashDomain = "usdb-active-version-set:v1"
+	activeVersionSetHashDomain       = "usdb-active-version-set:v1"
+	scopedActiveVersionSetHashDomain = "usdb-active-version-set:v2"
 
 	InscriptionSchemaVersionV1       = "uip-0001-miner-pass-inscription:v1"
 	PassStateMachineVersionV1        = "uip-0002-pass-state-machine:v1"
@@ -54,8 +56,73 @@ var activeVersionFamilySet = func() map[string]struct{} {
 }()
 
 // ActiveVersionSet is the UIP-0008 version map selected for one exact chain context.
-// Its custom decoder rejects unknown and duplicate version families.
+// Its custom decoder rejects unknown and duplicate version families. The optional
+// scope member binds independent USDB rule histories on the same BTC source.
 type ActiveVersionSet map[string]json.RawMessage
+
+type btcRulesScope struct {
+	NetworkID  string `json:"network_id"`
+	RulesScope string `json:"rules_scope"`
+}
+
+var rulesScopePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+func validRulesScope(value string) bool {
+	return len(value) <= 64 && value != "legacy" && rulesScopePattern.MatchString(value)
+}
+
+func decodeBTCRulesScope(raw json.RawMessage) (*btcRulesScope, error) {
+	// Decode members individually to reject duplicate keys as well as unknown
+	// members; otherwise implementations could interpret scope differently.
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
+		return nil, fmt.Errorf("active_version_set scope must be an object")
+	}
+	members := make(map[string]string)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, fmt.Errorf("invalid active_version_set scope: %w", err)
+		}
+		name, ok := token.(string)
+		if !ok || (name != "network_id" && name != "rules_scope") {
+			return nil, fmt.Errorf("unknown active_version_set scope member %q", token)
+		}
+		if _, exists := members[name]; exists {
+			return nil, fmt.Errorf("duplicate active_version_set scope member %q", name)
+		}
+		var value string
+		if err := decoder.Decode(&value); err != nil {
+			return nil, fmt.Errorf("invalid active_version_set scope member %q: %w", name, err)
+		}
+		members[name] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, fmt.Errorf("invalid active_version_set scope terminator: %w", err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return nil, err
+	}
+	scope := &btcRulesScope{NetworkID: members["network_id"], RulesScope: members["rules_scope"]}
+	switch scope.NetworkID {
+	case "btc-mainnet", "btc-testnet3", "btc-testnet4", "btc-signet", "btc-regtest":
+	default:
+		return nil, fmt.Errorf("invalid active_version_set source network %q", scope.NetworkID)
+	}
+	if !validRulesScope(scope.RulesScope) {
+		return nil, fmt.Errorf("invalid active_version_set rules scope %q", scope.RulesScope)
+	}
+	return scope, nil
+}
+
+func (set ActiveVersionSet) rulesScope() (*btcRulesScope, error) {
+	raw, present := set["scope"]
+	if !present {
+		return nil, nil
+	}
+	return decodeBTCRulesScope(raw)
+}
 
 func (set *ActiveVersionSet) UnmarshalJSON(input []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(input))
@@ -77,7 +144,7 @@ func (set *ActiveVersionSet) UnmarshalJSON(input []byte) error {
 		if !ok {
 			return fmt.Errorf("active_version_set family must be a string")
 		}
-		if _, ok := activeVersionFamilySet[family]; !ok {
+		if _, ok := activeVersionFamilySet[family]; !ok && family != "scope" {
 			return fmt.Errorf("unknown active_version_set family %q", family)
 		}
 		if _, exists := decoded[family]; exists {
@@ -87,7 +154,11 @@ func (set *ActiveVersionSet) UnmarshalJSON(input []byte) error {
 		if err := decoder.Decode(&value); err != nil {
 			return fmt.Errorf("invalid active_version_set value for %q: %w", family, err)
 		}
-		if _, _, err := decodeActiveVersionValue(value); err != nil {
+		if family == "scope" {
+			if _, err := decodeBTCRulesScope(value); err != nil {
+				return err
+			}
+		} else if _, _, err := decodeActiveVersionValue(value); err != nil {
 			return fmt.Errorf("invalid active_version_set value for %q: %w", family, err)
 		}
 		decoded[family] = append(json.RawMessage(nil), value...)
@@ -107,8 +178,19 @@ func (set *ActiveVersionSet) UnmarshalJSON(input []byte) error {
 
 // ID returns the canonical SHA-256 identity defined by the Rust activation registry.
 func (set ActiveVersionSet) ID() (string, error) {
+	scope, err := set.rulesScope()
+	if err != nil {
+		return "", err
+	}
 	hasher := sha256.New()
-	writeLengthPrefixedString(hasher, activeVersionSetHashDomain)
+	if scope == nil {
+		// Preserve the exact v1 encoding for all already-published histories.
+		writeLengthPrefixedString(hasher, activeVersionSetHashDomain)
+	} else {
+		writeLengthPrefixedString(hasher, scopedActiveVersionSetHashDomain)
+		writeLengthPrefixedString(hasher, scope.NetworkID)
+		writeLengthPrefixedString(hasher, scope.RulesScope)
+	}
 	for _, family := range activeVersionFamilies {
 		writeLengthPrefixedString(hasher, family)
 		raw, present := set[family]
@@ -149,8 +231,16 @@ func (set ActiveVersionSet) ValidateBTCProfileSurface() error {
 		"commit_protocol_version":           CommitProtocolVersionV1,
 		"balance_history_semantics_version": BalanceHistorySemanticsVersionV1,
 	}
-	if len(set) != len(required) {
-		return fmt.Errorf("BTC active_version_set has %d families, want %d", len(set), len(required))
+	scope, err := set.rulesScope()
+	if err != nil {
+		return err
+	}
+	memberCount := len(required)
+	if scope != nil {
+		memberCount++
+	}
+	if len(set) != memberCount {
+		return fmt.Errorf("BTC active_version_set has %d members, want %d", len(set), memberCount)
 	}
 	for family, expected := range required {
 		value, err := set.requireStringVersion(family)

@@ -255,6 +255,13 @@ func validateCurrentActivationIdentity(
 	if err != nil {
 		return fmt.Errorf("current service registry is not in the local catalog: %w", err)
 	}
+	// Equal formula versions at one height do not make independent rule
+	// histories interchangeable. Revision compatibility is only meaningful
+	// within the same BTC source and USDB rules scope.
+	if actualRegistry.NetworkID != expectedRegistry.NetworkID || actualRegistry.RulesScope != expectedRegistry.RulesScope {
+		return fmt.Errorf("%w: service scope %s/%s differs from chain-config scope %s/%s", ErrBTCActivationRegistryMismatch,
+			actualRegistry.NetworkID, actualRegistry.RulesScope, expectedRegistry.NetworkID, expectedRegistry.RulesScope)
+	}
 	if _, err := actualRegistry.validateIdentity(
 		btcHeight,
 		actualRegistryID,

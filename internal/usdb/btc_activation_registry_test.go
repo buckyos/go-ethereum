@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -294,5 +295,182 @@ func TestVerifierDispatchesFormulaFromPayloadHeight(t *testing.T) {
 	}
 	if afterClient.lastQuery.ExpectedState.ActiveVersionSetID != v2ID {
 		t.Fatalf("post-activation query used set %s, want %s", afterClient.lastQuery.ExpectedState.ActiveVersionSetID, v2ID)
+	}
+}
+
+func TestCurrentActivationIdentityRejectsDifferentRuleScopes(t *testing.T) {
+	actual, err := loadBTCActivationRegistry(BTCMainnetActivationRegistryIDV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	point, err := actual.lookup(123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		network string
+		scope   string
+	}{
+		{name: "different BTC network", network: "btc-regtest"},
+		{name: "same BTC network different rules", network: "btc-mainnet", scope: "usdb-testnet-fixture"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expected := *actual
+			expected.NetworkID = test.network
+			expected.RulesScope = test.scope
+			if err := validateCurrentActivationIdentity(123, point.ActiveVersionSet, point.ActiveVersionSetID, actual.ActivationRegistryID, &expected); !errors.Is(err, ErrBTCActivationRegistryMismatch) {
+				t.Fatalf("different rule history accepted despite matching formula versions: %v", err)
+			}
+		})
+	}
+	// Preparing a newer revision in the same legacy scope must remain possible.
+	expected, err := loadBTCActivationRegistry(BTCRegtestActivationRegistryIDRevision2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCurrentActivationIdentity(123, point.ActiveVersionSet, point.ActiveVersionSetID, BTCRegtestActivationRegistryIDV1, expected); err != nil {
+		t.Fatalf("compatible same-scope revision transition rejected: %v", err)
+	}
+}
+
+// This separate generated fixture does not activate experimental scopes in the
+// production catalog. It checks the Rust-to-Go identity contract and independent
+// revision histories on the same BTC source.
+func TestScopedBTCActivationGoldenMatchesRustAndIsolatesCatalogs(t *testing.T) {
+	blob, err := os.ReadFile("testdata/btc_activation_scoped_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registries, err := parseBTCActivationGolden(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopes := make(map[string]bool)
+	currentScopes := make(map[string]int)
+	setScopes := make(map[string]string)
+	for _, registry := range registries {
+		if registry.NetworkID != "btc-mainnet" {
+			t.Fatalf("fixture must share one real BTC source: %s", registry.NetworkID)
+		}
+		scopes[registry.RulesScope] = true
+		if registry.Current {
+			currentScopes[registry.RulesScope]++
+		}
+		// Looking up old heights after a later lookup models deterministic
+		// replay without silently selecting another scope's current revision.
+		for _, height := range []uint32{101, 99, 100, 0} {
+			point, err := registry.lookup(height)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if previous, exists := setScopes[point.ActiveVersionSetID]; exists && previous != registry.RulesScope {
+				t.Fatalf("scopes %s and %s share version identity", previous, registry.RulesScope)
+			}
+			setScopes[point.ActiveVersionSetID] = registry.RulesScope
+			if _, err := registry.validateIdentity(height, registry.ActivationRegistryID, point.ActiveVersionSet, point.ActiveVersionSetID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(scopes) < 2 {
+		t.Fatal("fixture must cover independent rule scopes")
+	}
+	for scope := range scopes {
+		if currentScopes[scope] != 1 {
+			t.Fatalf("scope %s has %d current revisions", scope, currentScopes[scope])
+		}
+	}
+
+	for _, registry := range registries {
+		if !registry.Current {
+			continue
+		}
+		for _, height := range []uint32{99, 100, 101, 99} {
+			selector := newTestSelector(t, height)
+			point, err := registry.lookup(height)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view := newTestProfileView(t, selector, "1", "0")
+			view.ExternalState.ActivationRegistryID = registry.ActivationRegistryID
+			view.ExternalState.ActiveVersionSet = point.ActiveVersionSet
+			view.ExternalState.ActiveVersionSetID = point.ActiveVersionSetID
+			_, err = resolveConsensusProfile(context.Background(), &stubProfileClient{profile: view}, registry, selector)
+			if registry.RulesScope == "usdb-testnet-fixture" && height >= 100 {
+				if !errors.Is(err, ErrUnsupportedBTCFormulaVersion) {
+					t.Fatalf("test-scope unsupported activation at %d must fail closed: %v", height, err)
+				}
+			} else if err != nil {
+				t.Fatalf("test-scope upgrade affected %s at %d: %v", registry.RulesScope, height, err)
+			}
+		}
+	}
+
+	var first, other *btcActivationRegistry
+	for _, registry := range registries {
+		if first == nil {
+			first = registry
+		} else if registry.RulesScope != first.RulesScope {
+			other = registry
+		}
+	}
+	selector := newTestSelector(t, 0)
+	point, err := first.lookup(selector.BTCHeight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := newTestProfileView(t, selector, "1", "0")
+	view.ExternalState.ActivationRegistryID = first.ActivationRegistryID
+	view.ExternalState.ActiveVersionSet = point.ActiveVersionSet
+	view.ExternalState.ActiveVersionSetID = point.ActiveVersionSetID
+	client := &stubProfileClient{profile: view}
+	if _, err := resolveConsensusProfile(context.Background(), client, first, selector); err != nil {
+		t.Fatalf("scoped consensus profile failed: %v", err)
+	}
+	if client.lastQuery.ExpectedState.ActivationRegistryID != first.ActivationRegistryID || client.lastQuery.ExpectedState.ActiveVersionSetID != point.ActiveVersionSetID {
+		t.Fatal("RPC query failed to pin scoped registry/version identities")
+	}
+	if _, err := resolveConsensusProfile(context.Background(), client, other, selector); !errors.Is(err, ErrProfileStateMismatch) {
+		t.Fatalf("same BTC state from other rule scope accepted: %v", err)
+	}
+	// Relabeling a foreign response with the requested registry ID must still
+	// fail because the active-version-set hash independently commits its scope.
+	view.ExternalState.ActivationRegistryID = other.ActivationRegistryID
+	if _, err := resolveConsensusProfile(context.Background(), client, other, selector); !errors.Is(err, ErrProfileStateMismatch) {
+		t.Fatalf("foreign scoped version set accepted after registry relabeling: %v", err)
+	}
+
+	for _, mutate := range []struct {
+		name  string
+		apply func(*btcActivationGoldenArtifact)
+	}{
+		{name: "registry scope substitution", apply: func(a *btcActivationGoldenArtifact) { a.Registries[0].RulesScope = "different-scope" }},
+		{name: "source substitution", apply: func(a *btcActivationGoldenArtifact) { a.Registries[0].NetworkID = "btc-regtest" }},
+		{name: "scope omitted", apply: func(a *btcActivationGoldenArtifact) { a.Registries[0].RulesScope = "" }},
+		{name: "legacy schema downgrade", apply: func(a *btcActivationGoldenArtifact) {
+			a.SchemaVersion = goActivationGoldenSchemaVersion
+			a.SourceRegistrySchemaVersion = btcActivationRegistrySchemaV2
+		}},
+		{name: "invalid current revision", apply: func(a *btcActivationGoldenArtifact) {
+			for i := range a.Registries {
+				a.Registries[i].Current = false
+			}
+		}},
+	} {
+		t.Run(mutate.name, func(t *testing.T) {
+			var artifact btcActivationGoldenArtifact
+			if err := json.Unmarshal(blob, &artifact); err != nil {
+				t.Fatal(err)
+			}
+			mutate.apply(&artifact)
+			tampered, err := json.Marshal(artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parseBTCActivationGolden(tampered); err == nil {
+				t.Fatal("invalid scoped golden accepted")
+			}
+		})
 	}
 }

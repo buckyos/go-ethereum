@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	goActivationGoldenSchemaVersion = "uip-0008-go-btc-activation-golden:v3"
-	btcActivationRegistrySchemaV2   = "uip-0008-btc-activation-registry:v2"
+	goActivationGoldenSchemaVersion       = "uip-0008-go-btc-activation-golden:v3"
+	btcActivationRegistrySchemaV2         = "uip-0008-btc-activation-registry:v2"
+	goScopedActivationGoldenSchemaVersion = "uip-0008-go-btc-activation-golden:v4"
+	btcActivationRegistrySchemaV3         = "uip-0008-btc-activation-registry:v3"
 
 	// BTCMainnetActivationRegistryIDV1 is generated from btc-mainnet.json.
 	BTCMainnetActivationRegistryIDV1 = "a6350cd6a68755ea64edf537f35c1eca4421a970e2ecfd67aaa29075aae57224"
@@ -52,6 +54,7 @@ type btcActivationGoldenArtifact struct {
 
 type btcActivationRegistry struct {
 	NetworkID            string               `json:"network_id"`
+	RulesScope           string               `json:"rules_scope,omitempty"`
 	Revision             uint32               `json:"revision"`
 	Current              bool                 `json:"current"`
 	StableLagBlocks      uint32               `json:"stable_lag_blocks"`
@@ -68,6 +71,9 @@ type btcActivationPoint struct {
 // BTCActivationRegistryDescriptor exposes the immutable identity metadata for
 // one registry revision without exposing or mutating its activation records.
 type BTCActivationRegistryDescriptor struct {
+	// RulesScope is empty for frozen legacy registries and otherwise identifies
+	// an independent USDB interpretation history on NetworkID.
+	RulesScope           string
 	NetworkID            string
 	Revision             uint32
 	Current              bool
@@ -84,6 +90,7 @@ func DescribeBTCActivationRegistry(registryID string) (BTCActivationRegistryDesc
 	}
 	return BTCActivationRegistryDescriptor{
 		NetworkID:            registry.NetworkID,
+		RulesScope:           registry.RulesScope,
 		Revision:             registry.Revision,
 		Current:              registry.Current,
 		StableLagBlocks:      registry.StableLagBlocks,
@@ -115,22 +122,36 @@ func parseBTCActivationGolden(input []byte) (map[string]*btcActivationRegistry, 
 	if err := requireJSONEOF(decoder); err != nil {
 		return nil, err
 	}
-	if artifact.SchemaVersion != goActivationGoldenSchemaVersion {
+	scoped := artifact.SchemaVersion == goScopedActivationGoldenSchemaVersion
+	switch artifact.SchemaVersion {
+	case goActivationGoldenSchemaVersion:
+		if artifact.SourceRegistrySchemaVersion != btcActivationRegistrySchemaV2 {
+			return nil, fmt.Errorf("unsupported source BTC activation registry schema %q", artifact.SourceRegistrySchemaVersion)
+		}
+	case goScopedActivationGoldenSchemaVersion:
+		if artifact.SourceRegistrySchemaVersion != btcActivationRegistrySchemaV3 {
+			return nil, fmt.Errorf("unsupported scoped source BTC activation registry schema %q", artifact.SourceRegistrySchemaVersion)
+		}
+	default:
 		return nil, fmt.Errorf("unsupported Go BTC activation golden schema %q", artifact.SchemaVersion)
-	}
-	if artifact.SourceRegistrySchemaVersion != btcActivationRegistrySchemaV2 {
-		return nil, fmt.Errorf("unsupported source BTC activation registry schema %q", artifact.SourceRegistrySchemaVersion)
 	}
 	if len(artifact.Registries) == 0 {
 		return nil, fmt.Errorf("Go BTC activation golden artifact has no registries")
 	}
 
 	registries := make(map[string]*btcActivationRegistry, len(artifact.Registries))
-	networkRevisions := make(map[string][]*btcActivationRegistry)
+	type catalogScope struct{ networkID, rulesScope string }
+	networkRevisions := make(map[catalogScope][]*btcActivationRegistry)
 	for index := range artifact.Registries {
 		registry := &artifact.Registries[index]
 		if registry.NetworkID == "" {
 			return nil, fmt.Errorf("Go BTC activation registry has an empty network_id")
+		}
+		if scoped && !validRulesScope(registry.RulesScope) {
+			return nil, fmt.Errorf("invalid Go BTC activation rules scope %q", registry.RulesScope)
+		}
+		if !scoped && registry.RulesScope != "" {
+			return nil, fmt.Errorf("legacy Go BTC activation registry must not declare rules_scope")
 		}
 		if registry.Revision == 0 {
 			return nil, fmt.Errorf("Go BTC activation registry %s has revision 0", registry.NetworkID)
@@ -155,6 +176,17 @@ func parseBTCActivationGolden(input []byte) (map[string]*btcActivationRegistry, 
 			if _, err := parseCanonicalHex32("active_version_set_id", activation.ActiveVersionSetID); err != nil {
 				return nil, err
 			}
+			versionScope, err := activation.ActiveVersionSet.rulesScope()
+			if err != nil {
+				return nil, err
+			}
+			if scoped {
+				if versionScope == nil || versionScope.NetworkID != registry.NetworkID || versionScope.RulesScope != registry.RulesScope {
+					return nil, fmt.Errorf("golden active_version_set scope mismatch for %s/%s at %d", registry.NetworkID, registry.RulesScope, activation.BTCHeight)
+				}
+			} else if versionScope != nil {
+				return nil, fmt.Errorf("legacy golden active_version_set must not declare scope")
+			}
 			computedID, err := activation.ActiveVersionSet.ID()
 			if err != nil {
 				return nil, fmt.Errorf("invalid golden active_version_set for %s at %d: %w", registry.NetworkID, activation.BTCHeight, err)
@@ -167,10 +199,11 @@ func parseBTCActivationGolden(input []byte) (map[string]*btcActivationRegistry, 
 			}
 		}
 		registries[registry.ActivationRegistryID] = registry
-		networkRevisions[registry.NetworkID] = append(networkRevisions[registry.NetworkID], registry)
+		scope := catalogScope{registry.NetworkID, registry.RulesScope}
+		networkRevisions[scope] = append(networkRevisions[scope], registry)
 	}
-	for networkID, revisions := range networkRevisions {
-		if err := validateBTCActivationRevisionHistory(networkID, revisions); err != nil {
+	for scope, revisions := range networkRevisions {
+		if err := validateBTCActivationRevisionHistory(scope.networkID+"/"+scope.rulesScope, revisions); err != nil {
 			return nil, err
 		}
 	}
