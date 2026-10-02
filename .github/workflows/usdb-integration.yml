@@ -121,6 +121,13 @@ jobs:
           check-latest: false
           cache: false
 
+      - name: Prepare Go modules
+        if: matrix.shard == 'go-profile' || matrix.shard == 'go-activation'
+        timeout-minutes: 12
+        run: >-
+          python3 go-ethereum/scripts/usdb/prepare_go_modules.py
+          --output-dir "${{ runner.temp }}/long-ci-output/go-modules"
+
       - name: Set up Rust
         shell: bash
         run: |
@@ -242,6 +249,13 @@ jobs:
         with:
           python-version: ${{ needs.revision_lock.outputs.python }}
           check-latest: false
+
+      - name: Prepare Go modules
+        if: matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'release-e2e'
+        timeout-minutes: 12
+        run: >-
+          python3 go-ethereum/scripts/usdb/prepare_go_modules.py
+          --output-dir "${{ runner.temp }}/long-ci-output/go-modules"
 
       - name: Set up Rust
         shell: bash

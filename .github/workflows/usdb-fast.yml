@@ -130,6 +130,22 @@ jobs:
         shell: bash
         run: echo "USDB_CANONICAL_GO_BIN=$(command -v go)" >>"$GITHUB_ENV"
 
+      - name: Prepare Go modules
+        timeout-minutes: 12
+        run: >-
+          python3 scripts/usdb/prepare_go_modules.py
+          --go-binary "$USDB_CANONICAL_GO_BIN"
+          --output-dir "${{ runner.temp }}/usdb-fast-ci/go-modules"
+
+      - name: Upload Go module preparation logs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: usdb-fast-go-modules-${{ github.sha }}
+          path: ${{ runner.temp }}/usdb-fast-ci/go-modules/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Set up compatibility Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

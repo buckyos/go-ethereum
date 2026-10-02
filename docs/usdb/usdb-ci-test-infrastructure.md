@@ -65,6 +65,32 @@ compatibility lane。
 compatibility linker 参数不是 release 策略。长期方案仍是升级或移除旧
 `memsize` runtime 依赖，随后删除 compatibility workaround。
 
+## Go 依赖预下载
+
+Fast 的 Go job、Nightly 的 `go-profile` / `go-activation`、Weekly 的
+`upstream-fault-matrix` / `release-e2e` 在构建前运行独立的 `Prepare Go modules`。
+该步骤使用 workflow 选定的 canonical Go 执行 `go mod download -json`，预取
+当前 `go.mod` 声明的构建和测试依赖，不修改 Go 版本、依赖版本、代理或校验策略。
+Rust-only 分片不增加此步骤。本版仍保持 `cache: false`，跨 job 模块缓存后续单独实施。
+
+```bash
+python3 scripts/usdb/prepare_go_modules.py --go-binary /path/to/go1.18.5/bin/go --output-dir /tmp/usdb-go-modules
+```
+
+最多尝试 3 次，每次限时 180 秒，两次等待分别为 10、30 秒，workflow step 限时
+12 分钟。仅 HTTP/2 `INTERNAL_ERROR` / `REFUSED_STREAM`、连接重置/拒绝、网络超时、
+HTTP 429/5xx 等明确的临时下载错误可以重试。校验不符、认证错误、版本不存在、
+无法识别的错误立即失败；同一次下载有多个模块失败时，必须全部符合重试条件。
+取消任务会终止下载进程及其 VCS 子进程，不触发重试。检测到 HTTP/2 错误后，
+仅后续下载子进程设置 `GODEBUG=http2client=0`，保留其他 debug 设置，后续构建和
+测试进程不受影响。构建失败和测试断言仍直接失败，不自动重跑测试。
+
+每次 stdout JSON 与 stderr 分别保存为 `attempt-N.json` 和
+`attempt-N.stderr.log`；`result.json` 记录次数、分类、退出码和 HTTP/1.1 回退情况。
+重试成功标记为 `recovered`，并写入 job summary。
+Fast 单独上传 `usdb-fast-go-modules-*` artifact；Nightly / Weekly 使用原有 artifact
+的 `go-modules/` 子目录，失败时也上传。此步骤失败时先检查这些日志，再定位构建或 E2E。
+
 ## 本地 Fast CI
 
 使用显式工具链运行完整本地 gate：
