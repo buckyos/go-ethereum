@@ -1,0 +1,31 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "usdb-activation-fork-id",
+  "type": "fixed",
+  "scopes": [
+    "consensus",
+    "node-runtime",
+    "documentation",
+    "testing"
+  ],
+  "summary": "Include USDB activation checkpoints in peer fork compatibility checks",
+  "details": [
+    "USDB activation block numbers now join the shared fork schedule used by eth Status handshakes and ENR advertisements, including registry-only checkpoints; heights are sorted, deduplicated and exclude block zero.",
+    "After a newly listed activation height, new handshakes reject an old peer that omits that height and advertises its previous checksum with no next fork. Upgraded peers still syncing toward the announced height remain compatible.",
+    "BTC activation heights are not included. Fork IDs summarize genesis and fork heights, not registry IDs or version fields; equal-height rule differences still require chain configuration and consensus validation.",
+    "Existing peer connections are not automatically disconnected at activation. This change neither stops old networks nor forces remote software upgrades.",
+    "The current testnet-v0 schedule contains only a block-zero USDB checkpoint, so its fork ID, frozen network artifacts and existing data contracts remain unchanged."
+  ],
+  "operator_actions": [
+    "When deploying a release containing this fix, replace and restart the chain runtime. For a future nonzero USDB activation, upgrade miners and followers before the approved activation height."
+  ],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": true
+  },
+  "references": [
+    "https://github.com/buckyos/usdb/issues/51"
+  ]
+}

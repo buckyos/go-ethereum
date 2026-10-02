@@ -233,6 +233,14 @@ func gatherForks(config *params.ChainConfig) []uint64 {
 			forks = append(forks, rule.Uint64())
 		}
 	}
+	// USDB consensus checkpoints are nested and therefore are not visible to
+	// the top-level reflection above. Use USDB block heights only; BTC source
+	// heights and checkpoint contents are not part of the EIP-2124 checksum.
+	if config.USDB != nil {
+		for _, activation := range config.USDB.Activations {
+			forks = append(forks, activation.Block)
+		}
+	}
 	// Sort the fork block numbers to permit chronological XOR
 	for i := 0; i < len(forks); i++ {
 		for j := i + 1; j < len(forks); j++ {

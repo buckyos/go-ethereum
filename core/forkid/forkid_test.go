@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"math"
 	"math/big"
+	"reflect"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -308,5 +309,144 @@ func TestEncoding(t *testing.T) {
 		if !bytes.Equal(have, tt.want) {
 			t.Errorf("test %d: RLP mismatch: have %x, want %x", i, have, tt.want)
 		}
+	}
+}
+
+// usdbForkConfig keeps the source-chain origin distinct from USDB fork heights.
+func usdbForkConfig(blocks ...uint64) *params.ChainConfig {
+	config := &params.ChainConfig{USDB: &params.USDBConsensusConfig{
+		BTCNetworkID: "btc-mainnet", BTCIndexOriginHeight: 900000,
+	}}
+	for _, block := range blocks {
+		config.USDB.Activations = append(config.USDB.Activations, params.USDBConsensusActivation{Block: block})
+	}
+	return config
+}
+
+func TestUSDBActivationForkIDCreation(t *testing.T) {
+	config := usdbForkConfig(0, 100, 200, 300)
+	config.HomesteadBlock = big.NewInt(0)
+	config.BerlinBlock = big.NewInt(150)
+	config.LondonBlock = big.NewInt(200) // Shared EVM/USDB height must enter the checksum once.
+	if got, want := gatherForks(config), []uint64{100, 150, 200, 300}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fork heights: have %v, want %v", got, want)
+	}
+	// Independent IEEE CRC32 vectors over genesis || uint64_be(height)... .
+	cases := []struct {
+		head uint64
+		hash uint32
+		next uint64
+	}{
+		{0, 0xbf2474b1, 100},
+		{99, 0xbf2474b1, 100},
+		{100, 0x232c80cc, 150},
+		{149, 0x232c80cc, 150},
+		{150, 0x2f5ec10b, 200},
+		{199, 0x2f5ec10b, 200},
+		{200, 0xb288ccd0, 300},
+		{299, 0xb288ccd0, 300},
+		{300, 0xdba5cce9, 0},
+		{900000, 0xdba5cce9, 0},
+	}
+	for _, tc := range cases {
+		want := ID{Hash: checksumToBytes(tc.hash), Next: tc.next}
+		if got := NewID(config, params.USDBGenesisHash, tc.head); got != want {
+			t.Errorf("head %d: have %v, want %v", tc.head, got, want)
+		}
+	}
+}
+
+func TestUSDBActivationForkFilter(t *testing.T) {
+	upgraded := usdbForkConfig(0, 100, 200)
+	old := usdbForkConfig(0)
+	firstOnly := usdbForkConfig(0, 100)
+	otherFuture := usdbForkConfig(0, 120)
+	cases := []struct {
+		name       string
+		local      *params.ChainConfig
+		head       uint64
+		remote     *params.ChainConfig
+		remoteHead uint64
+		want       error
+	}{
+		{"old peer before activation", upgraded, 99, old, 99, nil},
+		{"old peer at activation", upgraded, 100, old, 100, ErrRemoteStale},
+		{"upgraded peer still catching up", upgraded, 100, upgraded, 99, nil},
+		{"local catching up", upgraded, 99, upgraded, 100, nil},
+		{"old local sees future announcement", old, 99, upgraded, 99, nil},
+		{"old local passed announced fork", old, 100, upgraded, 99, ErrLocalIncompatibleOrStale},
+		{"old local cannot match new checksum", old, 100, upgraded, 100, ErrLocalIncompatibleOrStale},
+		{"second checkpoint not yet passed", upgraded, 199, firstOnly, 199, nil},
+		{"second checkpoint omitted", upgraded, 200, firstOnly, 200, ErrRemoteStale},
+		{"different future heights still compatible", upgraded, 99, otherFuture, 99, nil},
+		{"different future height after local fork", upgraded, 100, otherFuture, 99, ErrRemoteStale},
+		{"different histories", upgraded, 200, otherFuture, 200, ErrLocalIncompatibleOrStale},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := newFilter(tc.local, params.USDBGenesisHash, func() uint64 { return tc.head })
+			remoteID := NewID(tc.remote, params.USDBGenesisHash, tc.remoteHead)
+			if got := filter(remoteID); got != tc.want {
+				t.Fatalf("filter(%v): have %v, want %v", remoteID, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUSDBActivationForkFilterTracksHeadAndReorg(t *testing.T) {
+	config := usdbForkConfig(0, 100, 200)
+	var head uint64
+	filter := newFilter(config, params.USDBGenesisHash, func() uint64 { return head })
+	oldID := NewID(usdbForkConfig(0), params.USDBGenesisHash, 99)
+	laggingID := NewID(config, params.USDBGenesisHash, 99)
+	for _, height := range []uint64{99, 100, 200, 99, 200} {
+		head = height
+		var want error
+		if height >= 100 {
+			want = ErrRemoteStale
+		}
+		if got := filter(oldID); got != want {
+			t.Fatalf("head %d after forward/reorg transition: have %v, want %v", height, got, want)
+		}
+		if err := filter(laggingID); err != nil {
+			t.Fatalf("upgraded lagging peer at local head %d rejected: %v", height, err)
+		}
+	}
+	// The static probe intentionally has no synced head; it cannot prove that
+	// a remote node has upgraded, but must recognize known future checksums.
+	static := NewStaticFilter(config, params.USDBGenesisHash)
+	for _, remoteID := range []ID{oldID, laggingID, NewID(config, params.USDBGenesisHash, 200)} {
+		if err := static(remoteID); err != nil {
+			t.Fatalf("static filter rejected compatible schedule: %v", err)
+		}
+	}
+	unknownID := NewID(usdbForkConfig(0, 120), params.USDBGenesisHash, 200)
+	if err := static(unknownID); err != ErrLocalIncompatibleOrStale {
+		t.Fatalf("static filter accepted unknown checksum: %v", err)
+	}
+}
+
+func TestUSDBForkIDRemainsAHeightSchedule(t *testing.T) {
+	genesis := params.USDBGenesisHash
+	baseline := NewID(&params.ChainConfig{}, genesis, 1000000)
+	for _, config := range []*params.ChainConfig{usdbForkConfig(), usdbForkConfig(0)} {
+		if got := NewID(config, genesis, 1000000); got != baseline {
+			t.Fatalf("genesis/source metadata changed legacy fork ID: %v != %v", got, baseline)
+		}
+	}
+	execution := &params.ChainConfig{LondonBlock: big.NewInt(100)}
+	combined := usdbForkConfig(0, 100)
+	combined.LondonBlock = big.NewInt(100)
+	for _, head := range []uint64{99, 100} {
+		if NewID(execution, genesis, head) != NewID(combined, genesis, head) {
+			t.Fatalf("shared activation height was counted twice at %d", head)
+		}
+	}
+	before := NewID(combined, genesis, 100)
+	combined.USDB.BTCIndexOriginHeight++
+	combined.USDB.Activations[1].BTCActivationRegistryID = "different-reviewed-registry"
+	combined.USDB.Activations[1].Versions.RewardRuleVersion++
+	if got := NewID(combined, genesis, 100); got != before {
+		t.Fatalf("checkpoint contents unexpectedly entered standard fork checksum: %v != %v", got, before)
 	}
 }

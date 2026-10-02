@@ -18,12 +18,15 @@ package eth
 
 import (
 	"errors"
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/forkid"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // Tests that handshake failures are detected and reported correctly.
@@ -86,5 +89,80 @@ func testHandshake(t *testing.T, protocol uint) {
 		} else if !errors.Is(err, test.want) {
 			t.Errorf("test %d: wrong error: got %q, want %q", i, err, test.want)
 		}
+	}
+}
+
+// statusForkChain supplies immutable fork-filter inputs without generating a
+// consensus chain: this test covers the wire status handshake, not block import.
+type statusForkChain struct {
+	config  *params.ChainConfig
+	genesis *types.Block
+	head    *types.Header
+}
+
+func (c *statusForkChain) Config() *params.ChainConfig  { return c.config }
+func (c *statusForkChain) Genesis() *types.Block        { return c.genesis }
+func (c *statusForkChain) CurrentHeader() *types.Header { return c.head }
+
+func TestHandshakeUSDBActivation66(t *testing.T) {
+	const height = uint64(100)
+	const network = uint64(202608250)
+	genesis := types.NewBlockWithHeader(&types.Header{Number: new(big.Int)})
+	oldConfig := &params.ChainConfig{}
+	updatedConfig := &params.ChainConfig{USDB: &params.USDBConsensusConfig{
+		Activations: []params.USDBConsensusActivation{{Block: 0}, {Block: height}},
+	}}
+	laterConfig := &params.ChainConfig{USDB: &params.USDBConsensusConfig{
+		Activations: []params.USDBConsensusActivation{{Block: 0}, {Block: height + 100}},
+	}}
+	tests := []struct {
+		name                          string
+		localConfig, remoteConfig     *params.ChainConfig
+		localHeight, remoteHeight     uint64
+		localRejected, remoteRejected bool
+	}{
+		{name: "old and updated before activation", localConfig: updatedConfig, remoteConfig: oldConfig, localHeight: height - 1, remoteHeight: height - 1},
+		{name: "updated rejects old at activation", localConfig: updatedConfig, remoteConfig: oldConfig, localHeight: height, remoteHeight: height - 1, localRejected: true, remoteRejected: true},
+		{name: "upgraded lagging remote can catch up", localConfig: updatedConfig, remoteConfig: updatedConfig, localHeight: height, remoteHeight: height - 1},
+		{name: "upgraded lagging local can catch up", localConfig: updatedConfig, remoteConfig: updatedConfig, localHeight: height - 1, remoteHeight: height},
+		{name: "old local passed unrecognized remote fork", localConfig: oldConfig, remoteConfig: updatedConfig, localHeight: height, remoteHeight: height - 1, localRejected: true},
+		{name: "different future checkpoints remain compatible", localConfig: updatedConfig, remoteConfig: laterConfig, localHeight: height - 1, remoteHeight: height - 1},
+		{name: "different checkpoints split at first activation", localConfig: updatedConfig, remoteConfig: laterConfig, localHeight: height, remoteHeight: height - 1, localRejected: true, remoteRejected: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			localChain := &statusForkChain{config: test.localConfig, genesis: genesis, head: &types.Header{Number: new(big.Int).SetUint64(test.localHeight)}}
+			remoteChain := &statusForkChain{config: test.remoteConfig, genesis: genesis, head: &types.Header{Number: new(big.Int).SetUint64(test.remoteHeight)}}
+			localWire, remoteWire := p2p.MsgPipe()
+			defer localWire.Close()
+			defer remoteWire.Close()
+			localPeer := NewPeer(ETH66, p2p.NewPeer(enode.ID{1}, "local", nil), localWire, nil)
+			remotePeer := NewPeer(ETH66, p2p.NewPeer(enode.ID{2}, "remote", nil), remoteWire, nil)
+			defer localPeer.Close()
+			defer remotePeer.Close()
+			localResult, remoteResult := make(chan error, 1), make(chan error, 1)
+			go func() {
+				localResult <- localPeer.Handshake(network, big.NewInt(1), localChain.head.Hash(), genesis.Hash(), forkid.NewIDWithChain(localChain), forkid.NewFilter(localChain))
+			}()
+			go func() {
+				remoteResult <- remotePeer.Handshake(network, big.NewInt(1), remoteChain.head.Hash(), genesis.Hash(), forkid.NewIDWithChain(remoteChain), forkid.NewFilter(remoteChain))
+			}()
+			for _, result := range []struct {
+				name         string
+				err          error
+				wantRejected bool
+			}{
+				{name: "local", err: <-localResult, wantRejected: test.localRejected},
+				{name: "remote", err: <-remoteResult, wantRejected: test.remoteRejected},
+			} {
+				if result.wantRejected {
+					if !errors.Is(result.err, errForkIDRejected) {
+						t.Fatalf("%s handshake error = %v, want fork ID rejection", result.name, result.err)
+					}
+				} else if result.err != nil {
+					t.Fatalf("%s handshake unexpectedly rejected compatible peer: %v", result.name, result.err)
+				}
+			}
+		})
 	}
 }
