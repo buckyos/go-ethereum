@@ -235,6 +235,7 @@ run_rust_checks() {
 run_golden_checks() {
   local manifest="$USDB_REPO_DIR/src/btc/Cargo.toml"
   local activation_golden="$ROOT_DIR/internal/usdb/btc_activation_golden.json"
+  local testnet_v1_golden="$ROOT_DIR/internal/usdb/btc_testnet_v1_activation_golden.json"
   local release_golden="$ROOT_DIR/internal/usdb/cross_chain_release_manifest.json"
 
   log "checking Rust-to-Go activation and release artifacts"
@@ -242,6 +243,14 @@ run_golden_checks() {
     --bin generate_go_btc_activation_golden -- --check "$activation_golden"
   cargo run --quiet --manifest-path "$manifest" -p usdb-util \
     --bin generate_go_release_manifest_golden -- --check "$release_golden"
+  cargo run --quiet --manifest-path "$manifest" -p usdb-util \
+    --bin generate_go_btc_activation_golden -- \
+    --catalog "$USDB_REPO_DIR/docker/networks/testnet-v1/artifacts/btc-activation-registry-catalog.json" \
+    --check "$testnet_v1_golden"
+  cargo run --quiet --manifest-path "$manifest" -p usdb-util \
+    --bin generate_go_btc_activation_golden -- \
+    --registry "$USDB_REPO_DIR/src/btc/usdb-util/activation-registry/usdb-testnet-v1.json" \
+    --check "$testnet_v1_golden"
 }
 
 run_sourcedao_checks() {

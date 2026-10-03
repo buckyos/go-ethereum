@@ -555,3 +555,34 @@ func TestLegacyMinerPassRegistryCannotExecute(t *testing.T) {
 		}
 	}
 }
+
+func TestTestnetV1RegistryIsIndependentOnBTCMainnet(t *testing.T) {
+	registry, err := loadBTCActivationRegistry(BTCTestnetV1ActivationRegistryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registry.NetworkID != "btc-mainnet" || registry.RulesScope != "usdb-testnet-v1" || registry.StableLagBlocks != 10 {
+		t.Fatalf("unexpected testnet-v1 scope: %+v", registry)
+	}
+	legacy, err := loadBTCActivationRegistry(BTCMainnetActivationRegistryIDV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, height := range []uint32{0, 963800, 963810, ^uint32(0)} {
+		point, err := registry.lookup(height)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(point.ActiveVersionSet["inscription_schema_version"]) != `"uip-0001-miner-pass-inscription:v2"` ||
+			string(point.ActiveVersionSet["pass_state_machine_version"]) != `"uip-0002-pass-state-machine:v2"` {
+			t.Fatalf("V2 is not active at height %d: %+v", height, point)
+		}
+		old, err := legacy.lookup(height)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if old.ActiveVersionSetID == point.ActiveVersionSetID || legacy.RulesScope != "" {
+			t.Fatal("v1 scope leaked into legacy registry")
+		}
+	}
+}

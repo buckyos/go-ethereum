@@ -13,6 +13,9 @@ import (
 )
 
 const (
+	// BTCTestnetV1ActivationRegistryID binds fresh USDB testnet-v1 to BTC mainnet V2 rules.
+	BTCTestnetV1ActivationRegistryID = "c51bdf87510c0083daefb3aa2344c8d35345dbf66af4612fce425e06348bcff6"
+
 	// BTCRegtestMinerPassV2RegistryID selects an isolated development scope explicitly.
 	// It is never substituted for a deployment chain's configured registry ID.
 	BTCRegtestMinerPassV2RegistryID = "747b656a814bf8d57409c19aa8df9754a1d46aadbe2ebb6fc09805ca14637014"
@@ -46,6 +49,10 @@ var (
 
 	//go:embed btc_activation_golden.json
 	btcActivationGoldenJSON []byte
+
+	// Explicit deployment catalog; selected only by a chain's committed registry ID.
+	//go:embed btc_testnet_v1_activation_golden.json
+	btcTestnetV1GoldenJSON []byte
 
 	// Explicit opt-in development catalog; does not change any chain configuration.
 	//go:embed testdata/miner_pass_v2_activation_golden.json
@@ -114,17 +121,19 @@ func loadBTCActivationRegistry(registryID string) (*btcActivationRegistry, error
 		if btcActivationGoldenErr != nil {
 			return
 		}
-		development, err := parseBTCActivationGolden(btcMinerPassDevelopmentGoldenJSON)
-		if err != nil {
-			btcActivationGoldenErr = err
-			return
-		}
-		for id, registry := range development {
-			if _, exists := btcActivationGoldenRegistries[id]; exists {
-				btcActivationGoldenErr = fmt.Errorf("duplicate development registry ID %s", id)
+		for _, catalog := range [][]byte{btcMinerPassDevelopmentGoldenJSON, btcTestnetV1GoldenJSON} {
+			registries, err := parseBTCActivationGolden(catalog)
+			if err != nil {
+				btcActivationGoldenErr = err
 				return
 			}
-			btcActivationGoldenRegistries[id] = registry
+			for id, registry := range registries {
+				if _, exists := btcActivationGoldenRegistries[id]; exists {
+					btcActivationGoldenErr = fmt.Errorf("duplicate scoped registry ID %s", id)
+					return
+				}
+				btcActivationGoldenRegistries[id] = registry
+			}
 		}
 	})
 	if btcActivationGoldenErr != nil {

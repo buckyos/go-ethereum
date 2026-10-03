@@ -552,3 +552,33 @@ func writeUSDBBootstrapTestConfig(t *testing.T, path string, config usdbGenesisB
 		t.Fatalf("failed to write bootstrap config: %v", err)
 	}
 }
+
+// Reset generation reconstructs chain-bound system storage from the new config.
+func TestUSDBBootstrapTestnetV1ResetGenesis(t *testing.T) {
+	fixture := newUSDBBootstrapTestFixture(t)
+	before, err := loadUSDBBootstrapGenesis(fixture.configPath, fixture.artifactsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.config.ChainID = 202610030
+	fixture.config.BTCSource.NetworkID = "btc-mainnet"
+	fixture.config.BTCSource.IndexOriginHeight = 963800
+	fixture.config.USDBConsensus.Activations[0].BTCActivationRegistryID = internalusdb.BTCTestnetV1ActivationRegistryID
+	writeUSDBBootstrapTestConfig(t, fixture.configPath, fixture.config)
+	after, err := loadUSDBBootstrapGenesis(fixture.configPath, fixture.artifactsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ToBlock().Hash() == before.ToBlock().Hash() {
+		t.Fatal("reset reused old genesis hash")
+	}
+	if after.ToBlock().Root() == before.ToBlock().Root() {
+		t.Fatal("reset did not rebuild chain-bound system storage")
+	}
+	for _, address := range []common.Address{common.HexToAddress(fixture.config.Predeploys.Dao.Address), common.HexToAddress(fixture.config.Predeploys.Dividend.Address), common.HexToAddress(fixture.config.BootstrapAdmin.Address)} {
+		old, fresh := before.Alloc[address], after.Alloc[address]
+		if !bytes.Equal(old.Code, fresh.Code) || old.Balance.Cmp(fresh.Balance) != 0 || len(fresh.Storage) != 0 {
+			t.Fatalf("reset changed contract/admin allocation at %s", address)
+		}
+	}
+}
