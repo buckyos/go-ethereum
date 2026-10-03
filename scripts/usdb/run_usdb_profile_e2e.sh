@@ -30,6 +30,7 @@ ECONOMIC_CONFORMANCE_V2_BLOCK=${ECONOMIC_CONFORMANCE_V2_BLOCK:-}
 ECONOMIC_CONFORMANCE_V3_BLOCK=${ECONOMIC_CONFORMANCE_V3_BLOCK:-}
 INDEXER_OUTAGE_CHECK=${INDEXER_OUTAGE_CHECK:-0}
 MINER_LIVE_STATE_CHECK=${MINER_LIVE_STATE_CHECK:-0}
+MINER_PASS_V2_TRANSITIONS=${MINER_PASS_V2_TRANSITIONS:-0}
 SELECTOR_TAMPER_CHECK=${SELECTOR_TAMPER_CHECK:-0}
 ACTIVATION_FRESH_VALIDATOR_CHECK=${ACTIVATION_FRESH_VALIDATOR_CHECK:-0}
 ANCHOR_BOUNDARY_CHECK=${ANCHOR_BOUNDARY_CHECK:-0}
@@ -114,6 +115,8 @@ fi
 
 # shellcheck source=/dev/null
 source "$USDB_REPO_DIR/src/btc/usdb-indexer/scripts/regtest_reorg_lib.sh"
+# shellcheck source=/dev/null
+source "$USDB_REPO_DIR/tests/common/miner_pass_v2_regtest.sh"
 
 run_geth() {
   (
@@ -154,7 +157,8 @@ usdb_chain_rpc_call_url() {
 }
 
 usdb_chain_validator_required() {
-  [[ "$INDEXER_OUTAGE_CHECK" == "1" ||
+  [[ "$MINER_PASS_V2_TRANSITIONS" == "1" ||
+    "$INDEXER_OUTAGE_CHECK" == "1" ||
     "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ||
     "$ANCHOR_BOUNDARY_CHECK" == "1" ]]
 }
@@ -885,9 +889,9 @@ run_miner_live_state_check() {
 
   remint_content_file="$WORK_DIR/usdb_profile_live_remint.json"
   cat >"$remint_content_file" <<EOF
-{"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":["${old_pass_id}"]}
+{"p":"usdb","op":"mint","v":2,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":["${old_pass_id}"]}
 EOF
-  new_pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME_B" "$remint_content_file" "$remint_owner_address")"
+  new_pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME_B" "$remint_content_file" "$remint_owner_address" "$remint_owner_address")"
   regtest_mine_blocks "$REMINT_CONFIRM_BLOCKS" "$miner_btc_address"
   if (( BTC_STABLE_LAG_BLOCKS > 0 )); then
     regtest_log "Mining ${BTC_STABLE_LAG_BLOCKS} blocks so consume/remint reaches the stable frontier"
@@ -1165,6 +1169,7 @@ main() {
   for check_name in \
     INDEXER_OUTAGE_CHECK \
     MINER_LIVE_STATE_CHECK \
+    MINER_PASS_V2_TRANSITIONS \
     SELECTOR_TAMPER_CHECK \
     ACTIVATION_FRESH_VALIDATOR_CHECK \
     ANCHOR_BOUNDARY_CHECK; do
@@ -1221,6 +1226,10 @@ main() {
     echo "ACTIVATION_FRESH_VALIDATOR_CHECK requires an activation conformance mode" >&2
     exit 1
   fi
+  if [[ "$MINER_PASS_V2_TRANSITIONS" == "1" && "$MINER_LIVE_STATE_CHECK" == "1" ]]; then
+    echo "V2 transition setup and live-state transition mode require separate runs" >&2
+    exit 1
+  fi
   regtest_assert_ord_server_port_available
   if [[ ! -x "$ORD_BIN" ]]; then
     echo "Missing required ORD_BIN executable: $ORD_BIN" >&2
@@ -1241,7 +1250,7 @@ main() {
   regtest_start_bitcoind
   regtest_ensure_wallet
 
-  local miner_btc_address ord_receive_address ord_receive_address_b mint_content_file pass_id
+  local miner_btc_address ord_receive_address ord_funding_address ord_receive_address_b mint_content_file pass_id
   local current_btc_tip_height current_context_height
   local snapshot_info_resp system_state_resp pass_profile_resp
   local final_block_height balance_resp blocks_file latest_balance_hex current_energy
@@ -1255,8 +1264,10 @@ main() {
   regtest_wait_until_ord_server_synced_to_bitcoind
   regtest_prepare_ord_wallets
 
+  ord_funding_address="$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")"
+  regtest_fund_address "$ord_funding_address" "$FUND_ORD_AMOUNT_BTC"
+  # A first opening must reveal to a fresh zero-balance recipient.
   ord_receive_address="$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")"
-  regtest_fund_address "$ord_receive_address" "$FUND_ORD_AMOUNT_BTC"
   ord_receive_address_b=""
   if [[ "$MINER_LIVE_STATE_CHECK" == "1" ]]; then
     ord_receive_address_b="$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME_B")"
@@ -1267,10 +1278,10 @@ main() {
 
   mint_content_file="$WORK_DIR/usdb_profile_mint.json"
   cat >"$mint_content_file" <<EOF
-{"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
+{"p":"usdb","op":"mint","v":2,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
 EOF
 
-  pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$mint_content_file" "$ord_receive_address")"
+  pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$mint_content_file" "$ord_receive_address" "$ord_funding_address")"
   regtest_mine_blocks "$INSCRIBE_CONFIRM_BLOCKS" "$miner_btc_address"
   if (( BTC_STABLE_LAG_BLOCKS > 0 )); then
     regtest_log "Mining ${BTC_STABLE_LAG_BLOCKS} blocks so the mint reaches the stable frontier"
@@ -1337,12 +1348,24 @@ EOF
     usdb_chain_log "Pass energy is still zero after retry; proceeding with difficulty factor 10000"
   fi
 
+  if [[ "$MINER_PASS_V2_TRANSITIONS" == "1" ]]; then
+    regtest_run_miner_pass_v2_transitions "$miner_btc_address" "$pass_id" "$ord_receive_address"
+    pass_id="$V2_FINAL_PASS_ID"
+    ord_receive_address="$V2_FINAL_OWNER"
+    current_context_height="$V2_CONTEXT_HEIGHT"
+    system_state_resp="$(regtest_rpc_call_usdb_indexer get_system_state_info '[]')"
+    pass_profile_resp="$(regtest_get_pass_economic_profile_response "$pass_id" "$current_context_height")"
+    regtest_assert_json_expr "$pass_profile_resp" "data['result']['pass']['state']" active
+    regtest_assert_json_expr "$pass_profile_resp" "int(data['result']['pass']['raw_energy']) > 0" True
+  fi
+
   usdb_chain_log "Using pass_id=${pass_id}"
   usdb_chain_log "Current USDB system state: ${system_state_resp}"
   usdb_chain_log "Current pass economic profile: ${pass_profile_resp}"
 
   usdb_chain_log "Generating canonical USDB genesis"
   run_geth dumpgenesis --usdb >"$GENESIS_JSON"
+  python3 "$USDB_REPO_DIR/tests/common/miner_pass_regtest.py" configure-genesis "$GENESIS_JSON"
   usdb_chain_log "Configuring development BTC anchor max age=${BTC_ANCHOR_MAX_AGE_BLOCKS}"
   python3 "$ROOT_DIR/scripts/usdb/configure_usdb_anchor_max_age_genesis.py" \
     --genesis "$GENESIS_JSON" \
@@ -1501,6 +1524,13 @@ PY
 
   if [[ "$ACTIVATION_FRESH_VALIDATOR_CHECK" == "1" ]]; then
     run_activation_fresh_validator_check "$final_block_height"
+  fi
+  if [[ "$MINER_PASS_V2_TRANSITIONS" == "1" ]]; then
+    usdb_chain_start_validator
+    usdb_chain_wait_rpc_url_ready "http://${VALIDATOR_HTTP_ADDR}:${VALIDATOR_HTTP_PORT}"
+    usdb_chain_connect_validator
+    usdb_chain_assert_validator_synced "$final_block_height"
+    usdb_chain_stop_validator
   fi
   if [[ "$SELECTOR_TAMPER_CHECK" == "1" ]]; then
     run_selector_tamper_import_matrix

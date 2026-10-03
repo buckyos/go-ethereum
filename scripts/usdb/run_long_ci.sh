@@ -216,7 +216,7 @@ run_nightly() {
     go-profile)
       require_regtest_tools
       run_case profile \
-        env WORK_DIR="$WORK_ROOT/profile" USDB_REPO_DIR="$USDB_REPO_DIR" \
+        env WORK_DIR="$WORK_ROOT/profile" USDB_REPO_DIR="$USDB_REPO_DIR" MINER_PASS_V2_TRANSITIONS=1 \
           BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
           "$ROOT_DIR/scripts/usdb/run_usdb_profile_e2e.sh"
       run_case profile-same-height-replacement \

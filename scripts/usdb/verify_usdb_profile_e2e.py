@@ -9,18 +9,18 @@ PAYLOAD_SIZE = 111
 BTC_ANCHOR_MAX_AGE_BLOCKS = 6_650
 VIEW_VERSION = "uip-0006-usdb-economic-state-view:v1"
 BTC_REGTEST_ACTIVATION_REGISTRY_ID = (
-    "bfd8c7e41ab4035db64e52eb9ea55050c08211c2ae4c2a88d8b2fc17ae1718b0"
+    "747b656a814bf8d57409c19aa8df9754a1d46aadbe2ebb6fc09805ca14637014"
 )
 BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID = (
-    "adcca18bb4eccd4715bb0d6ec69c7b3d5e09065fac0cb33b145db7b621f59fba"
+    "f83e88a5fb21653bd3bc4570f869707b29e082bcf7b988d59622f6f9802913a8"
 )
 BTC_STABLE_LAG_BLOCKS = 10
-BTC_V1_ACTIVE_VERSION_SET_ID = (
-    "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
+BTC_V2_ACTIVE_VERSION_SET_ID = (
+    "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
 )
-BTC_V1_ACTIVE_VERSION_SET = {
-    "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
-    "pass_state_machine_version": "uip-0002-pass-state-machine:v1",
+BTC_V2_ACTIVE_VERSION_SET = {
+    "inscription_schema_version": "uip-0001-miner-pass-inscription:v2",
+    "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
     "energy_formula_version": "uip-0003-pass-energy-formula:v1",
     "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
     "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
@@ -28,6 +28,7 @@ BTC_V1_ACTIVE_VERSION_SET = {
     "state_view_version": "uip-0006-usdb-economic-state-view:v1",
     "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
     "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+    "scope": {"network_id": "btc-regtest", "rules_scope": "miner-pass-v2-fixture"},
 }
 BPS_DENOMINATOR = 10_000
 MINIMUM_DIFFICULTY = 8_192
@@ -354,11 +355,11 @@ def resolve_profile(
                 f"profile external_state {field} mismatch: "
                 f"have {external.get(field)!r} want {expected!r}"
             )
-    if external.get("active_version_set") != BTC_V1_ACTIVE_VERSION_SET:
+    if external.get("active_version_set") != BTC_V2_ACTIVE_VERSION_SET:
         raise SystemExit(
             "profile external_state active_version_set mismatch: "
             f"have {external.get('active_version_set')!r} "
-            f"want {BTC_V1_ACTIVE_VERSION_SET!r}"
+            f"want {BTC_V2_ACTIVE_VERSION_SET!r}"
         )
     pass_view = profile.get("pass") or {}
     if pass_view.get("pass_id") != selector["pass_id"]:
@@ -464,7 +465,7 @@ def main():
     )
     parser.add_argument(
         "--expected-active-version-set-id",
-        default=BTC_V1_ACTIVE_VERSION_SET_ID,
+        default=BTC_V2_ACTIVE_VERSION_SET_ID,
     )
     parser.add_argument("--activation-conformance-block", type=int)
     parser.add_argument("--economic-conformance-v2-block", type=int)
