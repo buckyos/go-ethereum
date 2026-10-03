@@ -14,7 +14,7 @@ func testBuilderChainConfig(payloadVersion byte, difficultyPolicyVersion uint16)
 		BTCNetworkID:         "btc-regtest",
 		BTCIndexOriginHeight: 1,
 		Activations: []params.USDBConsensusActivation{{
-			BTCActivationRegistryID: BTCRegtestActivationRegistryIDV1,
+			BTCActivationRegistryID: BTCRegtestMinerPassV2RegistryID,
 			BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 			Versions: params.USDBConsensusVersions{
 				PayloadVersion:          payloadVersion,
@@ -74,7 +74,7 @@ func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 	}
 	if client.lastQuery.RequestedHeight != selector.BTCHeight ||
 		client.lastQuery.ExpectedState.SnapshotID != selector.SnapshotIDHex() ||
-		client.lastQuery.ExpectedState.ActivationRegistryID != BTCRegtestActivationRegistryIDV1 ||
+		client.lastQuery.ExpectedState.ActivationRegistryID != BTCRegtestMinerPassV2RegistryID ||
 		client.lastQuery.ExpectedState.ActiveVersionSetID != client.profile.ExternalState.ActiveVersionSetID ||
 		client.lastQuery.ExpectedState.SystemStateID != selector.SystemStateIDHex() {
 		t.Fatalf("profile query was not pinned to selector state: %+v", client.lastQuery)
@@ -308,7 +308,7 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 		Activations: []params.USDBConsensusActivation{
 			{
 				Block:                   0,
-				BTCActivationRegistryID: BTCRegtestActivationRegistryIDV1,
+				BTCActivationRegistryID: BTCRegtestMinerPassV2RegistryID,
 				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:          1,
@@ -318,7 +318,7 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 			},
 			{
 				Block:                   100,
-				BTCActivationRegistryID: BTCRegtestActivationRegistryIDRevision2,
+				BTCActivationRegistryID: BTCRegtestMinerPassV2StagedRegistryID,
 				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:          1,
@@ -338,8 +338,8 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 		parentVersion uint16
 		wantRegistry  string
 	}{
-		{block: 99, want: 1, parentVersion: 1, wantRegistry: BTCRegtestActivationRegistryIDV1},
-		{block: 100, want: 2, parentVersion: 1, wantRegistry: BTCRegtestActivationRegistryIDRevision2},
+		{block: 99, want: 1, parentVersion: 1, wantRegistry: BTCRegtestMinerPassV2RegistryID},
+		{block: 100, want: 2, parentVersion: 1, wantRegistry: BTCRegtestMinerPassV2StagedRegistryID},
 	} {
 		client.profile.ExternalState.ActivationRegistryID = test.wantRegistry
 		parentExtra := testBuilderParentExtra(t, selector, test.parentVersion, 0)

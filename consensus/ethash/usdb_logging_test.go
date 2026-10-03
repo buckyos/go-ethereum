@@ -91,7 +91,7 @@ func TestUSDBStartupLogsConsensusIdentityWithoutEndpointSecrets(t *testing.T) {
 		t.Fatalf("missing USDB consensus identity log: %+v", identity)
 	}
 	activation := captured.find("USDB consensus activation configured")
-	if activation == nil || logContextValue(activation, "btc_registry") != usdb.BTCRegtestActivationRegistryIDV1 {
+	if activation == nil || logContextValue(activation, "btc_registry") != usdb.BTCRegtestMinerPassV2RegistryID {
 		t.Fatalf("missing USDB activation identity log: %+v", activation)
 	}
 	resolver := captured.find("USDB profile resolver initialized")

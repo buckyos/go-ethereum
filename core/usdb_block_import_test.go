@@ -21,7 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-const usdbImportTestActiveVersionSetID = "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
+const usdbImportTestActiveVersionSetID = "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
 
 func TestUSDBBlockImportCommitsRewardState(t *testing.T) {
 	rewardRecipient := common.HexToAddress("0x1111111111111111111111111111111111111111")
@@ -192,8 +192,9 @@ func newUSDBImportTestSelector(t *testing.T, anchorAge uint32) []byte {
 func newUSDBImportTestProfile(t *testing.T, rewardRecipient common.Address, totalMinerBTCSats string) *usdb.PassEconomicProfileView {
 	t.Helper()
 	activeVersions := usdb.ActiveVersionSet{
-		"inscription_schema_version":        json.RawMessage(`"uip-0001-miner-pass-inscription:v1"`),
-		"pass_state_machine_version":        json.RawMessage(`"uip-0002-pass-state-machine:v1"`),
+		"scope":                             json.RawMessage(`{"network_id":"btc-regtest","rules_scope":"miner-pass-v2-fixture"}`),
+		"inscription_schema_version":        json.RawMessage(`"uip-0001-miner-pass-inscription:v2"`),
+		"pass_state_machine_version":        json.RawMessage(`"uip-0002-pass-state-machine:v2"`),
 		"energy_formula_version":            json.RawMessage(`"uip-0003-pass-energy-formula:v1"`),
 		"effective_energy_formula_version":  json.RawMessage(`"uip-0004-collab-leader-effective-energy:v1"`),
 		"level_formula_version":             json.RawMessage(`"uip-0005-level-and-real-difficulty:v1"`),
@@ -217,7 +218,7 @@ func newUSDBImportTestProfile(t *testing.T, rewardRecipient common.Address, tota
 			SystemStateID:                  strings.Repeat("22", common.HashLength),
 			BalanceHistoryAPIVersion:       "1.0.0",
 			BalanceHistorySemanticsVersion: usdb.BalanceHistorySemanticsVersionV1,
-			ActivationRegistryID:           usdb.BTCRegtestActivationRegistryIDV1,
+			ActivationRegistryID:           usdb.BTCRegtestMinerPassV2RegistryID,
 			ActiveVersionSet:               activeVersions,
 			ActiveVersionSetID:             usdbImportTestActiveVersionSetID,
 		},

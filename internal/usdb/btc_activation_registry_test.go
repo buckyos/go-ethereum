@@ -79,11 +79,13 @@ func TestBTCActivationGoldenRejectsUnknownRegistryAndTampering(t *testing.T) {
 
 func TestBTCActivationLookupUsesPayloadHeight(t *testing.T) {
 	v1 := newTestActiveVersionSet(t)
+	delete(v1, "scope")
 	v1ID, err := v1.ID()
 	if err != nil {
 		t.Fatalf("failed to identify v1 set: %v", err)
 	}
 	v2 := newTestActiveVersionSet(t)
+	delete(v2, "scope")
 	v2["energy_formula_version"] = json.RawMessage(`"uip-0003-pass-energy-formula:v2"`)
 	v2ID, err := v2.ID()
 	if err != nil {
@@ -116,11 +118,13 @@ func TestBTCActivationLookupUsesPayloadHeight(t *testing.T) {
 
 func TestBTCActivationGoldenReloadPreservesCrossActivationReplay(t *testing.T) {
 	v1 := newTestActiveVersionSet(t)
+	delete(v1, "scope")
 	v1ID, err := v1.ID()
 	if err != nil {
 		t.Fatalf("failed to identify v1 set: %v", err)
 	}
 	v2 := newTestActiveVersionSet(t)
+	delete(v2, "scope")
 	v2["energy_formula_version"] = json.RawMessage(`"uip-0003-pass-energy-formula:v2"`)
 	v2ID, err := v2.ID()
 	if err != nil {
@@ -174,6 +178,7 @@ func TestBTCActivationGoldenReloadPreservesCrossActivationReplay(t *testing.T) {
 
 func TestBTCActivationGoldenCatalogRetainsImmutableRevisions(t *testing.T) {
 	v1 := newTestActiveVersionSet(t)
+	delete(v1, "scope")
 	v1ID, err := v1.ID()
 	if err != nil {
 		t.Fatalf("failed to identify v1 set: %v", err)
@@ -324,14 +329,23 @@ func TestCurrentActivationIdentityRejectsDifferentRuleScopes(t *testing.T) {
 			}
 		})
 	}
-	// Preparing a newer revision in the same legacy scope must remain possible.
-	expected, err := loadBTCActivationRegistry(BTCRegtestActivationRegistryIDRevision2)
+	// Preparing a newer revision in the same supported scope remains possible.
+	actual, err = loadBTCActivationRegistry(BTCRegtestMinerPassV2RegistryID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateCurrentActivationIdentity(123, point.ActiveVersionSet, point.ActiveVersionSetID, BTCRegtestActivationRegistryIDV1, expected); err != nil {
-		t.Fatalf("compatible same-scope revision transition rejected: %v", err)
+	point, err = actual.lookup(123)
+	if err != nil {
+		t.Fatal(err)
 	}
+	expected, err := loadBTCActivationRegistry(BTCRegtestMinerPassV2StagedRegistryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCurrentActivationIdentity(123, point.ActiveVersionSet, point.ActiveVersionSetID, actual.ActivationRegistryID, expected); err != nil {
+		t.Fatal(err)
+	}
+
 }
 
 // This separate generated fixture does not activate experimental scopes in the
@@ -345,6 +359,22 @@ func TestScopedBTCActivationGoldenMatchesRustAndIsolatesCatalogs(t *testing.T) {
 	registries, err := parseBTCActivationGolden(blob)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The frozen vectors prove cross-language metadata identity, not executable V1 support.
+	// Upgrade only this in-memory positive fixture to the current pair, preserving scopes.
+	for _, registry := range registries {
+		for i := range registry.Activations {
+			point := &registry.Activations[i]
+			if err := point.ActiveVersionSet.ValidateBTCProfileSurface(); err == nil {
+				t.Fatal("historical fixture unexpectedly executable")
+			}
+			point.ActiveVersionSet["inscription_schema_version"], _ = json.Marshal(InscriptionSchemaVersionV2)
+			point.ActiveVersionSet["pass_state_machine_version"], _ = json.Marshal(PassStateMachineVersionV2)
+			point.ActiveVersionSetID, err = point.ActiveVersionSet.ID()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	scopes := make(map[string]bool)
 	currentScopes := make(map[string]int)
@@ -472,5 +502,56 @@ func TestScopedBTCActivationGoldenMatchesRustAndIsolatesCatalogs(t *testing.T) {
 				t.Fatal("invalid scoped golden accepted")
 			}
 		})
+	}
+}
+
+func TestMinerPassV2GoldenUsesHistoricalHeightAndPreservesEmbeddedRegistry(t *testing.T) {
+	blob, err := os.ReadFile("testdata/miner_pass_v2_activation_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registries, err := parseBTCActivationGolden(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, registry := range registries {
+		for _, height := range []uint32{11, 9, 10, 0} {
+			point, err := registry.lookup(height)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := PassStateMachineVersionV2
+			state, err := point.ActiveVersionSet.requireStringVersion("pass_state_machine_version")
+			if err != nil || state != expected {
+				t.Fatalf("height=%d state=%s err=%v", height, state, err)
+			}
+			id, err := point.ActiveVersionSet.ID()
+			if err != nil || id != point.ActiveVersionSetID {
+				t.Fatalf("Rust/Go identity mismatch at %d: %v", height, err)
+			}
+		}
+		if _, err := loadBTCActivationRegistry(registry.ActivationRegistryID); err != nil {
+			t.Fatal(err)
+		}
+		if params.USDBChainConfig.USDB.Activations[0].BTCActivationRegistryID == registry.ActivationRegistryID {
+			t.Fatal("development scope must require explicit selection")
+		}
+	}
+}
+
+// Frozen IDs remain readable for diagnostics, but cannot authorize a profile.
+func TestLegacyMinerPassRegistryCannotExecute(t *testing.T) {
+	for _, id := range []string{BTCMainnetActivationRegistryIDV1, BTCRegtestActivationRegistryIDV1, BTCRegtestActivationRegistryIDRevision2} {
+		registry, err := loadBTCActivationRegistry(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		point, err := registry.lookup(123)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := registry.validateIdentity(123, id, point.ActiveVersionSet, point.ActiveVersionSetID); err == nil {
+			t.Fatalf("legacy registry executed: %s", id)
+		}
 	}
 }

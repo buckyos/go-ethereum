@@ -470,7 +470,7 @@ func newUSDBBootstrapTestFixture(t *testing.T) usdbBootstrapTestFixture {
 		USDBConsensus: usdbGenesisConsensus{
 			Activations: []params.USDBConsensusActivation{{
 				Block:                   0,
-				BTCActivationRegistryID: internalusdb.BTCRegtestActivationRegistryIDV1,
+				BTCActivationRegistryID: internalusdb.BTCRegtestMinerPassV2RegistryID,
 				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:                       internalusdb.ProfileSelectorPayloadVersionV1,

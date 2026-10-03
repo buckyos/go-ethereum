@@ -52,10 +52,10 @@ func TestActivationConformanceUpgradeBoundaryRestartAndReorg(t *testing.T) {
 	for number := uint64(1); number <= 5; number++ {
 		parent := canonical[len(canonical)-1]
 		version := usdb.DifficultyPolicyVersionV1
-		wantRegistry := usdb.BTCRegtestActivationRegistryIDV1
+		wantRegistry := usdb.BTCRegtestMinerPassV2RegistryID
 		if number >= activationBlock {
 			version = usdb.DifficultyPolicyVersionActivationConformance
-			wantRegistry = usdb.BTCRegtestActivationRegistryIDRevision2
+			wantRegistry = usdb.BTCRegtestMinerPassV2StagedRegistryID
 		}
 		header := newActivationConformanceTestHeader(t, parent, number, version, 1_000+number)
 		base := CalcDifficulty(config, header.Time, parent)
@@ -89,7 +89,7 @@ func TestActivationConformanceUpgradeBoundaryRestartAndReorg(t *testing.T) {
 	if err := restarted.verifyHeader(chain, canonical[4], canonical[3], false, false, 2_000); err != nil {
 		t.Fatalf("restarted validator failed historical replay: %v", err)
 	}
-	if restartedResolver.lastRegistry != usdb.BTCRegtestActivationRegistryIDRevision2 {
+	if restartedResolver.lastRegistry != usdb.BTCRegtestMinerPassV2StagedRegistryID {
 		t.Fatalf("restart replay used registry %s", restartedResolver.lastRegistry)
 	}
 

@@ -18,7 +18,7 @@ func newActivationConformanceTestChainConfig(activationBlock uint64) *params.Cha
 			Activations: []params.USDBConsensusActivation{
 				{
 					Block:                   0,
-					BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+					BTCActivationRegistryID: usdb.BTCRegtestMinerPassV2RegistryID,
 					BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 					Versions: params.USDBConsensusVersions{
 						PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
@@ -28,7 +28,7 @@ func newActivationConformanceTestChainConfig(activationBlock uint64) *params.Cha
 				},
 				{
 					Block:                   activationBlock,
-					BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDRevision2,
+					BTCActivationRegistryID: usdb.BTCRegtestMinerPassV2StagedRegistryID,
 					BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 					Versions: params.USDBConsensusVersions{
 						PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,

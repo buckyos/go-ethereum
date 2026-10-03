@@ -360,7 +360,7 @@ func newTestUSDBChainConfig() *params.ChainConfig {
 			BTCNetworkID:         "btc-regtest",
 			BTCIndexOriginHeight: 1,
 			Activations: []params.USDBConsensusActivation{{
-				BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+				BTCActivationRegistryID: usdb.BTCRegtestMinerPassV2RegistryID,
 				BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 				Versions: params.USDBConsensusVersions{
 					PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,
@@ -638,7 +638,7 @@ func TestVerifyHeaderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 	config := newTestUSDBChainConfig()
 	config.USDB.Activations = append(config.USDB.Activations, params.USDBConsensusActivation{
 		Block:                   2,
-		BTCActivationRegistryID: usdb.BTCRegtestActivationRegistryIDV1,
+		BTCActivationRegistryID: usdb.BTCRegtestMinerPassV2RegistryID,
 		BTCAnchorMaxAgeBlocks:   params.USDBDevelopmentBTCAnchorMaxAgeBlocks,
 		Versions: params.USDBConsensusVersions{
 			PayloadVersion:          usdb.ProfileSelectorPayloadVersionV1,

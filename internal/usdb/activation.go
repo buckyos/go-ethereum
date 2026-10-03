@@ -18,6 +18,8 @@ const (
 
 	InscriptionSchemaVersionV1       = "uip-0001-miner-pass-inscription:v1"
 	PassStateMachineVersionV1        = "uip-0002-pass-state-machine:v1"
+	InscriptionSchemaVersionV2       = "uip-0001-miner-pass-inscription:v2"
+	PassStateMachineVersionV2        = "uip-0002-pass-state-machine:v2"
 	EnergyFormulaVersionV1           = "uip-0003-pass-energy-formula:v1"
 	EffectiveEnergyFormulaVersionV1  = "uip-0004-collab-leader-effective-energy:v1"
 	LevelFormulaVersionV1            = "uip-0005-level-and-real-difficulty:v1"
@@ -221,8 +223,8 @@ func (set ActiveVersionSet) ID() (string, error) {
 // future generated registry can carry multiple supported formula versions.
 func (set ActiveVersionSet) ValidateBTCProfileSurface() error {
 	required := map[string]string{
-		"inscription_schema_version":        InscriptionSchemaVersionV1,
-		"pass_state_machine_version":        PassStateMachineVersionV1,
+		"inscription_schema_version":        InscriptionSchemaVersionV2,
+		"pass_state_machine_version":        PassStateMachineVersionV2,
 		"energy_formula_version":            "",
 		"effective_energy_formula_version":  "",
 		"level_formula_version":             "",

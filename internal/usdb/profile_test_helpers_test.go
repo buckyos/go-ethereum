@@ -82,8 +82,8 @@ func marshalTestSelector(t *testing.T, selector ProfileSelectorPayload) []byte {
 func newTestActiveVersionSet(t *testing.T) ActiveVersionSet {
 	t.Helper()
 	values := map[string]string{
-		"inscription_schema_version":        InscriptionSchemaVersionV1,
-		"pass_state_machine_version":        PassStateMachineVersionV1,
+		"inscription_schema_version":        InscriptionSchemaVersionV2,
+		"pass_state_machine_version":        PassStateMachineVersionV2,
 		"energy_formula_version":            EnergyFormulaVersionV1,
 		"effective_energy_formula_version":  EffectiveEnergyFormulaVersionV1,
 		"level_formula_version":             LevelFormulaVersionV1,
@@ -100,6 +100,7 @@ func newTestActiveVersionSet(t *testing.T) ActiveVersionSet {
 		}
 		set[family] = encoded
 	}
+	set["scope"] = json.RawMessage(`{"network_id":"btc-regtest","rules_scope":"miner-pass-v2-fixture"}`)
 	return set
 }
 
@@ -111,7 +112,7 @@ func newTestSystemStateInfo(t *testing.T, selector ProfileSelectorPayload) *Syst
 		t.Fatalf("failed to identify test active version set: %v", err)
 	}
 	return &SystemStateInfo{
-		ActivationRegistryID:   BTCRegtestActivationRegistryIDV1,
+		ActivationRegistryID:   BTCRegtestMinerPassV2RegistryID,
 		ActiveVersionSet:       activeVersionSet,
 		ActiveVersionSetID:     activeVersionSetID,
 		LocalSyncedBlockHeight: selector.BTCHeight,
@@ -149,7 +150,7 @@ func newTestProfileView(t *testing.T, selector ProfileSelectorPayload, rawEnergy
 			SystemStateID:                  selector.SystemStateIDHex(),
 			BalanceHistoryAPIVersion:       "1.0.0",
 			BalanceHistorySemanticsVersion: "balance-snapshot-at-or-before:v1",
-			ActivationRegistryID:           BTCRegtestActivationRegistryIDV1,
+			ActivationRegistryID:           BTCRegtestMinerPassV2RegistryID,
 			ActiveVersionSet:               activeVersionSet,
 			ActiveVersionSetID:             activeVersionSetID,
 		},

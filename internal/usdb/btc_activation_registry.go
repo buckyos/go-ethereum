@@ -13,6 +13,12 @@ import (
 )
 
 const (
+	// BTCRegtestMinerPassV2RegistryID selects an isolated development scope explicitly.
+	// It is never substituted for a deployment chain's configured registry ID.
+	BTCRegtestMinerPassV2RegistryID = "747b656a814bf8d57409c19aa8df9754a1d46aadbe2ebb6fc09805ca14637014"
+	// BTCRegtestMinerPassV2StagedRegistryID adds only a planned revision marker.
+	BTCRegtestMinerPassV2StagedRegistryID = "f83e88a5fb21653bd3bc4570f869707b29e082bcf7b988d59622f6f9802913a8"
+
 	goActivationGoldenSchemaVersion       = "uip-0008-go-btc-activation-golden:v3"
 	btcActivationRegistrySchemaV2         = "uip-0008-btc-activation-registry:v2"
 	goScopedActivationGoldenSchemaVersion = "uip-0008-go-btc-activation-golden:v4"
@@ -40,6 +46,10 @@ var (
 
 	//go:embed btc_activation_golden.json
 	btcActivationGoldenJSON []byte
+
+	// Explicit opt-in development catalog; does not change any chain configuration.
+	//go:embed testdata/miner_pass_v2_activation_golden.json
+	btcMinerPassDevelopmentGoldenJSON []byte
 
 	btcActivationGoldenOnce       sync.Once
 	btcActivationGoldenRegistries map[string]*btcActivationRegistry
@@ -101,6 +111,21 @@ func DescribeBTCActivationRegistry(registryID string) (BTCActivationRegistryDesc
 func loadBTCActivationRegistry(registryID string) (*btcActivationRegistry, error) {
 	btcActivationGoldenOnce.Do(func() {
 		btcActivationGoldenRegistries, btcActivationGoldenErr = parseBTCActivationGolden(btcActivationGoldenJSON)
+		if btcActivationGoldenErr != nil {
+			return
+		}
+		development, err := parseBTCActivationGolden(btcMinerPassDevelopmentGoldenJSON)
+		if err != nil {
+			btcActivationGoldenErr = err
+			return
+		}
+		for id, registry := range development {
+			if _, exists := btcActivationGoldenRegistries[id]; exists {
+				btcActivationGoldenErr = fmt.Errorf("duplicate development registry ID %s", id)
+				return
+			}
+			btcActivationGoldenRegistries[id] = registry
+		}
 	})
 	if btcActivationGoldenErr != nil {
 		return nil, btcActivationGoldenErr
@@ -194,9 +219,9 @@ func parseBTCActivationGolden(input []byte) (map[string]*btcActivationRegistry, 
 			if computedID != activation.ActiveVersionSetID {
 				return nil, fmt.Errorf("golden active_version_set_id mismatch for %s at %d: have %s recomputed %s", registry.NetworkID, activation.BTCHeight, activation.ActiveVersionSetID, computedID)
 			}
-			if err := activation.ActiveVersionSet.ValidateBTCProfileSurface(); err != nil {
-				return nil, fmt.Errorf("unsupported golden active_version_set for %s at %d: %w", registry.NetworkID, activation.BTCHeight, err)
-			}
+			// Decoding metadata must not imply execution support. Frozen legacy and
+			// future checkpoints remain identifiable; validateIdentity rejects unsupported rules.
+
 		}
 		registries[registry.ActivationRegistryID] = registry
 		scope := catalogScope{registry.NetworkID, registry.RulesScope}

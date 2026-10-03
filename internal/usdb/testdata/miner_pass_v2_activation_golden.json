@@ -1,0 +1,64 @@
+{
+  "schema_version": "uip-0008-go-btc-activation-golden:v4",
+  "source_registry_schema_version": "uip-0008-btc-activation-registry:v3",
+  "registries": [
+    {
+      "network_id": "btc-regtest",
+      "rules_scope": "miner-pass-v2-fixture",
+      "revision": 1,
+      "current": true,
+      "stable_lag_blocks": 10,
+      "activation_registry_id": "747b656a814bf8d57409c19aa8df9754a1d46aadbe2ebb6fc09805ca14637014",
+      "activations": [
+        {
+          "btc_height": 0,
+          "active_version_set": {
+            "inscription_schema_version": "uip-0001-miner-pass-inscription:v2",
+            "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
+            "energy_formula_version": "uip-0003-pass-energy-formula:v1",
+            "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
+            "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-v2-fixture"
+            }
+          },
+          "active_version_set_id": "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
+        }
+      ]
+    },
+    {
+      "network_id": "btc-regtest",
+      "rules_scope": "miner-pass-v2-fixture",
+      "revision": 2,
+      "current": false,
+      "stable_lag_blocks": 10,
+      "activation_registry_id": "f83e88a5fb21653bd3bc4570f869707b29e082bcf7b988d59622f6f9802913a8",
+      "activations": [
+        {
+          "btc_height": 0,
+          "active_version_set": {
+            "inscription_schema_version": "uip-0001-miner-pass-inscription:v2",
+            "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
+            "energy_formula_version": "uip-0003-pass-energy-formula:v1",
+            "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
+            "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-v2-fixture"
+            }
+          },
+          "active_version_set_id": "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
+        }
+      ]
+    }
+  ]
+}
