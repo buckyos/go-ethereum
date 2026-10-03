@@ -272,10 +272,10 @@ main() {
 
   mint_content_file="$WORK_DIR/usdb_profile_growth_mint.json"
   cat >"$mint_content_file" <<EOF
-{"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
+{"p":"usdb","op":"mint","v":2,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
 EOF
 
-  pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$mint_content_file" "$ord_receive_address")"
+  pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$mint_content_file" "$ord_receive_address" "$ord_receive_address")"
   regtest_mine_blocks "$INSCRIBE_CONFIRM_BLOCKS" "$miner_btc_address"
   if (( BTC_STABLE_LAG_BLOCKS > 0 )); then
     regtest_log "Mining ${BTC_STABLE_LAG_BLOCKS} blocks so the mint reaches the stable frontier"
@@ -301,6 +301,7 @@ EOF
 
   usdb_chain_log "Generating canonical USDB genesis"
   run_geth dumpgenesis --usdb >"$GENESIS_JSON"
+  python3 "$USDB_REPO_DIR/tests/common/miner_pass_regtest.py" configure-genesis "$GENESIS_JSON"
   usdb_chain_log "Initializing USDB-chain datadir ${DATADIR}"
   run_geth init --datadir "$DATADIR" "$GENESIS_JSON" >/dev/null
 

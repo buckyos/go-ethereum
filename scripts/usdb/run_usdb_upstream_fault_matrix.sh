@@ -73,8 +73,8 @@ owner_address=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")
 regtest_fund_address "$owner_address" 5.0
 regtest_mine_blocks 2 "$miner_address"
 regtest_wait_until_ord_server_synced_to_bitcoind
-printf '%s\n' '{"p":"usdb","op":"mint","v":1,"usdb_main":"0x1111111111111111111111111111111111111111","prev":[]}' >"$WORK_DIR/mint.json"
-pass_id=$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$WORK_DIR/mint.json" "$owner_address")
+printf '%s\n' '{"p":"usdb","op":"mint","v":2,"usdb_main":"0x1111111111111111111111111111111111111111","prev":[]}' >"$WORK_DIR/mint.json"
+pass_id=$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$WORK_DIR/mint.json" "$owner_address" "$owner_address")
 regtest_mine_blocks 2 "$miner_address"
 # Keep the mint below every injected stable-frontier reorg and give its owner
 # a nonzero energy history before creating any USDB blocks.

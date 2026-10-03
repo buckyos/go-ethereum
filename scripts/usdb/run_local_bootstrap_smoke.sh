@@ -24,6 +24,7 @@ RUN_SMOKE=${RUN_SMOKE:-1}
 KEEP_RUNNING=${KEEP_RUNNING:-0}
 RPC_WAIT_SECONDS=${RPC_WAIT_SECONDS:-45}
 USDB_BOOTSTRAP_FAKE_POW=${USDB_BOOTSTRAP_FAKE_POW:-1}
+USDB_BOOTSTRAP_FAKE_POW_DELAY=${USDB_BOOTSTRAP_FAKE_POW_DELAY:-1s}
 USDB_BOOTSTRAP_USE_MOCK_INDEXER=${USDB_BOOTSTRAP_USE_MOCK_INDEXER:-$USDB_BOOTSTRAP_FAKE_POW}
 USDB_BOOTSTRAP_PASS_ID=${USDB_BOOTSTRAP_PASS_ID:-3333333333333333333333333333333333333333333333333333333333333333i0}
 USDB_BOOTSTRAP_INDEXER_PORT=${USDB_BOOTSTRAP_INDEXER_PORT:-$((HTTP_PORT + 1))}
@@ -38,8 +39,8 @@ GETH_CMD=("$GETH_BIN")
 POW_ARGS=()
 case "$USDB_BOOTSTRAP_FAKE_POW" in
   1|true|TRUE|yes|YES)
-    # The bootstrap smoke validates consensus metadata but not Ethash work.
-    POW_ARGS=(--fakepow)
+    # Pace setup transactions before the Dividend fee gate activates.
+    POW_ARGS=(--fakepow --fakepow.delay "$USDB_BOOTSTRAP_FAKE_POW_DELAY")
     ;;
   0|false|FALSE|no|NO)
     ;;
@@ -133,6 +134,11 @@ run_geth dumpgenesis \
   --usdb.bootstrap.config "$USDB_CONFIG" \
   --usdb.bootstrap.artifacts "$USDB_ARTIFACTS" \
   > "$GENESIS_JSON"
+
+# Only the isolated mock lane selects the supported V2 fixture registry.
+if [[ "$USE_MOCK_INDEXER" == "1" ]]; then
+  python3 "${USDB_REPO_DIR:-$ROOT_DIR/../usdb}/tests/common/miner_pass_regtest.py" configure-genesis "$GENESIS_JSON"
+fi
 
 echo "Initializing datadir $DATADIR"
 run_geth init --datadir "$DATADIR" "$GENESIS_JSON" >/dev/null

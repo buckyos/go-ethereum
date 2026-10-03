@@ -56,7 +56,7 @@ def candidate_params() -> list[dict]:
 class MockBootstrapIndexerTest(unittest.TestCase):
     def test_fixture_matches_current_regtest_revision(self) -> None:
         golden = json.loads(
-            (REPO_ROOT / "internal/usdb/btc_activation_golden.json").read_text(encoding="utf-8")
+            (REPO_ROOT / "internal/usdb/testdata/miner_pass_v2_activation_golden.json").read_text(encoding="utf-8")
         )
         registry = next(
             item

@@ -219,6 +219,14 @@ run_nightly() {
         env WORK_DIR="$WORK_ROOT/profile" USDB_REPO_DIR="$USDB_REPO_DIR" MINER_PASS_V2_TRANSITIONS=1 \
           BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
           "$ROOT_DIR/scripts/usdb/run_usdb_profile_e2e.sh"
+      run_case profile-energy-growth \
+        env WORK_DIR="$WORK_ROOT/profile-growth" USDB_REPO_DIR="$USDB_REPO_DIR" \
+          BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          "$ROOT_DIR/scripts/usdb/run_usdb_profile_energy_growth_e2e.sh"
+      run_case profile-historical-stability \
+        env WORK_DIR="$WORK_ROOT/profile-history" USDB_REPO_DIR="$USDB_REPO_DIR" \
+          BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          "$ROOT_DIR/scripts/usdb/run_usdb_profile_historical_stability_e2e.sh"
       run_case profile-same-height-replacement \
         env REPLACEMENT_WORK_DIR="$WORK_ROOT/profile-same-height" USDB_REPO_DIR="$USDB_REPO_DIR" \
           BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
@@ -265,6 +273,12 @@ run_nightly() {
           RUN_UIP0001_0004_LIVE_MATRIX=1 RUN_MINER_PASS_V2_MATRIX=1 RUN_REORG_REGRESSION=0 \
           MINER_PASS_V2_MATRIX_WORK_DIR="$WORK_ROOT/miner-pass-v2-security" \
           bash "$USDB_REPO_DIR/src/btc/usdb-indexer/scripts/run_regression.sh"
+      run_case assumeutxo-p65-services \
+        python3 "$USDB_REPO_DIR/tests/run_assumeutxo_p65_services.py" \
+          --bitcoind "$BITCOIN_BIN_DIR/bitcoind" \
+          --balance-history "${CARGO_TARGET_DIR:-$USDB_REPO_DIR/src/btc/target}/debug/balance-history" \
+          --indexer "${CARGO_TARGET_DIR:-$USDB_REPO_DIR/src/btc/target}/debug/usdb-indexer" \
+          --work-dir "$WORK_ROOT/assumeutxo-p65"
       ;;
     indexer-reorg)
       require_regtest_tools

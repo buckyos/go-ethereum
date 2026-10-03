@@ -95,6 +95,22 @@ func TestVerifierResolveProfileRejectsSelectorIdentityMismatch(t *testing.T) {
 			view.ExternalState.ActiveVersionSet["energy_formula_version"] = []byte(`"v999"`)
 			view.ExternalState.ActiveVersionSetID, _ = view.ExternalState.ActiveVersionSet.ID()
 		}},
+		{name: "missing V2 rules scope with recomputed identity", mutate: func(view *PassEconomicProfileView) {
+			delete(view.ExternalState.ActiveVersionSet, "scope")
+			view.ExternalState.ActiveVersionSetID, _ = view.ExternalState.ActiveVersionSet.ID()
+		}},
+		{name: "foreign V2 rules scope with recomputed identity", mutate: func(view *PassEconomicProfileView) {
+			view.ExternalState.ActiveVersionSet["scope"] = []byte(`{"network_id":"btc-regtest","rules_scope":"another-usdb-network"}`)
+			view.ExternalState.ActiveVersionSetID, _ = view.ExternalState.ActiveVersionSet.ID()
+		}},
+		{name: "legacy schema with recomputed identity", mutate: func(view *PassEconomicProfileView) {
+			view.ExternalState.ActiveVersionSet["inscription_schema_version"] = []byte(`"uip-0001-miner-pass-inscription:v1"`)
+			view.ExternalState.ActiveVersionSetID, _ = view.ExternalState.ActiveVersionSet.ID()
+		}},
+		{name: "legacy state machine with recomputed identity", mutate: func(view *PassEconomicProfileView) {
+			view.ExternalState.ActiveVersionSet["pass_state_machine_version"] = []byte(`"uip-0002-pass-state-machine:v1"`)
+			view.ExternalState.ActiveVersionSetID, _ = view.ExternalState.ActiveVersionSet.ID()
+		}},
 		{name: "missing owner", mutate: func(view *PassEconomicProfileView) { view.Pass.OwnerScriptHash = "" }},
 		{name: "non-canonical owner", mutate: func(view *PassEconomicProfileView) { view.Pass.OwnerScriptHash = repeatHex("AA", 32) }},
 	}

@@ -906,6 +906,11 @@ run_geth dumpgenesis \
   --usdb.bootstrap.config "$USDB_CONFIG" \
   --usdb.bootstrap.artifacts "$USDB_ARTIFACTS" \
   > "$GENESIS_JSON"
+# Only the isolated mock lane selects the supported V2 fixture registry.
+if [[ "$USE_MOCK_INDEXER" == "1" ]]; then
+  python3 "${USDB_REPO_DIR:-$ROOT_DIR/../usdb}/tests/common/miner_pass_regtest.py" configure-genesis "$GENESIS_JSON"
+fi
+
 if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
   genesis_replay_file="$WORK_DIR/usdb-bootstrap-genesis-replay.json"
   run_geth dumpgenesis \
@@ -913,6 +918,9 @@ if [[ "$RUN_PUBLIC_RELEASE_E2E" == "1" ]]; then
     --usdb.bootstrap.config "$USDB_CONFIG" \
     --usdb.bootstrap.artifacts "$USDB_ARTIFACTS" \
     >"$genesis_replay_file"
+  if [[ "$USE_MOCK_INDEXER" == "1" ]]; then
+    python3 "${USDB_REPO_DIR:-$ROOT_DIR/../usdb}/tests/common/miner_pass_regtest.py" configure-genesis "$genesis_replay_file"
+  fi
   if ! cmp -s "$GENESIS_JSON" "$genesis_replay_file"; then
     echo "Repeated canonical genesis generation produced different bytes" >&2
     diff -u "$GENESIS_JSON" "$genesis_replay_file" >&2 || true

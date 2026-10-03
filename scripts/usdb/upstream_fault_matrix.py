@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -409,6 +410,10 @@ class Node:
         config["ordinals"]["rpc_url"] = self.url("ord")
         config["balance_history"]["rpc_url"] = self.url("balance-history")
         config["usdb"]["rpc_server_port"] = self.ports["usdb-indexer"]
+        # Fresh validators need the same immutable catalog bytes as node A.
+        catalog = Path(config["usdb"]["activation_registry_catalog_file"])
+        require(not catalog.is_absolute() and catalog.name == str(catalog), "expected local fixture catalog")
+        shutil.copyfile(self.matrix.a.root / "usdb-indexer" / catalog, self.root / "usdb-indexer" / catalog)
         (self.root / "usdb-indexer/config.json").write_text(json.dumps(config, indent=2) + "\n")
         self.start_service("balance-history")
         self.matrix.wait(f"{self.name} balance RPC", lambda: self.rpc("balance-history")("get_network_type") == "regtest")
@@ -944,6 +949,8 @@ class Matrix:
         # Low positive difficulty shortens mining while retaining real PoW and
         # all USDB validation. It is confined to this temporary test genesis.
         self.write_json(self.genesis, configure_genesis(json.loads(genesis), 256, 256))
+        self.command(["python3", str(self.args.usdb_repo / "tests/common/miner_pass_regtest.py"),
+                      "configure-genesis", str(self.genesis)], "configure-v2-genesis.log")
         self.a.init_geth()
         self.a.start_geth()
         self.mine_usdb()

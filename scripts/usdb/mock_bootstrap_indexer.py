@@ -9,16 +9,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 
-REGISTRY_ID = "bfd8c7e41ab4035db64e52eb9ea55050c08211c2ae4c2a88d8b2fc17ae1718b0"
-ACTIVE_VERSION_SET_ID = "01d1d45f342994690d8ae27ac3d8538ad31e5f81f8e948c838067b3b52f94691"
+REGISTRY_ID = "747b656a814bf8d57409c19aa8df9754a1d46aadbe2ebb6fc09805ca14637014"
+ACTIVE_VERSION_SET_ID = "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
 SNAPSHOT_ID = "11" * 32
 SYSTEM_STATE_ID = "22" * 32
 DEFAULT_USDB_MAIN = "0x1111111111111111111111111111111111111111"
 DEFAULT_TOTAL_MINER_BTC_SATS = "100000000"
 DEFAULT_COLLAB_CONTRIBUTION = "100"
 ACTIVE_VERSION_SET = {
-    "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
-    "pass_state_machine_version": "uip-0002-pass-state-machine:v1",
+    "scope": {"network_id": "btc-regtest", "rules_scope": "miner-pass-v2-fixture"},
+    "inscription_schema_version": "uip-0001-miner-pass-inscription:v2",
+    "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
     "energy_formula_version": "uip-0003-pass-energy-formula:v1",
     "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
     "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
