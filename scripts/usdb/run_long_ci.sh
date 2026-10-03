@@ -205,7 +205,7 @@ collect_diagnostics() {
     cp "$source" "$destination"
   done < <(
     find "$WORK_ROOT" -type f \
-      \( -name '*.log' -o -name '*.json' -o -name '*.jsonl' -o -name '*.txt' \) \
+      \( -name '*.log' -o -name '*.json' -o -name '*.jsonl' -o -name '*.txt' -o -name '*.tsv' \) \
       -size -64M -print0 2>/dev/null
   )
 }
@@ -262,7 +262,8 @@ run_nightly() {
       run_case indexer-protocol \
         env BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
           RUN_REGTEST_SMOKE=1 RUN_LIVE_ORD_REALWORLD_SUITE=1 \
-          RUN_UIP0001_0004_LIVE_MATRIX=1 RUN_REORG_REGRESSION=0 \
+          RUN_UIP0001_0004_LIVE_MATRIX=1 RUN_MINER_PASS_V2_MATRIX=1 RUN_REORG_REGRESSION=0 \
+          MINER_PASS_V2_MATRIX_WORK_DIR="$WORK_ROOT/miner-pass-v2-security" \
           bash "$USDB_REPO_DIR/src/btc/usdb-indexer/scripts/run_regression.sh"
       ;;
     indexer-reorg)
