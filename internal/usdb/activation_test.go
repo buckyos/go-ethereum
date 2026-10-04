@@ -26,7 +26,7 @@ func TestActiveVersionSetIDIsStableAcrossMapOrder(t *testing.T) {
 	if firstID != secondID || len(firstID) != 64 {
 		t.Fatalf("active version set id is unstable: first=%q second=%q", firstID, secondID)
 	}
-	const expectedID = "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
+	const expectedID = "58a5bf5a3cfdba184c57a7ab13d6d7d6c19a359da467625ebc0392459a0f2a18"
 	if firstID != expectedID {
 		t.Fatalf("active version set id changed: have %q want %q", firstID, expectedID)
 	}
@@ -137,15 +137,15 @@ func TestActiveVersionSetRejectsMalformedScope(t *testing.T) {
 	}
 }
 
-// Only the current pair is executable; neither old nor partial pairs select a fallback.
+// Only the current pair is executable; schema v1 does not select the legacy state machine.
 func TestMinerPassProfileRulePairs(t *testing.T) {
 	for _, tc := range []struct {
 		schema, state string
 		valid         bool
 	}{
 		{InscriptionSchemaVersionV1, PassStateMachineVersionV1, false},
-		{InscriptionSchemaVersionV2, PassStateMachineVersionV2, true},
-		{InscriptionSchemaVersionV1, PassStateMachineVersionV2, false},
+		{InscriptionSchemaVersionV2, PassStateMachineVersionV2, false},
+		{InscriptionSchemaVersionV1, PassStateMachineVersionV2, true},
 		{InscriptionSchemaVersionV2, PassStateMachineVersionV1, false},
 		{"", PassStateMachineVersionV1, false},
 		{InscriptionSchemaVersionV1, "", false},

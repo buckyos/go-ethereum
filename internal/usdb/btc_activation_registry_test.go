@@ -368,7 +368,7 @@ func TestScopedBTCActivationGoldenMatchesRustAndIsolatesCatalogs(t *testing.T) {
 			if err := point.ActiveVersionSet.ValidateBTCProfileSurface(); err == nil {
 				t.Fatal("historical fixture unexpectedly executable")
 			}
-			point.ActiveVersionSet["inscription_schema_version"], _ = json.Marshal(InscriptionSchemaVersionV2)
+			point.ActiveVersionSet["inscription_schema_version"], _ = json.Marshal(InscriptionSchemaVersionV1)
 			point.ActiveVersionSet["pass_state_machine_version"], _ = json.Marshal(PassStateMachineVersionV2)
 			point.ActiveVersionSetID, err = point.ActiveVersionSet.ID()
 			if err != nil {
@@ -573,7 +573,7 @@ func TestTestnetV1RegistryIsIndependentOnBTCMainnet(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(point.ActiveVersionSet["inscription_schema_version"]) != `"uip-0001-miner-pass-inscription:v2"` ||
+		if string(point.ActiveVersionSet["inscription_schema_version"]) != `"uip-0001-miner-pass-inscription:v1"` ||
 			string(point.ActiveVersionSet["pass_state_machine_version"]) != `"uip-0002-pass-state-machine:v2"` {
 			t.Fatalf("V2 is not active at height %d: %+v", height, point)
 		}

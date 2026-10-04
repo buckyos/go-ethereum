@@ -14,13 +14,13 @@ import (
 
 const (
 	// BTCTestnetV1ActivationRegistryID binds fresh USDB testnet-v1 to BTC mainnet V2 rules.
-	BTCTestnetV1ActivationRegistryID = "c51bdf87510c0083daefb3aa2344c8d35345dbf66af4612fce425e06348bcff6"
+	BTCTestnetV1ActivationRegistryID = "53b4bfed53b55a4accbd947d04d113a684f1af896d39d2d9bd984e07ad543f32"
 
 	// BTCRegtestMinerPassV2RegistryID selects an isolated development scope explicitly.
 	// It is never substituted for a deployment chain's configured registry ID.
-	BTCRegtestMinerPassV2RegistryID = "747b656a814bf8d57409c19aa8df9754a1d46aadbe2ebb6fc09805ca14637014"
+	BTCRegtestMinerPassV2RegistryID = "d53e9907cfc5abf5d8294e98bbaa838630ee070118eb0845ad3e770959279f08"
 	// BTCRegtestMinerPassV2StagedRegistryID adds only a planned revision marker.
-	BTCRegtestMinerPassV2StagedRegistryID = "f83e88a5fb21653bd3bc4570f869707b29e082bcf7b988d59622f6f9802913a8"
+	BTCRegtestMinerPassV2StagedRegistryID = "7cbfc8e2f8684c355a3ba44e8156ae19b65b8db220e98edf5ec909aebe51f2f7"
 
 	goActivationGoldenSchemaVersion       = "uip-0008-go-btc-activation-golden:v3"
 	btcActivationRegistrySchemaV2         = "uip-0008-btc-activation-registry:v2"

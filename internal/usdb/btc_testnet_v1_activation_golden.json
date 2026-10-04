@@ -8,12 +8,12 @@
       "revision": 1,
       "current": true,
       "stable_lag_blocks": 10,
-      "activation_registry_id": "c51bdf87510c0083daefb3aa2344c8d35345dbf66af4612fce425e06348bcff6",
+      "activation_registry_id": "53b4bfed53b55a4accbd947d04d113a684f1af896d39d2d9bd984e07ad543f32",
       "activations": [
         {
           "btc_height": 0,
           "active_version_set": {
-            "inscription_schema_version": "uip-0001-miner-pass-inscription:v2",
+            "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
             "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
             "energy_formula_version": "uip-0003-pass-energy-formula:v1",
             "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
@@ -27,7 +27,7 @@
               "rules_scope": "usdb-testnet-v1"
             }
           },
-          "active_version_set_id": "f02c759849f24752c6b96f7eb01099e0feb77a92a3fed526b442eedb2d4106fc"
+          "active_version_set_id": "4145c4cfb1a18558260b130610cf741b58ac25f5264cc5277da34365a42c8599"
         }
       ]
     }

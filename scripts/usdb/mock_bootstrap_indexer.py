@@ -9,8 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 
-REGISTRY_ID = "747b656a814bf8d57409c19aa8df9754a1d46aadbe2ebb6fc09805ca14637014"
-ACTIVE_VERSION_SET_ID = "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
+REGISTRY_ID = "d53e9907cfc5abf5d8294e98bbaa838630ee070118eb0845ad3e770959279f08"
+ACTIVE_VERSION_SET_ID = "58a5bf5a3cfdba184c57a7ab13d6d7d6c19a359da467625ebc0392459a0f2a18"
 SNAPSHOT_ID = "11" * 32
 SYSTEM_STATE_ID = "22" * 32
 DEFAULT_USDB_MAIN = "0x1111111111111111111111111111111111111111"
@@ -18,7 +18,7 @@ DEFAULT_TOTAL_MINER_BTC_SATS = "100000000"
 DEFAULT_COLLAB_CONTRIBUTION = "100"
 ACTIVE_VERSION_SET = {
     "scope": {"network_id": "btc-regtest", "rules_scope": "miner-pass-v2-fixture"},
-    "inscription_schema_version": "uip-0001-miner-pass-inscription:v2",
+    "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
     "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
     "energy_formula_version": "uip-0003-pass-energy-formula:v1",
     "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",

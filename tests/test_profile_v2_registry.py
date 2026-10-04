@@ -48,8 +48,8 @@ class ProfileV2RegistryTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "active_version_set mismatch"):
                     self.resolve()
 
-    def test_rejects_legacy_or_mixed_rules(self):
-        for family, version in (("inscription_schema_version", "uip-0001-miner-pass-inscription:v1"),
+    def test_rejects_withdrawn_schema_or_legacy_state_rules(self):
+        for family, version in (("inscription_schema_version", "uip-0001-miner-pass-inscription:v2"),
                                 ("pass_state_machine_version", "uip-0002-pass-state-machine:v1")):
             with self.subTest(family=family):
                 self.profile["external_state"]["active_version_set"] = copy.deepcopy(self.active["active_version_set"])

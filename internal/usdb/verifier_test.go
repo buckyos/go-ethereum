@@ -103,8 +103,8 @@ func TestVerifierResolveProfileRejectsSelectorIdentityMismatch(t *testing.T) {
 			view.ExternalState.ActiveVersionSet["scope"] = []byte(`{"network_id":"btc-regtest","rules_scope":"another-usdb-network"}`)
 			view.ExternalState.ActiveVersionSetID, _ = view.ExternalState.ActiveVersionSet.ID()
 		}},
-		{name: "legacy schema with recomputed identity", mutate: func(view *PassEconomicProfileView) {
-			view.ExternalState.ActiveVersionSet["inscription_schema_version"] = []byte(`"uip-0001-miner-pass-inscription:v1"`)
+		{name: "withdrawn schema with recomputed identity", mutate: func(view *PassEconomicProfileView) {
+			view.ExternalState.ActiveVersionSet["inscription_schema_version"] = []byte(`"uip-0001-miner-pass-inscription:v2"`)
 			view.ExternalState.ActiveVersionSetID, _ = view.ExternalState.ActiveVersionSet.ID()
 		}},
 		{name: "legacy state machine with recomputed identity", mutate: func(view *PassEconomicProfileView) {

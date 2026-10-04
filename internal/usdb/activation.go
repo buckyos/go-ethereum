@@ -223,7 +223,7 @@ func (set ActiveVersionSet) ID() (string, error) {
 // future generated registry can carry multiple supported formula versions.
 func (set ActiveVersionSet) ValidateBTCProfileSurface() error {
 	required := map[string]string{
-		"inscription_schema_version":        InscriptionSchemaVersionV2,
+		"inscription_schema_version":        InscriptionSchemaVersionV1,
 		"pass_state_machine_version":        PassStateMachineVersionV2,
 		"energy_formula_version":            "",
 		"effective_energy_formula_version":  "",

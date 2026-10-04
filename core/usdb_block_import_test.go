@@ -21,7 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-const usdbImportTestActiveVersionSetID = "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
+const usdbImportTestActiveVersionSetID = "58a5bf5a3cfdba184c57a7ab13d6d7d6c19a359da467625ebc0392459a0f2a18"
 
 func TestUSDBBlockImportCommitsRewardState(t *testing.T) {
 	rewardRecipient := common.HexToAddress("0x1111111111111111111111111111111111111111")
@@ -193,7 +193,7 @@ func newUSDBImportTestProfile(t *testing.T, rewardRecipient common.Address, tota
 	t.Helper()
 	activeVersions := usdb.ActiveVersionSet{
 		"scope":                             json.RawMessage(`{"network_id":"btc-regtest","rules_scope":"miner-pass-v2-fixture"}`),
-		"inscription_schema_version":        json.RawMessage(`"uip-0001-miner-pass-inscription:v2"`),
+		"inscription_schema_version":        json.RawMessage(`"uip-0001-miner-pass-inscription:v1"`),
 		"pass_state_machine_version":        json.RawMessage(`"uip-0002-pass-state-machine:v2"`),
 		"energy_formula_version":            json.RawMessage(`"uip-0003-pass-energy-formula:v1"`),
 		"effective_energy_formula_version":  json.RawMessage(`"uip-0004-collab-leader-effective-energy:v1"`),

@@ -9,17 +9,17 @@ PAYLOAD_SIZE = 111
 BTC_ANCHOR_MAX_AGE_BLOCKS = 6_650
 VIEW_VERSION = "uip-0006-usdb-economic-state-view:v1"
 BTC_REGTEST_ACTIVATION_REGISTRY_ID = (
-    "747b656a814bf8d57409c19aa8df9754a1d46aadbe2ebb6fc09805ca14637014"
+    "d53e9907cfc5abf5d8294e98bbaa838630ee070118eb0845ad3e770959279f08"
 )
 BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID = (
-    "f83e88a5fb21653bd3bc4570f869707b29e082bcf7b988d59622f6f9802913a8"
+    "7cbfc8e2f8684c355a3ba44e8156ae19b65b8db220e98edf5ec909aebe51f2f7"
 )
 BTC_STABLE_LAG_BLOCKS = 10
 BTC_V2_ACTIVE_VERSION_SET_ID = (
-    "91c2b5b1fe9622d6f8a61561d2ef89a9d206d0d8d7f91e83f3b34dcdab2cad8c"
+    "58a5bf5a3cfdba184c57a7ab13d6d7d6c19a359da467625ebc0392459a0f2a18"
 )
 BTC_V2_ACTIVE_VERSION_SET = {
-    "inscription_schema_version": "uip-0001-miner-pass-inscription:v2",
+    "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
     "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
     "energy_formula_version": "uip-0003-pass-energy-formula:v1",
     "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",

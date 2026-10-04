@@ -82,7 +82,7 @@ func marshalTestSelector(t *testing.T, selector ProfileSelectorPayload) []byte {
 func newTestActiveVersionSet(t *testing.T) ActiveVersionSet {
 	t.Helper()
 	values := map[string]string{
-		"inscription_schema_version":        InscriptionSchemaVersionV2,
+		"inscription_schema_version":        InscriptionSchemaVersionV1,
 		"pass_state_machine_version":        PassStateMachineVersionV2,
 		"energy_formula_version":            EnergyFormulaVersionV1,
 		"effective_energy_formula_version":  EffectiveEnergyFormulaVersionV1,

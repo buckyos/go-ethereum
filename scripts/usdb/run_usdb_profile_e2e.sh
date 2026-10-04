@@ -889,7 +889,7 @@ run_miner_live_state_check() {
 
   remint_content_file="$WORK_DIR/usdb_profile_live_remint.json"
   cat >"$remint_content_file" <<EOF
-{"p":"usdb","op":"mint","v":2,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":["${old_pass_id}"]}
+{"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":["${old_pass_id}"]}
 EOF
   new_pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME_B" "$remint_content_file" "$remint_owner_address" "$remint_owner_address")"
   regtest_mine_blocks "$REMINT_CONFIRM_BLOCKS" "$miner_btc_address"
@@ -1278,7 +1278,7 @@ main() {
 
   mint_content_file="$WORK_DIR/usdb_profile_mint.json"
   cat >"$mint_content_file" <<EOF
-{"p":"usdb","op":"mint","v":2,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
+{"p":"usdb","op":"mint","v":1,"usdb_main":"${MINER_PASS_USDB_MAIN}","prev":[]}
 EOF
 
   pass_id="$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$mint_content_file" "$ord_receive_address" "$ord_funding_address")"
