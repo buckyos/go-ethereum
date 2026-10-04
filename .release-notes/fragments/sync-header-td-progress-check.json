@@ -1,0 +1,15 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "sync-header-td-progress-check",
+  "type": "fixed",
+  "scopes": ["node-runtime", "testing"],
+  "summary": "Avoid rejecting honest sync peers while post-pivot blocks are being imported",
+  "details": [
+    "Retain the total difficulty of headers validated during synchronization, so partial block execution moving the shared header marker backwards does not falsely report a stalling peer and roll back downloaded headers.",
+    "Continue rejecting peers whose advertised total difficulty exceeds both the current header chain and the headers validated in the sync cycle; include the promised, current and delivered difficulties in the rejection log.",
+    "Add deterministic partial-import and overstated-difficulty regressions for snap and light sync, and require their execution in Fast CI alongside queued-tip recovery tests."
+  ],
+  "operator_actions": [],
+  "compatibility": {"network_reset": false, "data_rebuild": false, "config_change": false, "restart_required": true},
+  "references": ["https://github.com/buckyos/go-ethereum/actions/runs/37181992776/job/111376343825"]
+}

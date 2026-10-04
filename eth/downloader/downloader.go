@@ -1254,6 +1254,7 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 	var (
 		rollback    uint64 // Zero means no rollback (fine as you can't unroll the genesis)
 		rollbackErr error
+		headerTD    *big.Int // TD of the last successfully validated header in this sync cycle
 		mode        = d.getMode()
 	)
 	defer func() {
@@ -1328,7 +1329,12 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 					// peer gave us something useful, we're already happy/progressed (above check).
 					if mode == SnapSync || mode == LightSync {
 						head := d.lightchain.CurrentHeader()
-						if td.Cmp(d.lightchain.GetTd(head.Hash(), head.Number.Uint64())) > 0 {
+						headTD := d.lightchain.GetTd(head.Hash(), head.Number.Uint64())
+						// Post-pivot block execution can temporarily move CurrentHeader
+						// behind headers already validated by this sync cycle. Retain
+						// their TD so an honest peer is not dropped during that window.
+						if td.Cmp(headTD) > 0 && (headerTD == nil || td.Cmp(headerTD) > 0) {
+							log.Warn("Peer did not deliver promised header TD", "promised", td, "head", head.Number, "headTD", headTD, "deliveredTD", headerTD)
 							return errStallingPeer
 						}
 					}
@@ -1414,6 +1420,9 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 							log.Warn("Invalid header encountered", "number", chunkHeaders[n].Number, "hash", chunkHashes[n], "parent", chunkHeaders[n].ParentHash, "err", err)
 							return fmt.Errorf("%w: %v", errInvalidChain, err)
 						}
+						// Read TD by the validated header hash, not the mutable head marker.
+						last := chunkHeaders[len(chunkHeaders)-1]
+						headerTD = d.lightchain.GetTd(last.Hash(), last.Number.Uint64())
 						// All verifications passed, track all headers within the allowed limits
 						if mode == SnapSync {
 							head := chunkHeaders[len(chunkHeaders)-1].Number.Uint64()

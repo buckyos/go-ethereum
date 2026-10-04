@@ -958,6 +958,91 @@ func testInvalidHeaderRollback(t *testing.T, protocol uint, mode SyncMode) {
 	assertOwnChain(t, tester, len(chain.blocks))
 }
 
+// Header delivery must be checked against validated headers even while block
+// execution moves the shared head marker through the post-pivot blocks.
+func TestSyncCompletionHeaderTD(t *testing.T) {
+	for _, mode := range []SyncMode{SnapSync, LightSync} {
+		for _, tc := range []struct {
+			name      string
+			imported  int
+			overclaim bool
+		}{
+			{name: "headers-only"},
+			{name: "partial-block-import", imported: 3},
+			{name: "complete-block-import", imported: 5},
+			{name: "overclaimed-headers", overclaim: true},
+			{name: "overclaimed-partial-import", imported: 3, overclaim: true},
+		} {
+			t.Run(fmt.Sprintf("%s/%s", mode, tc.name), func(t *testing.T) {
+				tester := newTester(t)
+				defer tester.terminate()
+				d := tester.downloader
+				atomic.StoreUint32(&d.mode, uint32(mode))
+				d.cancelCh = make(chan struct{})
+				d.queue.Prepare(1, mode)
+
+				blocks := testChainBase.blocks[1:6]
+				task := &headerTask{}
+				promisedTD := new(big.Int).Set(tester.chain.Genesis().Difficulty())
+				for _, block := range blocks {
+					task.headers = append(task.headers, block.Header())
+					task.hashes = append(task.hashes, block.Hash())
+					promisedTD.Add(promisedTD, block.Difficulty())
+				}
+				if tc.overclaim {
+					promisedTD.Add(promisedTD, common.Big1)
+				}
+				result := make(chan error, 1)
+				d.cancelWg.Add(1)
+				go func() {
+					defer d.cancelWg.Done()
+					result <- d.processHeaders(1, promisedTD, nil, false)
+				}()
+				d.headerProcCh <- task
+				// Both wakeups follow header validation. Drain them before sending
+				// the end of the stream, so the final wakeups cannot block.
+				for i, wake := range []chan bool{d.queue.blockWakeCh, d.queue.receiptWakeCh} {
+					select {
+					case pending := <-wake:
+						if !pending {
+							t.Fatalf("header processing ended before scheduling content: queue=%d", i)
+						}
+					case err := <-result:
+						t.Fatalf("header processing stopped before content wakeup: queue=%d err=%v", i, err)
+					case <-time.After(5 * time.Second):
+						t.Fatalf("header processing did not schedule content: queue=%d", i)
+					}
+				}
+				if head := tester.chain.CurrentHeader(); head.Hash() != blocks[4].Hash() {
+					t.Fatalf("headers not imported through target: have=%d want=5", head.Number)
+				}
+				if tc.imported > 0 {
+					if _, err := tester.chain.InsertChain(blocks[:tc.imported]); err != nil {
+						t.Fatal("block import failed:", err)
+					}
+					if head := tester.chain.CurrentHeader(); head.Hash() != blocks[tc.imported-1].Hash() {
+						t.Fatalf("head marker did not follow block import: have=%d want=%d", head.Number, tc.imported)
+					}
+				}
+				d.headerProcCh <- nil
+				select {
+				case err := <-result:
+					var want error
+					if tc.overclaim {
+						want = errStallingPeer
+					}
+					if err != want {
+						t.Fatalf("header completion mismatch: imported=%d overclaim=%t have=%v want=%v",
+							tc.imported, tc.overclaim, err, want)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("header processing did not finish")
+				}
+			})
+		}
+	}
+}
+
 // Tests that a peer advertising a high TD doesn't get to stall the downloader
 // afterwards by not sending any useful hashes.
 func TestHighTDStarvationAttack66Full(t *testing.T) {

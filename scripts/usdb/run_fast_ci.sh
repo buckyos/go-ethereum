@@ -118,6 +118,7 @@ run_go_checks() {
       ./miner
       ./eth
       ./eth/fetcher
+      ./eth/downloader
       ./eth/ethconfig
       ./cmd/utils
       ./cmd/geth
@@ -147,7 +148,7 @@ run_go_checks() {
       run_consensus_checks "$consensus_tests"
       usdb_go_with_geth_linker_compat test ./miner -run "$miner_tests"
       local sync_report="$FAST_OUTPUT_DIR/sync-completion.jsonl"
-      usdb_go_with_geth_linker_compat test -json ./eth ./eth/fetcher -run '^TestSyncCompletion' | tee "$sync_report"
+      usdb_go_with_geth_linker_compat test -json ./eth ./eth/fetcher ./eth/downloader -run '^TestSyncCompletion' | tee "$sync_report"
       python3 "$ROOT_DIR/scripts/usdb/check_fast_go_coverage.py" \
         --required "$ROOT_DIR/scripts/usdb/fast_go_sync_required_tests.json" --report "$sync_report"
       usdb_go_with_geth_linker_compat test ./node -run '^Test(AdminPeersWithUnresolvedDNS|PersistentNodesKeepUnresolvedDNS)$'
