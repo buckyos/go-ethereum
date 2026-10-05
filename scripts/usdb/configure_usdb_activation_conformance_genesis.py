@@ -7,7 +7,7 @@ import tempfile
 
 
 BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID = (
-    "adcca18bb4eccd4715bb0d6ec69c7b3d5e09065fac0cb33b145db7b621f59fba"
+    "7cbfc8e2f8684c355a3ba44e8156ae19b65b8db220e98edf5ec909aebe51f2f7"
 )
 ACTIVATION_CONFORMANCE_DIFFICULTY_POLICY_VERSION = 65_535
 
@@ -36,14 +36,15 @@ def main():
     versions["difficultyPolicyVersion"] = (
         ACTIVATION_CONFORMANCE_DIFFICULTY_POLICY_VERSION
     )
-    activations.append(
-        {
-            "block": args.activation_block,
-            "btcActivationRegistryId": BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID,
-            "btcAnchorMaxAgeBlocks": activations[0]["btcAnchorMaxAgeBlocks"],
-            "versions": versions,
-        }
+    # Preserve explicit BTC scope and any other checkpoint fields. The staged
+    # registry belongs to the same MinerPass fixture scope as the base revision.
+    checkpoint = dict(activations[0])
+    checkpoint.update(
+        block=args.activation_block,
+        btcActivationRegistryId=BTC_REGTEST_ACTIVATION_REGISTRY_REVISION_2_ID,
+        versions=versions,
     )
+    activations.append(checkpoint)
 
     directory = os.path.dirname(os.path.abspath(args.genesis))
     descriptor, temporary_path = tempfile.mkstemp(

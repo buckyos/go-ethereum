@@ -14,12 +14,10 @@ def checkpoint(base, block, version):
     versions = dict(base["versions"])
     versions["quotePolicyVersion"] = version
     versions["auxPoolPolicyVersion"] = version
-    return {
-        "block": block,
-        "btcActivationRegistryId": base["btcActivationRegistryId"],
-        "btcAnchorMaxAgeBlocks": base["btcAnchorMaxAgeBlocks"],
-        "versions": versions,
-    }
+    # Economic policy changes do not change the BTC registry or its scope.
+    result = dict(base)
+    result.update(block=block, versions=versions)
+    return result
 
 
 def main():

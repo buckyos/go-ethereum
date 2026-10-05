@@ -113,12 +113,61 @@ usdb_chain_wait_block_height() {
   return 1
 }
 
-usdb_chain_stop_mining() {
-  usdb_chain_rpc_call "miner_stop" "[]" >/dev/null || true
+# A stopped mining RPC can still leave a sealed result or queued work behind.
+# Restart without mining to obtain a stable head; archive state supports the
+# verifier's historical storage queries across those process restarts.
+usdb_chain_start_node() {
+  local mine="$1"
+  local -a mining_args=()
+  if [[ "$mine" == "true" ]]; then
+    mining_args+=(--mine)
+  fi
+  usdb_chain_log "Starting USDB-chain node: mining=${mine}"
+  (
+    cd "$ROOT_DIR"
+    exec "${GETH_CMD[@]}" \
+      --datadir "$DATADIR" \
+      --networkid "$NETWORK_ID" \
+      --gcmode archive \
+      --http \
+      --http.addr "$HTTP_ADDR" \
+      --http.port "$HTTP_PORT" \
+      --http.api eth,net,web3,admin,miner,txpool \
+      --authrpc.addr "$HTTP_ADDR" \
+      --authrpc.port "$AUTHRPC_PORT" \
+      --port "$P2P_PORT" \
+      --nodiscover \
+      --maxpeers 0 \
+      "${mining_args[@]}" \
+      --miner.threads 1 \
+      --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
+      --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
+      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
+  ) >>"$GETH_LOG_FILE" 2>&1 &
+  GETH_PID=$!
 }
 
-usdb_chain_start_mining() {
-  usdb_chain_rpc_call "miner_start" "[1]" >/dev/null || true
+usdb_chain_stop_node() {
+  usdb_chain_log "Stopping USDB-chain process before changing test phase: pid=${GETH_PID}"
+  kill -INT "$GETH_PID"
+  local deadline=$((SECONDS + 60)) state
+  while kill -0 "$GETH_PID" 2>/dev/null; do
+    state="$(ps -o stat= -p "$GETH_PID" 2>/dev/null | tr -d ' ' || true)"
+    [[ "$state" == Z* ]] && break
+    if (( SECONDS >= deadline )); then
+      echo "Timed out stopping USDB-chain process: pid=${GETH_PID}, log=${GETH_LOG_FILE}" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  wait "$GETH_PID"
+  GETH_PID=""
+}
+
+usdb_chain_freeze_head() {
+  usdb_chain_stop_node
+  usdb_chain_start_node false
+  usdb_chain_wait_rpc_ready
 }
 
 usdb_chain_stop_residual_nodes() {
@@ -305,34 +354,12 @@ EOF
   usdb_chain_log "Initializing USDB-chain datadir ${DATADIR}"
   run_geth init --datadir "$DATADIR" "$GENESIS_JSON" >/dev/null
 
-  usdb_chain_log "Starting USDB-chain node with USDB profile/difficulty integration"
-  (
-    cd "$ROOT_DIR"
-    exec "${GETH_CMD[@]}" \
-      --datadir "$DATADIR" \
-      --networkid "$NETWORK_ID" \
-      --http \
-      --http.addr "$HTTP_ADDR" \
-      --http.port "$HTTP_PORT" \
-      --http.api eth,net,web3,admin,miner,txpool \
-      --authrpc.addr "$HTTP_ADDR" \
-      --authrpc.port "$AUTHRPC_PORT" \
-      --port "$P2P_PORT" \
-      --nodiscover \
-      --maxpeers 0 \
-      --mine \
-      --miner.threads 1 \
-      --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
-      --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
-      --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
-  ) >"$GETH_LOG_FILE" 2>&1 &
-  GETH_PID=$!
+  usdb_chain_start_node true
 
   usdb_chain_wait_rpc_ready
   phase1_end_height="$(usdb_chain_wait_block_height "$PHASE1_TARGET_BLOCKS")"
-  usdb_chain_log "Stage 1 mined through USDB block ${phase1_end_height}; stopping miner before BTC energy update"
-  usdb_chain_stop_mining
-  sleep 2
+  usdb_chain_log "Stage 1 mined through USDB block ${phase1_end_height}; freezing imported head before BTC energy update"
+  usdb_chain_freeze_head
   phase1_end_height="$(printf '%s' "$(usdb_chain_rpc_call "eth_blockNumber" "[]")" | python3 -c 'import json,sys; print(int((json.load(sys.stdin).get("result") or "0x0"), 16))')"
 
   regtest_log "Applying BTC owner top-up to increase pass energy"
@@ -356,10 +383,11 @@ EOF
   usdb_chain_log "Boosted current pass energy=${boosted_energy} after BTC top-up and growth blocks"
 
   usdb_chain_log "Resuming USDB-chain mining for stage 2"
-  usdb_chain_start_mining
+  usdb_chain_stop_node
+  usdb_chain_start_node true
+  usdb_chain_wait_rpc_ready
   phase2_end_height="$(usdb_chain_wait_block_height "$((phase1_end_height + PHASE2_TARGET_BLOCKS))")"
-  usdb_chain_stop_mining
-  sleep 2
+  usdb_chain_freeze_head
   phase2_end_height="$(printf '%s' "$(usdb_chain_rpc_call "eth_blockNumber" "[]")" | python3 -c 'import json,sys; print(int((json.load(sys.stdin).get("result") or "0x0"), 16))')"
 
   balance_resp="$(usdb_chain_rpc_call "eth_getBalance" "[\"${USDB_CHAIN_MINER_ADDRESS}\",\"latest\"]")"

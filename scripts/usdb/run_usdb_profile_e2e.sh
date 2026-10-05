@@ -1293,6 +1293,12 @@ EOF
 
   regtest_create_balance_history_config
   regtest_create_usdb_indexer_config
+  if [[ -n "$ACTIVATION_CONFORMANCE_BLOCK" ]]; then
+    # Both revisions must be queryable before Geth reaches the staged checkpoint.
+    python3 "$ROOT_DIR/scripts/usdb/prepare_usdb_activation_conformance_catalog.py" \
+      --indexer-config "$USDB_INDEXER_ROOT/config.json" \
+      --catalog "$USDB_REPO_DIR/tests/fixtures/miner-pass-v2/catalog-staged.json"
+  fi
   regtest_start_balance_history
   regtest_wait_balance_history_rpc_ready
   regtest_wait_until_balance_history_synced_eq "$current_context_height"
