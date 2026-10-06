@@ -158,6 +158,11 @@ func resolveProfileFormulaValues(
 	activeVersions ActiveVersionSet,
 	profile PassEconomicProfile,
 ) (*big.Int, *big.Int, *big.Int, uint8, uint64, error) {
+	if values, err := resolveMinerPassUpgradeFormulaValues(activeVersions, profile); err != nil {
+		return nil, nil, nil, 0, 0, err
+	} else if values != nil {
+		return values.raw, values.collab, values.effective, values.level, values.factor, nil
+	}
 	energyFormulaVersion, err := activeVersions.requireStringVersion("energy_formula_version")
 	if err != nil {
 		return nil, nil, nil, 0, 0, err
@@ -245,4 +250,11 @@ func resolveProfileFormulaValues(
 	}
 
 	return rawEnergy, collabContribution, effectiveEnergy, level, difficultyFactorBps, nil
+}
+
+// profileFormulaValues is also used by the explicitly tagged, isolated upgrade acceptance build.
+type profileFormulaValues struct {
+	raw, collab, effective *big.Int
+	level                  uint8
+	factor                 uint64
 }

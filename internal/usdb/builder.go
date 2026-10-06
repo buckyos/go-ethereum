@@ -130,6 +130,7 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 		return nil, fmt.Errorf("usdb returned no current system state")
 	}
 	if err := validateCurrentActivationIdentity(
+		b.chainConfig.USDB.BTCIndexOriginHeight,
 		systemState.LocalSyncedBlockHeight,
 		systemState.ActiveVersionSet,
 		systemState.ActiveVersionSetID,
@@ -245,6 +246,7 @@ func (b *PayloadBuilder) parentSelector(blockNumber uint64, parentExtra []byte) 
 }
 
 func validateCurrentActivationIdentity(
+	origin uint32,
 	btcHeight uint32,
 	activeVersionSet ActiveVersionSet,
 	activeVersionSetID string,
@@ -261,6 +263,9 @@ func validateCurrentActivationIdentity(
 	if actualRegistry.NetworkID != expectedRegistry.NetworkID || actualRegistry.RulesScope != expectedRegistry.RulesScope {
 		return fmt.Errorf("%w: service scope %s/%s differs from chain-config scope %s/%s", ErrBTCActivationRegistryMismatch,
 			actualRegistry.NetworkID, actualRegistry.RulesScope, expectedRegistry.NetworkID, expectedRegistry.RulesScope)
+	}
+	if err := actualRegistry.ensureSameHistory(expectedRegistry, origin, btcHeight); err != nil {
+		return err
 	}
 	if _, err := actualRegistry.validateIdentity(
 		btcHeight,

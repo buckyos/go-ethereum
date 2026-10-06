@@ -324,7 +324,7 @@ func TestCurrentActivationIdentityRejectsDifferentRuleScopes(t *testing.T) {
 			expected := *actual
 			expected.NetworkID = test.network
 			expected.RulesScope = test.scope
-			if err := validateCurrentActivationIdentity(123, point.ActiveVersionSet, point.ActiveVersionSetID, actual.ActivationRegistryID, &expected); !errors.Is(err, ErrBTCActivationRegistryMismatch) {
+			if err := validateCurrentActivationIdentity(1, 123, point.ActiveVersionSet, point.ActiveVersionSetID, actual.ActivationRegistryID, &expected); !errors.Is(err, ErrBTCActivationRegistryMismatch) {
 				t.Fatalf("different rule history accepted despite matching formula versions: %v", err)
 			}
 		})
@@ -342,7 +342,7 @@ func TestCurrentActivationIdentityRejectsDifferentRuleScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateCurrentActivationIdentity(123, point.ActiveVersionSet, point.ActiveVersionSetID, actual.ActivationRegistryID, expected); err != nil {
+	if err := validateCurrentActivationIdentity(1, 123, point.ActiveVersionSet, point.ActiveVersionSetID, actual.ActivationRegistryID, expected); err != nil {
 		t.Fatal(err)
 	}
 

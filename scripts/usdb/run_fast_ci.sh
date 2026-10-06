@@ -164,6 +164,8 @@ run_go_checks() {
       usdb_go_with_geth_linker_compat test \
         -tags usdb_economic_conformance_v3 ./internal/usdb
       run_consensus_checks "$consensus_tests" usdb_economic_conformance_v3
+      usdb_go_with_geth_linker_compat test \
+        -tags usdb_miner_pass_conformance ./internal/usdb
     )
     usdb_build_geth "$ROOT_DIR" "$FAST_OUTPUT_DIR/geth-go118"
     "$FAST_OUTPUT_DIR/geth-go118" version >/dev/null
@@ -241,6 +243,8 @@ run_golden_checks() {
   local release_golden="$ROOT_DIR/internal/usdb/cross_chain_release_manifest.json"
 
   log "checking Rust-to-Go activation and release artifacts"
+  cmp "$USDB_REPO_DIR/tests/fixtures/miner-pass-upgrade/economic-queries.json" \
+    "$ROOT_DIR/internal/usdb/testdata/miner_pass_upgrade_queries.json"
   cargo run --quiet --manifest-path "$manifest" -p usdb-util \
     --bin generate_go_btc_activation_golden -- --check "$activation_golden"
   cargo run --quiet --manifest-path "$manifest" -p usdb-util \

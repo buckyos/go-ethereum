@@ -333,3 +333,52 @@ func (registry *btcActivationRegistry) validateIdentity(
 	}
 	return expected, nil
 }
+
+// ensureSameHistory compares every activation interval in the indexed prefix, including
+// intermediate divergences that later return to the same active set. The origin comes
+// from chain config; this check does not authorize adopting a different dataset binding.
+func (registry *btcActivationRegistry) ensureSameHistory(other *btcActivationRegistry, origin, through uint32) error {
+	if registry == nil || other == nil {
+		return fmt.Errorf("%w: missing registry", ErrBTCActivationRegistryMismatch)
+	}
+	if registry.NetworkID != other.NetworkID || registry.RulesScope != other.RulesScope || registry.StableLagBlocks != other.StableLagBlocks {
+		return fmt.Errorf("%w: incompatible history domains: actual_registry=%s actual_network=%s actual_scope=%s actual_lag=%d expected_registry=%s expected_network=%s expected_scope=%s expected_lag=%d", ErrBTCActivationRegistryMismatch, registry.ActivationRegistryID, registry.NetworkID, registry.RulesScope, registry.StableLagBlocks, other.ActivationRegistryID, other.NetworkID, other.RulesScope, other.StableLagBlocks)
+	}
+	if through < origin {
+		origin = through
+	}
+	// Advance the two interval cursors together; work scales with activation count, not height.
+	left, right := 0, 0
+	for left+1 < len(registry.Activations) && registry.Activations[left+1].BTCHeight <= origin {
+		left++
+	}
+	for right+1 < len(other.Activations) && other.Activations[right+1].BTCHeight <= origin {
+		right++
+	}
+	height := origin
+	for {
+		if left >= len(registry.Activations) || right >= len(other.Activations) || registry.Activations[left].BTCHeight > height || other.Activations[right].BTCHeight > height {
+			return fmt.Errorf("%w: missing prefix at BTC height %d", ErrBTCActivationRegistryMismatch, height)
+		}
+		if registry.Activations[left].ActiveVersionSetID != other.Activations[right].ActiveVersionSetID {
+			return fmt.Errorf("%w: execution histories differ: actual=%s expected=%s origin=%d through=%d first_difference_height=%d", ErrBTCActivationRegistryMismatch, registry.ActivationRegistryID, other.ActivationRegistryID, origin, through, height)
+		}
+		next := uint64(through) + 1
+		if left+1 < len(registry.Activations) && uint64(registry.Activations[left+1].BTCHeight) < next {
+			next = uint64(registry.Activations[left+1].BTCHeight)
+		}
+		if right+1 < len(other.Activations) && uint64(other.Activations[right+1].BTCHeight) < next {
+			next = uint64(other.Activations[right+1].BTCHeight)
+		}
+		if next > uint64(through) {
+			return nil
+		}
+		height = uint32(next)
+		if left+1 < len(registry.Activations) && registry.Activations[left+1].BTCHeight == height {
+			left++
+		}
+		if right+1 < len(other.Activations) && other.Activations[right+1].BTCHeight == height {
+			right++
+		}
+	}
+}
