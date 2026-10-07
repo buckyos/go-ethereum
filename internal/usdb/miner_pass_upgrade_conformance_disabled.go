@@ -7,3 +7,9 @@ package usdb
 func resolveMinerPassUpgradeFormulaValues(set ActiveVersionSet, profile PassEconomicProfile) (*profileFormulaValues, error) {
 	return nil, nil
 }
+
+// Release binaries do not recognize the synthetic service registry or surface contracts.
+func minerPassConformanceCatalogs() [][]byte { return nil }
+func supportsMinerPassConformanceContract(set ActiveVersionSet, family, value string) bool {
+	return false
+}

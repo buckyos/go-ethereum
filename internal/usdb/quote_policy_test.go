@@ -56,8 +56,31 @@ func TestQuotePolicyRejectsInconsistentEffectiveEnergy(t *testing.T) {
 
 func testQuotePolicyProfile() *ResolvedConsensusProfile {
 	return &ResolvedConsensusProfile{
-		RawEnergy:          big.NewInt(1_000_000),
-		CollabContribution: big.NewInt(20_000_000),
-		EffectiveEnergy:    big.NewInt(21_000_000),
+		RawEnergy:           big.NewInt(1_000_000),
+		CollabContribution:  big.NewInt(20_000_000),
+		EffectiveEnergy:     big.NewInt(21_000_000),
+		Level:               LevelForEffectiveEnergy(big.NewInt(21_000_000)),
+		DifficultyFactorBps: DifficultyFactorBpsForLevel(LevelForEffectiveEnergy(big.NewInt(21_000_000))),
+	}
+}
+
+func TestQuotePolicyDisabledPreservesVerifiedRulesAndRejectsInvalidBounds(t *testing.T) {
+	profile := testQuotePolicyProfile()
+	// A future verified BTC rule may assign another level to the same energy.
+	profile.Level, profile.DifficultyFactorBps = 50, 5000
+	decision, err := ResolveQuotePolicy(QuotePolicyVersionDisabled, QuotePolicyContext{Profile: profile})
+	if err != nil || decision.CandidateLevel != 50 || decision.DifficultyFactorBps != 5000 {
+		t.Fatalf("discarded verified level: decision=%+v err=%v", decision, err)
+	}
+	profile.CollabContribution.SetUint64(0)
+	if decision.CollaborationEnergy.Cmp(big.NewInt(20_000_000)) != 0 {
+		t.Fatal("quote decision aliases collaboration energy")
+	}
+	for _, values := range []struct{ level, factor uint64 }{{51, 5000}, {0, 4999}, {0, 10001}} {
+		profile = testQuotePolicyProfile()
+		profile.Level, profile.DifficultyFactorBps = uint8(values.level), values.factor
+		if decision, err := ResolveQuotePolicy(QuotePolicyVersionDisabled, QuotePolicyContext{Profile: profile}); err == nil || decision != nil {
+			t.Fatalf("accepted invalid nominal bounds: %+v", values)
+		}
 	}
 }

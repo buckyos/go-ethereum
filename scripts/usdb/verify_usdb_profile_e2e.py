@@ -315,6 +315,7 @@ def resolve_profile(
     selector,
     expected_activation_registry_id,
     expected_active_version_set_id,
+    expected_versions=None,
 ):
     context = {
         "requested_height": selector["btc_height"],
@@ -355,11 +356,12 @@ def resolve_profile(
                 f"profile external_state {field} mismatch: "
                 f"have {external.get(field)!r} want {expected!r}"
             )
-    if external.get("active_version_set") != BTC_V2_ACTIVE_VERSION_SET:
+    expected_versions = expected_versions or BTC_V2_ACTIVE_VERSION_SET
+    if external.get("active_version_set") != expected_versions:
         raise SystemExit(
             "profile external_state active_version_set mismatch: "
             f"have {external.get('active_version_set')!r} "
-            f"want {BTC_V2_ACTIVE_VERSION_SET!r}"
+            f"want {expected_versions!r}"
         )
     pass_view = profile.get("pass") or {}
     if pass_view.get("pass_id") != selector["pass_id"]:
@@ -381,7 +383,7 @@ def resolve_profile(
         raise SystemExit(
             f"effective energy mismatch: have {effective} want {expected_effective}"
         )
-    level = level_for_energy(effective)
+    level = (min(effective // 1000, 50) if expected_versions.get("level_formula_version") == "conformance-level:thousands" else level_for_energy(effective))
     factor = difficulty_factor_bps(level)
     if pass_view.get("level") != level or pass_view.get("difficulty_factor_bps") != factor:
         raise SystemExit(
@@ -454,6 +456,7 @@ def expected_policy_difficulty(parent, block, factor, policy_version):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--miner-pass-upgrade-golden", help="Explicit isolated regtest acceptance catalog")
     parser.add_argument("--blocks", required=True)
     parser.add_argument("--coinbase", required=True)
     parser.add_argument("--balance-hex", required=True)
@@ -509,6 +512,13 @@ def main():
                 "difficulty and economic activation conformance cannot be combined"
             )
 
+    upgrade = None
+    if args.miner_pass_upgrade_golden:
+        with open(args.miner_pass_upgrade_golden, encoding="utf-8") as stream:
+            upgrade = json.load(stream)["registries"][0]
+        if (upgrade["network_id"] != "btc-regtest" or upgrade["rules_scope"] != "miner-pass-upgrade-conformance"
+                or args.activation_conformance_block is not None or args.economic_conformance_v2_block is not None):
+            raise SystemExit("MinerPass upgrade golden requires its isolated regtest mode")
     with open(args.blocks, "r", encoding="utf-8") as stream:
         blocks = json.load(stream)
     if not blocks:
@@ -655,11 +665,17 @@ def main():
                 f"unexpected pass id at block {number}: "
                 f"{selector['pass_id']} != {args.expected_pass_id}"
             )
+        expected_set_id, expected_versions = args.expected_active_version_set_id, None
+        if upgrade:
+            point = max((p for p in upgrade["activations"] if p["btc_height"] <= selector["btc_height"]), key=lambda p: p["btc_height"])
+            expected_registry_id = upgrade["activation_registry_id"]
+            expected_set_id, expected_versions = point["active_version_set_id"], point["active_version_set"]
         profile = resolve_profile(
             args.usdb_indexer_rpc_url,
             selector,
             expected_registry_id,
-            args.expected_active_version_set_id,
+            expected_set_id,
+            expected_versions,
         )
         raw = profile["raw"]
         contribution = profile["contribution"]

@@ -839,11 +839,12 @@ func TestFinalizeAndAssembleAppliesUSDBRewardV1(t *testing.T) {
 	coinbase := common.HexToAddress("0x1005")
 	config := newTestUSDBRewardChainConfig()
 	profile := &usdb.ResolvedConsensusProfile{
-		RewardRecipient:    coinbase,
-		TotalMinerBTCSats:  big.NewInt(100_000_000),
-		RawEnergy:          new(big.Int),
-		CollabContribution: big.NewInt(100),
-		EffectiveEnergy:    big.NewInt(100),
+		RewardRecipient:     coinbase,
+		TotalMinerBTCSats:   big.NewInt(100_000_000),
+		RawEnergy:           new(big.Int),
+		CollabContribution:  big.NewInt(100),
+		EffectiveEnergy:     big.NewInt(100),
+		DifficultyFactorBps: usdb.BasisPointDenominator,
 	}
 	engine := &Ethash{
 		config:              Config{Log: log.Root()},
@@ -915,11 +916,12 @@ func TestUSDBRewardStateRevertsWithParentRoot(t *testing.T) {
 	engine := &Ethash{
 		config: Config{Log: log.Root()},
 		usdbProfileResolver: &stubProfileResolver{resolved: &usdb.ResolvedConsensusProfile{
-			RewardRecipient:    coinbase,
-			TotalMinerBTCSats:  big.NewInt(100_000_000),
-			RawEnergy:          new(big.Int),
-			CollabContribution: big.NewInt(250),
-			EffectiveEnergy:    big.NewInt(250),
+			RewardRecipient:     coinbase,
+			TotalMinerBTCSats:   big.NewInt(100_000_000),
+			RawEnergy:           new(big.Int),
+			CollabContribution:  big.NewInt(250),
+			EffectiveEnergy:     big.NewInt(250),
+			DifficultyFactorBps: usdb.BasisPointDenominator,
 		}},
 	}
 	header := &types.Header{

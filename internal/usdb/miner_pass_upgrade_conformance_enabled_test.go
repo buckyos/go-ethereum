@@ -57,6 +57,10 @@ func TestMinerPassUpgradeRustRPCVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			decision, err := ResolveQuotePolicy(QuotePolicyVersionDisabled, QuotePolicyContext{Profile: resolved})
+			if err != nil || decision.CandidateLevel != original.Pass.Level || decision.DifficultyFactorBps != original.Pass.DifficultyFactorBps {
+				t.Fatalf("quote-disabled path discarded verified BTC rules: decision=%+v err=%v", decision, err)
+			}
 			if resolved.RawEnergy.String() != original.Pass.RawEnergy || resolved.Level != original.Pass.Level {
 				t.Fatal("wire profile changed")
 			}
@@ -137,6 +141,36 @@ func TestMinerPassUpgradeRulesStayScopedAndBounded(t *testing.T) {
 		profile.DifficultyFactorBps = 10000 - 100*level
 		if _, _, _, _, _, err := resolveProfileFormulaValues(original.ExternalState.ActiveVersionSet, profile); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestMinerPassServiceCatalogAndSurfaceStayScoped(t *testing.T) {
+	registry := loadMinerPassServiceRegistry(t)
+	if _, err := loadBTCActivationRegistry(registry.ActivationRegistryID); err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range registry.Activations {
+		if err := point.ActiveVersionSet.ValidateBTCProfileSurface(); err != nil {
+			t.Fatalf("height %d: %v", point.BTCHeight, err)
+		}
+	}
+	for _, family := range []string{"inscription_schema_version", "pass_state_machine_version"} {
+		// Reload since the test mutates the scope map.
+		registry = loadMinerPassServiceRegistry(t)
+		set := registry.Activations[len(registry.Activations)-1].ActiveVersionSet
+		value, err := set.requireStringVersion(family)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, scope := range []string{
+			`{"network_id":"btc-mainnet","rules_scope":"miner-pass-upgrade-conformance"}`,
+			`{"network_id":"btc-regtest","rules_scope":"another-scope"}`,
+		} {
+			set["scope"] = json.RawMessage(scope)
+			if supportsMinerPassConformanceContract(set, family, value) {
+				t.Fatalf("test surface escaped scope: family=%s scope=%s", family, scope)
+			}
 		}
 	}
 }

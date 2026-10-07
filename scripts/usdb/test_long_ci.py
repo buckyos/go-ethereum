@@ -46,6 +46,7 @@ class LongCiRunnerTests(unittest.TestCase):
             [
                 "go-profile",
                 "go-activation",
+                "miner-pass-upgrade",
                 "balance-history",
                 "indexer-protocol",
                 "indexer-reorg",
@@ -60,6 +61,7 @@ class LongCiRunnerTests(unittest.TestCase):
             result.stdout.splitlines(),
             [
                 "world-soak",
+                "miner-pass-upgrade-soak",
                 "upstream-fault-matrix",
                 "economic-capacity",
                 "balance-history-extended",
@@ -192,6 +194,32 @@ main "$@"
         self.assertIn("weekly upstream-fault-matrix --prepare-only", integration)
         self.assertIn("weekly upstream-fault-matrix --run-only", integration)
         self.assertIn("matrix.shard == 'upstream-fault-matrix' && 22", integration)
+
+    def test_miner_pass_upgrade_shards_prepare_once_and_isolate_each_seed(self) -> None:
+        harness = f"""
+source {shlex.quote(str(RUNNER))}
+require_regtest_tools() {{ :; }}
+run_case() {{ printf '%s\\n' "$*"; }}
+prepare_usdb_service_binaries nightly miner-pass-upgrade
+run_nightly miner-pass-upgrade
+run_weekly miner-pass-upgrade-soak
+"""
+        env = dict(os.environ, BITCOIN_BIN_DIR='/isolated/core', ORD_BIN='/isolated/ord',
+                   MINER_PASS_UPGRADE_SEEDS='41 42 43', USDB_LONG_CI_WORK_DIR='/isolated/work')
+        result = subprocess.run(['bash','-c',harness], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = result.stdout.splitlines()
+        self.assertEqual(len(rows), 5, result.stdout)
+        self.assertIn('miner-pass-upgrade-build', rows[0])
+        self.assertTrue(rows[0].endswith('--prepare-only'))
+        self.assertIn('WORK_DIR=/isolated/work/miner-pass-upgrade ', rows[1])
+        for row, seed in zip(rows[2:], (41,42,43)):
+            self.assertIn(f'MINER_PASS_UPGRADE_SEED={seed}', row)
+            self.assertIn(f'WORK_DIR=/isolated/work/miner-pass-upgrade-{seed} ', row)
+            self.assertTrue(row.endswith('--run-only'))
+        workflow = (WORKFLOWS/'usdb-integration.yml').read_text()
+        self.assertIn('          - miner-pass-upgrade', workflow)
+        self.assertIn('shard: miner-pass-upgrade-soak', workflow)
 
     def test_runner_builds_sourcedao_artifacts_for_activation_shard(self) -> None:
         runner = RUNNER.read_text(encoding="utf-8")

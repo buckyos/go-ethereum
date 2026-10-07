@@ -206,6 +206,7 @@ run_go_checks() {
     "$ROOT_DIR"/scripts/usdb/*.sh \
     "$ROOT_DIR"/scripts/usdb/lib/*.sh
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_verify_usdb_profile_e2e.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_miner_pass_upgrade_services.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_ci_revisions.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_ci_change_scope.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_prepare_release.py"
@@ -245,6 +246,10 @@ run_golden_checks() {
   log "checking Rust-to-Go activation and release artifacts"
   cmp "$USDB_REPO_DIR/tests/fixtures/miner-pass-upgrade/economic-queries.json" \
     "$ROOT_DIR/internal/usdb/testdata/miner_pass_upgrade_queries.json"
+  cargo run --quiet --manifest-path "$manifest" -p usdb-util \
+    --bin generate_go_btc_activation_golden -- \
+    --catalog "$USDB_REPO_DIR/tests/fixtures/miner-pass-upgrade/live-catalog.json" \
+    --check "$ROOT_DIR/internal/usdb/testdata/miner_pass_live_activation_golden.json"
   cargo run --quiet --manifest-path "$manifest" -p usdb-util \
     --bin generate_go_btc_activation_golden -- --check "$activation_golden"
   cargo run --quiet --manifest-path "$manifest" -p usdb-util \

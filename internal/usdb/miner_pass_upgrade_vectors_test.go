@@ -54,3 +54,23 @@ func selectorForUpgradeView(t *testing.T, view PassEconomicProfileView) ProfileS
 	}
 	return *selector
 }
+
+// Included by tests in both builds so default binaries reject this exact catalog.
+//
+//go:embed testdata/miner_pass_live_activation_golden.json
+var minerPassServiceTestGolden []byte
+
+func loadMinerPassServiceRegistry(t *testing.T) btcActivationRegistry {
+	t.Helper()
+	var artifact btcActivationGoldenArtifact
+	if err := json.Unmarshal(minerPassServiceTestGolden, &artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseBTCActivationGolden(minerPassServiceTestGolden); err != nil {
+		t.Fatal(err)
+	}
+	if len(artifact.Registries) != 1 || len(artifact.Registries[0].Activations) != 7 {
+		t.Fatal("incomplete live service activation schedule")
+	}
+	return artifact.Registries[0]
+}

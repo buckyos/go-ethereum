@@ -21,3 +21,10 @@ func TestProductionRejectsMinerPassUpgradeFormulas(t *testing.T) {
 		}
 	}
 }
+
+func TestProductionRejectsMinerPassServiceCatalog(t *testing.T) {
+	registry := loadMinerPassServiceRegistry(t)
+	if _, err := loadBTCActivationRegistry(registry.ActivationRegistryID); !errors.Is(err, ErrBTCActivationRegistryNotSupported) {
+		t.Fatalf("ordinary binary registered the service-test catalog: %v", err)
+	}
+}

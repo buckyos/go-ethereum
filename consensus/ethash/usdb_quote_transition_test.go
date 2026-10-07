@@ -18,9 +18,10 @@ func TestPrepareQuotePolicyTransitionDisabledUsesNominalCollaborationEnergy(t *t
 		usdb.QuotePolicyVersionDisabled,
 		usdb.QuotePolicyContext{
 			Profile: &usdb.ResolvedConsensusProfile{
-				RawEnergy:          big.NewInt(1),
-				CollabContribution: big.NewInt(2),
-				EffectiveEnergy:    big.NewInt(3),
+				RawEnergy:           big.NewInt(1),
+				CollabContribution:  big.NewInt(2),
+				EffectiveEnergy:     big.NewInt(3),
+				DifficultyFactorBps: usdb.BasisPointDenominator,
 			},
 		},
 	)

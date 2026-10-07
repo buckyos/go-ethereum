@@ -52,12 +52,19 @@ func ResolveQuotePolicy(version uint16, context QuotePolicyContext) (*QuotePolic
 	}
 	switch version {
 	case QuotePolicyVersionDisabled:
-		return newQuotePolicyDecision(
-			version,
-			context.Profile.EffectiveEnergy,
-			context.Profile.CollabContribution,
-			false,
-		)
+		// With quotes disabled the candidate is the locally verified nominal profile.
+		// Recomputing its level with v1 here would discard BTC level activation rules.
+		profile := context.Profile
+		if profile.Level > MaximumLevel || profile.DifficultyFactorBps < MinimumDifficultyFactorBps || profile.DifficultyFactorBps > BasisPointDenominator {
+			return nil, fmt.Errorf("invalid verified nominal level/factor: level=%d difficulty_factor_bps=%d", profile.Level, profile.DifficultyFactorBps)
+		}
+		return &QuotePolicyDecision{
+			PolicyVersion:       version,
+			CandidateEnergy:     new(big.Int).Set(profile.EffectiveEnergy),
+			CandidateLevel:      profile.Level,
+			DifficultyFactorBps: profile.DifficultyFactorBps,
+			CollaborationEnergy: new(big.Int).Set(profile.CollabContribution),
+		}, nil
 	case QuotePolicyVersionV1:
 		return nil, fmt.Errorf("unsupported usdb quote policy version %d", version)
 	default:

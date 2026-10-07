@@ -121,7 +121,7 @@ func loadBTCActivationRegistry(registryID string) (*btcActivationRegistry, error
 		if btcActivationGoldenErr != nil {
 			return
 		}
-		for _, catalog := range [][]byte{btcMinerPassDevelopmentGoldenJSON, btcTestnetV1GoldenJSON} {
+		for _, catalog := range append([][]byte{btcMinerPassDevelopmentGoldenJSON, btcTestnetV1GoldenJSON}, minerPassConformanceCatalogs()...) {
 			registries, err := parseBTCActivationGolden(catalog)
 			if err != nil {
 				btcActivationGoldenErr = err

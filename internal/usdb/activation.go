@@ -249,7 +249,7 @@ func (set ActiveVersionSet) ValidateBTCProfileSurface() error {
 		if err != nil {
 			return err
 		}
-		if expected != "" && value != expected {
+		if expected != "" && value != expected && !supportsMinerPassConformanceContract(set, family, value) {
 			return fmt.Errorf("unsupported %s, have %q want %q", family, value, expected)
 		}
 	}

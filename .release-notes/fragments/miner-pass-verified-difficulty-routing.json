@@ -1,0 +1,26 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "miner-pass-verified-difficulty-routing",
+  "type": "fixed",
+  "scopes": [
+    "consensus",
+    "indexer",
+    "testing"
+  ],
+  "summary": "Preserve activated MinerPass level and difficulty rules through the quote-disabled consensus path",
+  "details": [
+    "When quotes are disabled, miner and validator now use the level and difficulty factor already checked against the BTC-height-selected profile contract. They no longer recalculate those values with a fixed v1 formula after verification.",
+    "The existing public v1 formulas and identities are unchanged. No new production schema, state machine, formula or activation is enabled, and no dataset rebuild or network reset is required.",
+    "Explicitly scoped regtest builds exercise real Core/Ord/BH/indexer/Geth upgrades, independent reward verification, historical checkpoint recovery and repeated cross-boundary reorgs in new nightly and weekly shards. Ordinary binaries reject the test-only contracts."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": true
+  },
+  "references": [
+    "https://github.com/buckyos/usdb/blob/main/doc/UIP/UIP-0017-miner-pass-upgrade-and-legacy-rights.md"
+  ]
+}

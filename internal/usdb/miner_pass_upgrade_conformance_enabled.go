@@ -3,7 +3,10 @@
 
 package usdb
 
-import "fmt"
+import (
+	_ "embed"
+	"fmt"
+)
 
 // Only the explicitly tagged regtest acceptance binary knows these formula names.
 func resolveMinerPassUpgradeFormulaValues(set ActiveVersionSet, profile PassEconomicProfile) (*profileFormulaValues, error) {
@@ -57,4 +60,18 @@ func resolveMinerPassUpgradeFormulaValues(set ActiveVersionSet, profile PassEcon
 		return nil, fmt.Errorf("%w: level have %d want %d; difficulty_factor_bps have %d want %d", ErrProfileDerivedValueMismatch, profile.Level, values.level, profile.DifficultyFactorBps, values.factor)
 	}
 	return values, nil
+}
+
+//go:embed testdata/miner_pass_live_activation_golden.json
+var minerPassLiveGolden []byte
+
+// Only this tagged binary loads the immutable service-test catalog.
+func minerPassConformanceCatalogs() [][]byte { return [][]byte{minerPassLiveGolden} }
+func supportsMinerPassConformanceContract(set ActiveVersionSet, family, value string) bool {
+	scope, err := set.rulesScope()
+	if err != nil || scope == nil || scope.NetworkID != "btc-regtest" || scope.RulesScope != "miner-pass-upgrade-conformance" {
+		return false
+	}
+	return family == "inscription_schema_version" && value == "conformance-miner-pass-schema:901" ||
+		family == "pass_state_machine_version" && value == "conformance-miner-pass-state:no-new-collab"
 }

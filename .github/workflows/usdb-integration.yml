@@ -84,6 +84,7 @@ jobs:
         shard:
           - go-profile
           - go-activation
+          - miner-pass-upgrade
           - balance-history
           - indexer-protocol
           - indexer-reorg
@@ -122,7 +123,7 @@ jobs:
           cache: false
 
       - name: Prepare Go modules
-        if: matrix.shard == 'go-profile' || matrix.shard == 'go-activation'
+        if: matrix.shard == 'go-profile' || matrix.shard == 'go-activation' || matrix.shard == 'miner-pass-upgrade'
         timeout-minutes: 12
         run: >-
           python3 go-ethereum/scripts/usdb/prepare_go_modules.py
@@ -201,6 +202,10 @@ jobs:
             shard: world-soak
             artifact_suffix: world-soak-seed-43
             world_soak_seeds: '43'
+          - name: miner-pass-upgrade-soak
+            shard: miner-pass-upgrade-soak
+            artifact_suffix: miner-pass-upgrade-soak
+            world_soak_seeds: ''
           - name: upstream-fault-matrix
             shard: upstream-fault-matrix
             artifact_suffix: upstream-fault-matrix
@@ -251,7 +256,7 @@ jobs:
           check-latest: false
 
       - name: Prepare Go modules
-        if: matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'release-e2e'
+        if: matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'release-e2e' || matrix.shard == 'miner-pass-upgrade-soak'
         timeout-minutes: 12
         run: >-
           python3 go-ethereum/scripts/usdb/prepare_go_modules.py

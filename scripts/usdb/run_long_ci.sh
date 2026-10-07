@@ -13,6 +13,7 @@ WORK_ROOT=${USDB_LONG_CI_WORK_DIR:-/tmp/usdb-long-ci-work}
 declare -a NIGHTLY_SHARDS=(
   go-profile
   go-activation
+  miner-pass-upgrade
   balance-history
   indexer-protocol
   indexer-reorg
@@ -20,6 +21,7 @@ declare -a NIGHTLY_SHARDS=(
 )
 declare -a WEEKLY_SHARDS=(
   world-soak
+  miner-pass-upgrade-soak
   upstream-fault-matrix
   economic-capacity
   balance-history-extended
@@ -148,6 +150,12 @@ prepare_usdb_service_binaries() {
   local shard="$2"
 
   case "${tier}:${shard}" in
+    nightly:miner-pass-upgrade | weekly:miner-pass-upgrade-soak)
+      run_case miner-pass-upgrade-build \
+        env UPGRADE_TOOLS_DIR="$WORK_ROOT/miner-pass-upgrade-tools" USDB_REPO_DIR="$USDB_REPO_DIR" \
+          "$ROOT_DIR/scripts/usdb/run_miner_pass_upgrade_services.sh" --prepare-only
+      return
+      ;;
     nightly:go-profile | nightly:go-activation | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:upstream-fault-matrix | weekly:release-e2e)
       # Build each package with the same selection used by its later cargo run.
       # A combined build unifies dependency features and does not warm the
@@ -240,6 +248,13 @@ run_nightly() {
           BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
           "$ROOT_DIR/scripts/usdb/run_usdb_profile_anchor_boundary_e2e.sh"
       ;;
+    miner-pass-upgrade)
+      require_regtest_tools
+      run_case miner-pass-upgrade \
+        env WORK_DIR="$WORK_ROOT/miner-pass-upgrade" UPGRADE_TOOLS_DIR="$WORK_ROOT/miner-pass-upgrade-tools" \
+          USDB_REPO_DIR="$USDB_REPO_DIR" BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          "$ROOT_DIR/scripts/usdb/run_miner_pass_upgrade_services.sh" --run-only
+      ;;
     go-activation)
       require_regtest_tools
       run_case activation-upgrade \
@@ -317,6 +332,16 @@ run_weekly() {
           MATRIX_WORK_ROOT="$WORK_ROOT/upstream-matrix" \
           MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/upstream-fault-matrix" \
           bash "$ROOT_DIR/scripts/usdb/run_usdb_upstream_fault_matrix.sh"
+      ;;
+    miner-pass-upgrade-soak)
+      require_regtest_tools
+      local seed
+      for seed in ${MINER_PASS_UPGRADE_SEEDS:-41 42 43}; do
+        run_case "miner-pass-upgrade-seed-$seed" \
+          env WORK_DIR="$WORK_ROOT/miner-pass-upgrade-$seed" UPGRADE_TOOLS_DIR="$WORK_ROOT/miner-pass-upgrade-tools" \
+            MINER_PASS_UPGRADE_SEED="$seed" USDB_REPO_DIR="$USDB_REPO_DIR" BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+            "$ROOT_DIR/scripts/usdb/run_miner_pass_upgrade_services.sh" --run-only
+      done
       ;;
     world-soak)
       require_regtest_tools
