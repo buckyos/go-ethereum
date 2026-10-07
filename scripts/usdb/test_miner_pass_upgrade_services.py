@@ -60,6 +60,18 @@ class LiveUpgradeOracleTests(unittest.TestCase):
                     service.configure(config, catalog)
                 self.assertEqual(config.read_text(), before)
 
+    def test_pinned_capture_passes_registry_to_every_historical_query(self):
+        calls = []
+        def fake(_url, method, params, **_kwargs):
+            calls.append((method, params))
+            return {'pass': {'state': 'active'}} if method == 'get_pass_economic_profile' else {}
+        with patch.object(service, 'rpc', side_effect=fake):
+            service.capture('isolated', ['leader'], [159], 'old-registry')
+        self.assertEqual(len(calls), 7)
+        for method, params in calls:
+            self.assertEqual(params[0]['context'], dict(requested_height=159,
+                expected_state=dict(activation_registry_id='old-registry')), method)
+
     def test_unknown_boundary_check_waits_for_rejection_evidence(self):
         # Execute the actual bounded polling block with a controlled producer.
         import os

@@ -133,8 +133,10 @@ func newFreezerTable(path, name string, disableSnappy, readonly bool) (*freezerT
 // they don't go out of sync.
 func newTable(path string, name string, readMeter metrics.Meter, writeMeter metrics.Meter, sizeGauge metrics.Gauge, maxFilesize uint32, noCompression, readonly bool) (*freezerTable, error) {
 	// Ensure the containing directory exists and open the indexEntry file
-	if err := os.MkdirAll(path, 0755); err != nil {
-		return nil, err
+	if !readonly {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			return nil, err
+		}
 	}
 	var idxName string
 	if noCompression {
@@ -153,17 +155,12 @@ func newTable(path string, name string, readMeter metrics.Meter, writeMeter metr
 		if err != nil {
 			return nil, err
 		}
-		// TODO(rjl493456442) change it to read-only mode. Open the metadata file
-		// in rw mode. It's a temporary solution for now and should be changed
-		// whenever the tail deletion is actually used. The reason for this hack is
-		// the additional meta file for each freezer table is added in order to support
-		// tail deletion, but for most legacy nodes this file is missing. This check
-		// will suddenly break lots of database relevant commands. So the metadata file
-		// is always opened for mutation and nothing else will be written except
-		// the initialization.
-		meta, err = openFreezerFileForAppend(filepath.Join(path, fmt.Sprintf("%s.meta", name)))
+		// Missing legacy metadata needs an explicit writable initialization by
+		// the original node, never an implicit mutation during inspection.
+		meta, err = openFreezerFileForReadOnly(filepath.Join(path, fmt.Sprintf("%s.meta", name)))
 		if err != nil {
-			return nil, err
+			index.Close()
+			return nil, fmt.Errorf("read-only freezer metadata %s: %w", name, err)
 		}
 	} else {
 		index, err = openFreezerFileForAppend(filepath.Join(path, idxName))
@@ -216,6 +213,9 @@ func (t *freezerTable) repair() error {
 	if err != nil {
 		return err
 	}
+	if t.readonly && (stat.Size() == 0 || stat.Size()%indexEntrySize != 0) {
+		return fmt.Errorf("invalid read-only freezer index size: table=%s size=%d", t.name, stat.Size())
+	}
 	if stat.Size() == 0 {
 		if _, err := t.index.Write(buffer); err != nil {
 			return err
@@ -251,9 +251,17 @@ func (t *freezerTable) repair() error {
 	t.itemOffset = uint64(firstIndex.offset)
 
 	// Load metadata from the file
-	meta, err := loadMetadata(t.meta, t.itemOffset)
+	var meta *freezerTableMeta
+	if t.readonly {
+		meta, err = readMetadata(t.meta)
+	} else {
+		meta, err = loadMetadata(t.meta, t.itemOffset)
+	}
 	if err != nil {
 		return err
+	}
+	if t.readonly && meta.VirtualTail < t.itemOffset {
+		return fmt.Errorf("invalid read-only freezer tail: table=%s virtual=%d actual=%d", t.name, meta.VirtualTail, t.itemOffset)
 	}
 	t.itemHidden = meta.VirtualTail
 
@@ -279,6 +287,9 @@ func (t *freezerTable) repair() error {
 
 	// Keep truncating both files until they come in sync
 	contentExp = int64(lastIndex.offset)
+	if t.readonly && contentExp != contentSize {
+		return fmt.Errorf("read-only freezer content mismatch: table=%s indexed=%d stored=%d", t.name, contentExp, contentSize)
+	}
 	for contentExp != contentSize {
 		// Truncate the head file to the last offset pointer
 		if contentExp < contentSize {
@@ -341,11 +352,11 @@ func (t *freezerTable) repair() error {
 	t.headBytes = contentSize
 	t.headId = lastIndex.filenum
 
-	// Delete the leftover files because of head deletion
-	t.releaseFilesAfter(t.headId, true)
-
-	// Delete the leftover files because of tail deletion
-	t.releaseFilesBefore(t.tailId, true)
+	// An inspection must preserve leftover files for the original node's recovery.
+	if !t.readonly {
+		t.releaseFilesAfter(t.headId, true)
+		t.releaseFilesBefore(t.tailId, true)
+	}
 
 	// Close opened files and preopen all files
 	if err := t.preopen(); err != nil {

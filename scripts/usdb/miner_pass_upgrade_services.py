@@ -94,17 +94,18 @@ def core_history(url, cookie, owners, tip):
     return births, balances
 
 
-def capture(url, ids, heights):
+def capture(url, ids, heights, registry=None):
     evidence = {}
     for height in heights:
-        common = dict(view_version=VIEW_VERSION, block_height=height)
-        state = rpc(url,'get_state_ref_at_height',[dict(block_height=height)])
+        context = {'context': dict(requested_height=height, expected_state=dict(activation_registry_id=registry))} if registry else {}
+        common = dict(view_version=VIEW_VERSION, block_height=height, **context)
+        state = rpc(url,'get_state_ref_at_height',[dict(block_height=height, **context)])
         profiles = [rpc(url,'get_pass_economic_profile',[dict(common,pass_id=pid)]) for pid in ids]
         # Invalid mints have an audit/profile but deliberately never create an energy row.
-        energies = [rpc(url,'get_pass_energy',[dict(inscription_id=pid,block_height=height)],
+        energies = [rpc(url,'get_pass_energy',[dict(inscription_id=pid,block_height=height,**context)],
                         expected_error=-32012 if profile['pass']['state'] == 'invalid' else None)
                     for pid, profile in zip(ids,profiles)]
-        audits = [rpc(url,'get_pass_mint_audit',[dict(inscription_id=pid,at_height=height)]) for pid in ids]
+        audits = [rpc(url,'get_pass_mint_audit',[dict(inscription_id=pid,at_height=height,**context)]) for pid in ids]
         candidates = rpc(url,'get_candidate_set_view',[dict(common,limit=100)])
         collabs = rpc(url,'get_collab_breakdown',[dict(common,leader_pass_id=ids[0],limit=100)])
         aggregate = rpc(url,'get_miner_economic_aggregate',[common])
@@ -227,6 +228,7 @@ def main():
     config = sub.add_parser('configure')
     config.add_argument('config',type=Path); config.add_argument('catalog',type=Path)
     dump = sub.add_parser('capture')
+    dump.add_argument('--registry');
     dump.add_argument('--url',required=True); dump.add_argument('--output',type=Path,required=True)
     dump.add_argument('--ids',nargs='+',required=True); dump.add_argument('--owners',nargs='+')
     dump.add_argument('--heights',nargs='+',type=int,default=HEIGHTS)
@@ -250,7 +252,7 @@ def main():
     elif args.command == 'configure':
         configure(args.config,args.catalog)
     elif args.command == 'capture':
-        evidence = capture(args.url,args.ids,args.heights)
+        evidence = capture(args.url,args.ids,args.heights,args.registry)
         if args.owners:
             check_reference(evidence,args.ids,args.owners,args.core_url,args.cookie)
         args.output.write_text(json.dumps(evidence,indent=2,sort_keys=True)+'\n')

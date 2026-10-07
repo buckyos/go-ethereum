@@ -69,8 +69,8 @@ func loadMinerPassServiceRegistry(t *testing.T) btcActivationRegistry {
 	if _, err := parseBTCActivationGolden(minerPassServiceTestGolden); err != nil {
 		t.Fatal(err)
 	}
-	if len(artifact.Registries) != 1 || len(artifact.Registries[0].Activations) != 7 {
+	if len(artifact.Registries) != 2 || len(artifact.Registries[0].Activations) != 1 || len(artifact.Registries[1].Activations) != 7 {
 		t.Fatal("incomplete live service activation schedule")
 	}
-	return artifact.Registries[0]
+	return artifact.Registries[1]
 }

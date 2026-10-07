@@ -220,3 +220,90 @@ func TestCorruptDatabaseIsNotAutomaticallyRecovered(t *testing.T) {
 		}
 	}
 }
+
+// Real running nodes create ancient/chain even before any block is frozen.
+func TestOfflineUpgradeWithReadOnlyAncientFiles(t *testing.T) {
+	root, source, target := fixture(t)
+	path := filepath.Join(root, "geth/chaindata")
+	db, err := rawdb.NewLevelDBDatabaseWithFreezer(path, 16, 16, filepath.Join(path, "ancient"), "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawdb.WriteAncientBlocks(db, []*types.Block{source.ToBlock()}, []types.Receipts{nil}, source.Difficulty); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ancient := filepath.Join(path, "ancient")
+	before := datasetFiles(t, root)
+	err = filepath.Walk(ancient, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0400)
+		if info.IsDir() {
+			mode = 0500
+		}
+		t.Cleanup(func() {
+			if info.IsDir() {
+				os.Chmod(p, 0700)
+			} else {
+				os.Chmod(p, 0600)
+			}
+		})
+		return os.Chmod(p, mode)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Run(root, source, target, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, datasetFiles(t, root)) {
+		t.Fatal("freezer preflight changed files")
+	}
+	if _, err := Run(root, source, target, report, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadOnlyAncientFailuresNeverRepairOrInitialize(t *testing.T) {
+	for _, failure := range []string{"missing-meta", "empty-meta", "invalid-index", "dangling-content"} {
+		t.Run(failure, func(t *testing.T) {
+			root, source, target := fixture(t)
+			path := filepath.Join(root, "geth/chaindata")
+			db, err := rawdb.NewLevelDBDatabaseWithFreezer(path, 16, 16, filepath.Join(path, "ancient"), "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ancient := filepath.Join(path, "ancient/chain")
+			switch failure {
+			case "missing-meta":
+				err = os.Remove(filepath.Join(ancient, "headers.meta"))
+			case "empty-meta":
+				err = os.WriteFile(filepath.Join(ancient, "headers.meta"), nil, 0600)
+			case "invalid-index":
+				err = os.WriteFile(filepath.Join(ancient, "headers.cidx"), []byte{1}, 0600)
+			case "dangling-content":
+				err = os.WriteFile(filepath.Join(ancient, "headers.0000.cdat"), []byte{1}, 0600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := datasetFiles(t, root)
+			for _, apply := range []bool{false, true} {
+				if _, err := Run(root, source, target, &Report{}, apply); err == nil {
+					t.Fatal("damaged ancient files were accepted")
+				}
+				if !reflect.DeepEqual(before, datasetFiles(t, root)) {
+					t.Fatal("ancient rejection changed dataset files")
+				}
+			}
+		})
+	}
+}
