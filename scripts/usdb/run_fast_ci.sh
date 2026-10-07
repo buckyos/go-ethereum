@@ -110,6 +110,8 @@ run_go_checks() {
       ./internal/usdb
       ./internal/usdbacceptance
       ./internal/usdbrelease
+      ./internal/usdbupgrade
+      ./ethdb/leveldb
       ./internal/peercheck
       ./core/usdbstate
       ./core
@@ -135,6 +137,8 @@ run_go_checks() {
         ./internal/usdb \
         ./internal/usdbacceptance \
         ./internal/usdbrelease \
+        ./internal/usdbupgrade \
+        ./ethdb/leveldb \
         ./core/usdbstate \
         ./params
       usdb_go_with_geth_linker_compat test ./core/forkid
@@ -184,7 +188,9 @@ run_go_checks() {
         usdb_go_with_geth_linker_compat test \
           ./internal/usdb \
           ./internal/usdbacceptance \
-          ./internal/usdbrelease
+          ./internal/usdbrelease \
+          ./internal/usdbupgrade \
+          ./ethdb/leveldb
         usdb_go_with_geth_linker_compat test ./node -run '^Test(AdminPeersWithUnresolvedDNS|PersistentNodesKeepUnresolvedDNS)$'
         usdb_go_with_geth_linker_compat test ./eth/ethconfig ./cmd/utils
         usdb_go_with_geth_linker_compat test ./cmd/geth \

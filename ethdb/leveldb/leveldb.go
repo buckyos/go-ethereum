@@ -107,6 +107,24 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 // metrics reporting should use for surfacing internal stats.
 // The customize function allows the caller to modify the leveldb options.
 func NewCustom(file string, namespace string, customize func(options *opt.Options)) (*Database, error) {
+	return newCustom(file, namespace, customize, true)
+}
+
+// NewForOfflineUpgrade opens existing data without implicit corruption recovery.
+// A failed upgrade inspection must preserve evidence instead of repairing the DB.
+func NewForOfflineUpgrade(file string, readonly bool) (*Database, error) {
+	return newCustom(file, "", func(options *opt.Options) {
+		options.ReadOnly = readonly
+		options.ErrorIfMissing = true
+	}, false)
+}
+
+// PutSync durably records a small metadata update before an external journal advances.
+func (db *Database) PutSync(key, value []byte) error {
+	return db.db.Put(key, value, &opt.WriteOptions{Sync: true})
+}
+
+func newCustom(file string, namespace string, customize func(options *opt.Options), recoverCorruption bool) (*Database, error) {
 	options := configureOptions(customize)
 	logger := log.New("database", file)
 	usedCache := options.GetBlockCacheCapacity() + options.GetWriteBuffer()*2
@@ -118,7 +136,7 @@ func NewCustom(file string, namespace string, customize func(options *opt.Option
 
 	// Open the db and recover any potential corruptions
 	db, err := leveldb.OpenFile(file, options)
-	if _, corrupted := err.(*errors.ErrCorrupted); corrupted {
+	if _, corrupted := err.(*errors.ErrCorrupted); corrupted && recoverCorruption && !options.GetReadOnly() {
 		db, err = leveldb.RecoverFile(file, nil)
 	}
 	if err != nil {

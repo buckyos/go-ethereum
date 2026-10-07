@@ -228,6 +228,7 @@ func init() {
 		usdbBootstrapAcceptanceCommand,
 		usdbReleaseManifestCommand,
 		usdbPeerCheckCommand,
+		usdbUpgradeConfigCommand,
 		// See accountcmd.go:
 		accountCommand,
 		walletCommand,
