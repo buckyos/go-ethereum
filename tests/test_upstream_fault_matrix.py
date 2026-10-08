@@ -16,7 +16,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/usdb"))
 from upstream_fault_matrix import (Matrix, Node, RECOVERY_ENV, RPCError, compare_chain, ports, validate_fault,
                                    validate_ord_independence, validate_interrupted_recovery,
-                                   validate_transfer_event, reject_orphan_selector, validate_auto_recovery)
+                                   validate_transfer_event, reject_orphan_selector, validate_auto_recovery,
+                                   recovery_startup_diagnostic, validate_recovery_startup_failure)
 
 
 class FaultCoverageTests(unittest.TestCase):
@@ -169,6 +170,92 @@ class AutomaticRecoveryTests(unittest.TestCase):
         matrix.check_alive = lambda: self.fail("expired recovery should not keep polling")
         with self.assertRaisesRegex(ValueError, "timeout"):
             matrix.wait("upstream recovery", lambda: self.fail("must not extend recovery budget"))
+
+
+class RecoveryStartupFailureTests(unittest.TestCase):
+    def evidence(self):
+        boundary = {"pending_height": 156, "synced_height": 156, "epoch": 2}
+        identity = {"pid": 100, "start_ticks": 200, "starts": 1}
+        return {"recovery_before": boundary, "recovery_after": dict(boundary), "fork_epoch": 1,
+                "exit_code": 1, "diagnostic": recovery_startup_diagnostic(156), "hook_hits": 1,
+                "validator_identity_before": identity, "validator_identity_after": dict(identity),
+                "validator_before": 10, "validator_after": 10, "profile_errors": 1,
+                "transport_failures": 1, "profile_successes": 0}
+
+    def test_startup_failure_requires_exact_fault_and_unchanged_recovery(self):
+        validate_recovery_startup_failure(self.evidence())
+        for field, value in (("exit_code", 0), ("exit_code", -9), ("hook_hits", 0),
+                             ("diagnostic", "database is corrupt"),
+                             ("diagnostic", recovery_startup_diagnostic(157)),
+                             ("profile_errors", 0), ("transport_failures", 0),
+                             ("profile_successes", 1), ("validator_after", 11), ("fork_epoch", 2)):
+            with self.subTest(field=field, value=value):
+                broken = {**self.evidence(), field: value}
+                with self.assertRaises(ValueError):
+                    validate_recovery_startup_failure(broken)
+        for field, value in (("pending_height", None), ("pending_height", 157),
+                             ("synced_height", 157), ("epoch", 3)):
+            with self.subTest(boundary=field):
+                broken = self.evidence()
+                broken["recovery_after"][field] = value
+                with self.assertRaises(ValueError):
+                    validate_recovery_startup_failure(broken)
+        broken = self.evidence()
+        broken["validator_identity_after"]["pid"] += 1
+        with self.assertRaises(ValueError):
+            validate_recovery_startup_failure(broken)
+
+    def node(self, root):
+        matrix = Matrix.__new__(Matrix)
+        matrix.args = SimpleNamespace(work_dir=root, output_dir=root, port_base=22400)
+        matrix.deadline = time.monotonic() + 10
+        matrix.log = lambda _: None
+        node = Node(matrix, "b", 1)
+        matrix.nodes = [node]
+        return node
+
+    def test_expected_exit_requires_fresh_diagnostic_and_exact_exit_code(self):
+        diagnostic = recovery_startup_diagnostic(156)
+        for code, text, accepted in ((1, diagnostic, True), (0, diagnostic, False),
+                                     (1, "unrelated failure", False)):
+            with self.subTest(code=code, text=text), tempfile.TemporaryDirectory() as work:
+                node = self.node(Path(work))
+                log = Path(work) / "b-usdb-indexer.log"
+                log.write_text(diagnostic + "\n")
+                offset = log.stat().st_size
+                node.start("usdb-indexer", [sys.executable, "-c",
+                           "import sys; print(sys.argv[1]); sys.exit(int(sys.argv[2]))", text, str(code)])
+                if accepted:
+                    self.assertEqual(node.expect_exit("usdb-indexer", diagnostic, offset), 1)
+                else:
+                    with self.assertRaises(ValueError):
+                        node.expect_exit("usdb-indexer", diagnostic, offset)
+                self.assertNotIn("usdb-indexer", node.processes)
+
+    def test_expected_exit_timeout_keeps_child_owned_for_cleanup(self):
+        with tempfile.TemporaryDirectory() as work:
+            node = self.node(Path(work))
+            node.start("usdb-indexer", [sys.executable, "-c", "import time; time.sleep(30)"])
+            try:
+                with patch.object(node.matrix, "wait", side_effect=ValueError("timeout")):
+                    with self.assertRaisesRegex(ValueError, "timeout"):
+                        node.expect_exit("usdb-indexer", "fault", 0)
+                self.assertIn("usdb-indexer", node.processes)
+                self.assertIsNone(node.processes["usdb-indexer"].poll())
+            finally:
+                node.stop("usdb-indexer")
+
+    def test_expected_exit_still_rejects_unrelated_service_death(self):
+        with tempfile.TemporaryDirectory() as work:
+            node = self.node(Path(work))
+            node.start("balance-history", [sys.executable, "-c", "raise SystemExit(2)"])
+            node.processes["balance-history"].wait(timeout=5)
+            node.start("usdb-indexer", [sys.executable, "-c", "import time; time.sleep(30)"])
+            try:
+                with self.assertRaisesRegex(ValueError, "unexpected exit: b/balance-history"):
+                    node.expect_exit("usdb-indexer", "fault", 0)
+            finally:
+                node.stop("usdb-indexer")
 
 
 class FullReplayTests(unittest.TestCase):
@@ -348,7 +435,11 @@ class RecoveryLifecycleTests(unittest.TestCase):
                 self.assertIsNone(matrix.pending_recovery_height())
                 conn.execute("INSERT INTO state VALUES ('upstream_reorg_recovery_pending_height', '156')")
                 conn.commit()
+                conn.execute("INSERT INTO state VALUES ('btc_synced_block_height', '156')")
+                conn.execute("INSERT INTO state VALUES ('upstream_reorg_epoch', '2')")
+                conn.commit()
                 before = path.read_bytes()
+                self.assertEqual(matrix.recovery_state(), {"pending_height": 156, "synced_height": 156, "epoch": 2})
                 self.assertEqual(matrix.pending_recovery_height(), 156)
                 self.assertEqual(path.read_bytes(), before)
                 conn.execute("DELETE FROM state")

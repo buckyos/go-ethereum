@@ -24,7 +24,7 @@ from configure_usdb_pow_calibration_genesis import configure_genesis
 from verify_usdb_profile_e2e import decode_selector, SYSTEM_STATE_SLOTS, USDB_SYSTEM_STATE_ADDRESS
 
 
-SCHEMA = "usdb-independent-upstream-matrix:v4"
+SCHEMA = "usdb-independent-upstream-matrix:v5"
 AUTO_RECOVERY_TIMEOUT_SEC = 90
 CASES = ("baseline", "indexer-crash", "crash-recovery", "balance-crash", "balance-recovery",
          "ord-outage", "ord-recovery", "ord-source-outage", "ord-source-recovery",
@@ -108,6 +108,32 @@ def validate_interrupted_recovery(evidence):
     require(evidence["profile_errors"] > 0 and evidence["validator_after"] == evidence["validator_before"],
             "validator did not reject while recovery was pending")
     require(evidence["exit_code"] == -signal.SIGKILL, "recovery process was not interrupted")
+
+
+def recovery_startup_diagnostic(height):
+    return ("Failed to restore indexer runtime state: Failed to inject pending upstream reorg transfer reload fault: "
+            f"target_height={height}, error=Injected reorg recovery transfer reload failure: target_height={height},")
+
+
+def validate_recovery_startup_failure(evidence):
+    """Startup recovery must fail closed without losing the durable recovery intent."""
+    before, after = evidence["recovery_before"], evidence["recovery_after"]
+    height = before["pending_height"]
+    require(type(height) is int and height > 0 and before["synced_height"] == height,
+            "startup recovery was not durably pending at the committed boundary")
+    require(before == after and before["epoch"] > evidence["fork_epoch"],
+            "failed startup changed the recovery marker, committed height or epoch")
+    require(evidence["exit_code"] == 1 and evidence["diagnostic"] == recovery_startup_diagnostic(height),
+            "startup did not fail for the injected transfer recovery fault")
+    require(evidence["hook_hits"] > 0, "restart did not reach a fresh transfer recovery hook")
+    identity = evidence["validator_identity_before"]
+    require(identity == evidence["validator_identity_after"] and identity["pid"] > 0
+            and identity["start_ticks"] > 0 and identity["starts"] == 1,
+            "startup fault replaced the validator process")
+    require(evidence["validator_before"] == evidence["validator_after"]
+            and evidence["profile_errors"] > 0 and evidence["transport_failures"] > 0
+            and evidence["profile_successes"] == 0,
+            "validator did not refuse unavailable startup recovery")
 
 
 def validate_auto_recovery(evidence, failures, successes):
@@ -344,6 +370,24 @@ class Node:
             require(False, f"{self.name}/{service} failed graceful shutdown")
         return process.returncode
 
+    def expect_exit(self, service, diagnostic, log_offset):
+        """Observe one intentional startup failure while still supervising every other service."""
+        process = self.processes.pop(service)
+        try:
+            self.matrix.wait(f"{self.name}/{service} expected startup failure",
+                             lambda: process.poll() is not None, seconds=30)
+            require(process.returncode == 1,
+                    f"{self.name}/{service} expected exit 1, got {process.returncode}")
+            with (self.matrix.args.output_dir / f"{self.name}-{service}.log").open("rb") as log:
+                log.seek(log_offset)
+                output = log.read().decode(errors="replace")
+            require(diagnostic in output, f"{self.name}/{service} exited without the expected startup diagnostic")
+            return process.returncode
+        finally:
+            # A timeout must leave the live child owned by normal cleanup.
+            if process.poll() is None:
+                self.processes[service] = process
+
     def validator_identity(self):
         """Check process continuity, including Linux start time to detect PID reuse."""
         process = self.processes["geth"]
@@ -359,8 +403,8 @@ class Node:
         env = {key: value for key, value in os.environ.items() if key not in RECOVERY_ENV}
         if recovery_stage is not None:
             require(package == "usdb-indexer" and recovery_stage in ("energy", "transfer"), "invalid recovery hook")
-            # Existing regtest hooks keep the persisted recovery phase pending;
-            # the matrix then kills the real process at that observed boundary.
+            # In the running loop the hook preserves a pending phase for SIGKILL;
+            # during init the same fault must abort before opening the RPC service.
             env[RECOVERY_ENV[0 if recovery_stage == "energy" else 1]] = "100000"
         self.start(package, [str(binary),
                             "--root-dir", str(self.root / package), "--skip-process-lock"], env=env)
@@ -905,13 +949,17 @@ class Matrix:
                 "raw_energy": actual["passes"][self.args.pass_id]["profile"]["pass"]["raw_energy"],
                 "state_sha256": self.digest(actual)}
 
-    def pending_recovery_height(self):
+    def recovery_state(self):
         path = self.b.root / "usdb-indexer/data/miner_pass.db"
-        # Read-only SQLite observes the durable marker without changing it or
-        # relying exclusively on the RPC's in-memory readiness flags.
+        # Startup failures have no RPC; inspect the durable intent without writing.
+        keys = {"pending_height": "upstream_reorg_recovery_pending_height",
+                "synced_height": "btc_synced_block_height", "epoch": "upstream_reorg_epoch"}
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as conn:
-            row = conn.execute("SELECT value FROM state WHERE name = 'upstream_reorg_recovery_pending_height'").fetchone()
-        return None if row is None else int(row[0])
+            rows = dict(conn.execute("SELECT name, value FROM state WHERE name IN (?, ?, ?)", tuple(keys.values())))
+        return {field: int(rows[key]) if key in rows else None for field, key in keys.items()}
+
+    def pending_recovery_height(self):
+        return self.recovery_state()["pending_height"]
 
     def recovery_hook_hits(self, stage, height):
         token = "energy" if stage == "energy" else "transfer reload"
@@ -941,6 +989,38 @@ class Matrix:
         validate_interrupted_recovery(evidence)
         self.passed(phase, **evidence)
         return evidence["epoch"]
+
+    def reject_pending_recovery_restart(self, fork_epoch, expected_height):
+        phase = "recovery-reinterrupted"
+        self.phase(phase)
+        previous = self.recovery_state()
+        require(previous["pending_height"] == previous["synced_height"] == expected_height,
+                "unexpected durable boundary before recovery restart")
+        height, identity = self.b.height(), self.b.validator_identity()
+        hits_before = self.recovery_hook_hits("transfer", expected_height)
+        log = self.args.output_dir / "b-usdb-indexer.log"
+        offset = log.stat().st_size
+        diagnostic = recovery_startup_diagnostic(expected_height)
+        self.b.start_indexer(recovery_stage="transfer")
+        exit_code = self.b.expect_exit("usdb-indexer", diagnostic, offset)
+
+        def rejected():
+            require(self.b.height() == height, "validator advanced through a failed recovery startup")
+            return any(call.get("transport_closed") for call in self.profile_errors(phase, {-32098}))
+        self.wait("validator refuses failed recovery startup", rejected, seconds=45)
+        calls = self.b.proxy.profile_calls(phase)
+        failures = self.profile_errors(phase, {-32098})
+        evidence = {"stage": "transfer", "recovery_before": previous, "recovery_after": self.recovery_state(),
+                    "fork_epoch": fork_epoch, "exit_code": exit_code, "diagnostic": diagnostic,
+                    "hook_hits": self.recovery_hook_hits("transfer", expected_height) - hits_before,
+                    "validator_before": height, "validator_after": self.b.height(),
+                    "validator_identity_before": identity, "validator_identity_after": self.b.validator_identity(),
+                    "profile_errors": len(failures),
+                    "transport_failures": sum(bool(call.get("transport_closed")) for call in failures),
+                    "profile_successes": sum("error" not in call for call in calls)}
+        validate_recovery_startup_failure(evidence)
+        self.passed(phase, **evidence)
+        return evidence["recovery_after"]["epoch"]
 
     def run(self):
         self.phase("baseline")
@@ -1066,8 +1146,7 @@ class Matrix:
         self.wait("B balance-history adopted canonical fork", lambda:
                   self.b.rpc("balance-history")("get_snapshot_info")["stable_block_hash"] == self.frontier(self.a)[1])
         epoch = self.interrupt_pending_recovery("recovery-interrupted", "energy", fork_epoch, fork_height - 1)
-        self.b.start_indexer(recovery_stage="transfer")
-        resumed_epoch = self.interrupt_pending_recovery("recovery-reinterrupted", "transfer", fork_epoch, fork_height - 1)
+        resumed_epoch = self.reject_pending_recovery_restart(fork_epoch, fork_height - 1)
         require(resumed_epoch == epoch, "resuming the same recovery incremented reorg epoch")
 
         self.phase("fork-recovery")
