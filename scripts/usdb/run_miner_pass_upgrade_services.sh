@@ -67,6 +67,7 @@ source "$SCRIPT_DIR/run_usdb_profile_e2e.sh"
 HELPER="$SCRIPT_DIR/miner_pass_upgrade_services.py"
 CATALOG="$USDB_REPO_DIR/tests/fixtures/miner-pass-upgrade/live-catalog.json"
 SOURCE_CATALOG="$USDB_REPO_DIR/tests/fixtures/miner-pass-upgrade/live-source-catalog.json"
+MIDDLE_CATALOG="$USDB_REPO_DIR/tests/fixtures/miner-pass-upgrade/live-middle-catalog.json"
 GOLDEN="$ROOT_DIR/internal/usdb/testdata/miner_pass_live_activation_golden.json"
 INDEXER_BIN="$UPGRADE_TOOLS_DIR/indexer-conformance"
 trap cleanup EXIT
@@ -116,7 +117,11 @@ write_mint() {
   python3 - "$output" "$version" "$field" "$value" "$prev" <<'PY'
 import json,sys
 from pathlib import Path
-Path(sys.argv[1]).write_text(json.dumps(dict(p='usdb',op='mint',v=int(sys.argv[2]),prev=[sys.argv[5]] if sys.argv[5] else [],**{sys.argv[3]:sys.argv[4]})))
+version=int(sys.argv[2])
+binding={sys.argv[3]:sys.argv[4]}
+payload=dict(p='usdb',op='mint',v=version,prev=[sys.argv[5]] if sys.argv[5] else [])
+payload.update(dict(binding=binding) if version == 902 else binding)
+Path(sys.argv[1]).write_text(json.dumps(payload))
 PY
 }
 mint() {
@@ -156,7 +161,7 @@ regtest_wait_until_ord_server_synced_to_bitcoind
 regtest_prepare_ord_wallets
 funding=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")
 # Separate cardinal outputs let Ord select the same authorized source repeatedly.
-for _ in 1 2 3 4; do regtest_fund_address "$funding" 3; done
+for _ in 1 2 3 4 5; do regtest_fund_address "$funding" 3; done
 confirm
 owner=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")
 fixed_owner=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")
@@ -172,7 +177,9 @@ regtest_fund_address "$fixed_owner" "$(plan_value "d['deposits'][1]")"
 regtest_fund_address "$address_owner" "$(plan_value "d['deposits'][2]")"
 confirm
 regtest_ensure_stable_height_reachable 159
+# Both upgrade intervals plus the final operations exceed the default 64-block undo window.
 regtest_create_balance_history_config
+sed -i '/^\[sync\]$/a undo_retention_blocks = 256' "$BALANCE_HISTORY_ROOT/config.toml"
 regtest_create_usdb_indexer_config
 python3 "$HELPER" configure "$USDB_INDEXER_ROOT/config.json" "$SOURCE_CATALOG"
 regtest_start_balance_history
@@ -208,8 +215,8 @@ cp -a "$DATADIR" "$WORK_DIR/pre-upgrade-chain"
 # every database byte intact, including the service which passed its preflight.
 stage_upgrade() {
   python3 "$PROTOCOL_HELPER" stage --root "$RUN_ROOT/$1" --indexer "$2" --chain "$3" \
-    --genesis "$GENESIS_JSON" --source-catalog "$SOURCE_CATALOG" --target-catalog "$CATALOG" \
-    --genesis-hash "$genesis_hash" --checkpoint "$4" --tools "$UPGRADE_TOOLS_DIR"
+    --genesis "$GENESIS_JSON" --source-catalog "${5:-$SOURCE_CATALOG}" --target-catalog "${6:-$MIDDLE_CATALOG}" \
+    --genesis-hash "$genesis_hash" --checkpoint "$4" --btc-height "${7:-159}" --tools "$UPGRADE_TOOLS_DIR"
 }
 cp -a "$USDB_INDEXER_ROOT" "$WORK_DIR/late-chain-indexer"
 cp -a "$DATADIR" "$WORK_DIR/late-chain-data"
@@ -230,10 +237,8 @@ USDB_INDEXER_ROOT="$source_indexer_root"
 stage_upgrade protocol-upgrade "$USDB_INDEXER_ROOT" "$DATADIR" "$registry_checkpoint"
 python3 "$PROTOCOL_HELPER" exercise "$RUN_ROOT/protocol-upgrade"
 USDB_INDEXER_ROOT="$USDB_INDEXER_ROOT-adopted"
-python3 "$HELPER" configure "$USDB_INDEXER_ROOT/config.json" "$CATALOG"
+python3 "$HELPER" configure "$USDB_INDEXER_ROOT/config.json" "$MIDDLE_CATALOG"
 cp "$RUN_ROOT/protocol-upgrade/target-kit/docker/networks/usdb-testnet-v999/usdb-genesis.json" "$GENESIS_JSON"
-# The independent validator starts fresh with the entire canonical checkpoint history.
-run_geth init --datadir "$VALIDATOR_DATADIR" "$GENESIS_JSON" >"$RUN_ROOT/validator-init.log" 2>&1
 # An ordinary binary runs before H, then must stop progressing at H.
 INDEXER_BIN="$UPGRADE_TOOLS_DIR/indexer-default"
 regtest_start_usdb_indexer
@@ -278,6 +283,46 @@ regtest_start_usdb_indexer
 regtest_wait_usdb_rpc_ready
 advance 182
 mine_epoch
+# Accept a flat schema-901 pass during the middle registry, before announcing 902.
+intermediate_owner=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")
+intermediate=$(mint middle-schema 901 usdb_main "$MINER_PASS_USDB_MAIN" "$intermediate_owner" "$funding")
+confirm
+advance 209
+mine_epoch
+middle_registry=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["current_registry_id"])' "$MIDDLE_CATALOG")
+capture_middle_prefix() {
+  python3 "$HELPER" capture --url "http://127.0.0.1:$USDB_INDEXER_RPC_PORT" --ids "$leader" "$fixed" "$address_collab" "$intermediate" \
+    --heights 209 --registry "$middle_registry" --output "$RUN_ROOT/$1.json"
+}
+capture_middle_prefix before-second-adoption
+second_chain_head=$(usdb_chain_current_height)
+second_registry_checkpoint=$((second_chain_head+1))
+regtest_stop_process "$GETH_PID"
+GETH_PID=""
+regtest_stop_usdb_indexer
+cp -a "$USDB_INDEXER_ROOT" "$WORK_DIR/second-upgrade-indexer"
+# The first revision has already executed. Repeat actual container preflight/apply,
+# process-exit recovery, inode preservation and marker publication for R2 -> R3.
+stage_upgrade protocol-upgrade-second "$USDB_INDEXER_ROOT" "$DATADIR" "$second_registry_checkpoint" "$MIDDLE_CATALOG" "$CATALOG" 209
+python3 "$PROTOCOL_HELPER" exercise "$RUN_ROOT/protocol-upgrade-second"
+USDB_INDEXER_ROOT="$USDB_INDEXER_ROOT-adopted"
+python3 "$HELPER" configure "$USDB_INDEXER_ROOT/config.json" "$CATALOG"
+cp "$RUN_ROOT/protocol-upgrade-second/target-kit/docker/networks/usdb-testnet-v999/usdb-genesis.json" "$GENESIS_JSON"
+regtest_start_usdb_indexer
+regtest_wait_usdb_rpc_ready
+capture_prefix after-second-adoption-source
+python3 "$HELPER" compare "$RUN_ROOT/before-adoption.json" "$RUN_ROOT/after-second-adoption-source.json"
+capture_middle_prefix after-second-adoption
+python3 "$HELPER" compare "$RUN_ROOT/before-second-adoption.json" "$RUN_ROOT/after-second-adoption.json"
+# A fresh peer verifies both USDB checkpoint ranges against the final complete catalog.
+run_geth init --datadir "$VALIDATOR_DATADIR" "$GENESIS_JSON" >"$RUN_ROOT/validator-init.log" 2>&1
+advance 212
+usdb_chain_start_node true "${GETH_CMD[@]}"
+usdb_chain_wait_rpc_ready
+usdb_chain_wait_block_height "$((second_registry_checkpoint+1))" >/dev/null
+usdb_chain_stop_mining
+sleep 1
+regtest_assert_usdb_pass_snapshot_state "$intermediate" 212 active
 record continuous
 # Compare the independent validator's complete header/state root, then audit rewards separately.
 final_height=$(usdb_chain_current_height)
@@ -287,7 +332,7 @@ balance=$(regtest_json_expr "$(usdb_chain_rpc_call eth_getBalance "[\"$USDB_CHAI
 python3 "$SCRIPT_DIR/verify_usdb_profile_e2e.py" --blocks "$RUN_ROOT/blocks.json" \
   --coinbase "$USDB_CHAIN_MINER_ADDRESS" --balance-hex "$balance" \
   --usdb-chain-rpc-url "http://$HTTP_ADDR:$HTTP_PORT" --usdb-indexer-rpc-url "http://127.0.0.1:$USDB_INDEXER_RPC_PORT" \
-  --miner-pass-upgrade-golden "$GOLDEN" --miner-pass-registry-checkpoint "$registry_checkpoint" >"$RUN_ROOT/rewards.jsonl"
+  --miner-pass-upgrade-golden "$GOLDEN" --miner-pass-registry-checkpoints "$registry_checkpoint" "$second_registry_checkpoint" >"$RUN_ROOT/rewards.jsonl"
 regtest_stop_process "$GETH_PID"
 GETH_PID=""
 run_geth --datadir "$DATADIR" export "$RUN_ROOT/canonical.rlp" >"$RUN_ROOT/export.log" 2>&1
@@ -301,7 +346,7 @@ fi
 grep -F 'BTC activation registry not supported' "$RUN_ROOT/ordinary-geth.log" >/dev/null
 # A new schema can inherit an old-schema Leader. The tightened state rule rejects new collabs.
 invalid_owner=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")
-invalid=$(mint rejected-collab 901 leader_pass_id "$leader" "$invalid_owner" "$funding")
+invalid=$(mint rejected-collab 902 leader_pass_id "$leader" "$invalid_owner" "$funding")
 confirm
 new_owner=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME")
 # Use a dedicated small source coin; Ord's normal largest-coin selection would
@@ -312,7 +357,7 @@ confirm
 source_vout=$("$BITCOIN_CLI_BIN" -regtest -datadir="$BITCOIN_DIR" -rpcport="$BTC_RPC_PORT" \
   -rpcwallet="$ORD_WALLET_NAME" listunspent 1 | python3 -c \
   'import json,sys; rows=[r for r in json.load(sys.stdin) if r["txid"]==sys.argv[1] and r["address"]==sys.argv[2]]; assert len(rows)==1; print(rows[0]["vout"])' "$source_txid" "$owner")
-write_mint "$WORK_DIR/successor.json" 901 usdb_main "$MINER_PASS_USDB_MAIN" "$leader"
+write_mint "$WORK_DIR/successor.json" 902 usdb_main "$MINER_PASS_USDB_MAIN" "$leader"
 regtest_run_ord_wallet_named "$ORD_WALLET_NAME" inscribe --fee-rate "$ORD_FEE_RATE" \
   --file "$WORK_DIR/successor.json" --destination "$new_owner" --satpoint "$source_txid:$source_vout:0" >"$RUN_ROOT/successor.ord-result.json"
 child=$(regtest_extract_inscription_id "$(cat "$RUN_ROOT/successor.ord-result.json")")
@@ -327,13 +372,14 @@ advance "$through"
 regtest_assert_usdb_pass_snapshot_state "$invalid" "$through" invalid
 regtest_assert_usdb_pass_snapshot_state "$leader" "$through" consumed
 regtest_assert_usdb_pass_snapshot_state "$child" "$through" active
+regtest_assert_usdb_pass_snapshot_state "$intermediate" "$through" active
 regtest_assert_usdb_pass_snapshot_state "$fixed" "$through" dormant
 regtest_assert_usdb_pass_snapshot_state "$address_collab" "$through" burned
 regtest_assert_json_expr "$(regtest_get_pass_economic_profile_response "$child" "$through")" "int(data['result']['pass']['raw_energy']) > 0" True
 capture_final() {
   record "$1-history"
   python3 "$HELPER" capture --url "http://127.0.0.1:$USDB_INDEXER_RPC_PORT" --output "$RUN_ROOT/$1-final.json" \
-    --ids "$leader" "$fixed" "$address_collab" "$child" "$invalid" --heights "$through"
+    --ids "$leader" "$fixed" "$address_collab" "$intermediate" "$child" "$invalid" --heights "$through"
 }
 python3 "$HELPER" inheritance --url "http://127.0.0.1:$USDB_INDEXER_RPC_PORT" \
   --core-url "http://127.0.0.1:$BTC_RPC_PORT" --cookie "$BITCOIN_DIR/regtest/.cookie" \
@@ -349,7 +395,7 @@ capture_final restarted
 python3 "$HELPER" compare "$RUN_ROOT/original-final.json" "$RUN_ROOT/restarted-final.json"
 python3 "$HELPER" compare "$RUN_ROOT/continuous.json" "$RUN_ROOT/restarted-history.json"
 original_root="$USDB_INDEXER_ROOT"
-for checkpoint in pre-upgrade-indexer middle-indexer clean-indexer; do
+for checkpoint in pre-upgrade-indexer middle-indexer second-upgrade-indexer clean-indexer; do
   regtest_stop_usdb_indexer
   USDB_INDEXER_ROOT="$WORK_DIR/$checkpoint"
   if [[ "$checkpoint" == clean-indexer ]]; then
@@ -378,6 +424,7 @@ regtest_assert_usdb_pass_snapshot_state "$leader" "$reorg_height" active
 regtest_assert_usdb_pass_snapshot_state "$fixed" "$reorg_height" active
 regtest_assert_usdb_pass_snapshot_state "$address_collab" "$reorg_height" active
 regtest_assert_usdb_pass_snapshot_missing "$child" "$reorg_height"
+regtest_assert_usdb_pass_snapshot_missing "$intermediate" "$reorg_height"
 regtest_assert_usdb_pass_snapshot_missing "$invalid" "$reorg_height"
 record "reorg-$round"
 done
@@ -410,16 +457,16 @@ def sha(path):
     with path.open('rb') as stream:
         for block in iter(lambda:stream.read(1024*1024),b''): h.update(block)
     return h.hexdigest()
-report=dict(schema_version='miner-pass-live-upgrade:v2',status='passed',
+report=dict(schema_version='miner-pass-live-upgrade:v3',status='passed',
     source={str(repo):dict(revision=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip(),dirty=bool(subprocess.check_output(['git','-C',str(repo),'status','--porcelain']))) for repo in [go,usdb]},
     harness_sha256={name:sha(go/'scripts/usdb'/name) for name in ['run_miner_pass_upgrade_services.sh','miner_pass_upgrade_services.py','verify_usdb_profile_e2e.py']},
     protocol_harness_sha256=sha(usdb/'tests/common/protocol_upgrade_live.py'),
-    registry_adoption=json.loads((root/'protocol-upgrade/acceptance.json').read_text()),
-    upgrade_evidence={str(p.relative_to(root)):sha(p) for dirname in ['protocol-upgrade','late-chain','late-indexer'] for p in (root/dirname).rglob('*.json')},
+    registry_adoptions=[json.loads((root/name/'acceptance.json').read_text()) for name in ['protocol-upgrade','protocol-upgrade-second']],
+    upgrade_evidence={str(p.relative_to(root)):sha(p) for dirname in ['protocol-upgrade','protocol-upgrade-second','late-chain','late-indexer'] for p in (root/dirname).rglob('*.json')},
     catalog_sha256=sha(catalog),binaries={p.name:sha(p) for p in tools.iterdir() if p.is_file()},
     evidence={p.name:sha(p) for p in root.glob('*.json')},
     scenario=json.loads((root/'scenario.json').read_text()),
-    checks=['container-preflight','registry-adoption','checkpoint-adoption','adoption-process-recovery','late-upgrade-rejection','pinned-old-registry','core-reference','ord-compare','ordinary-rejection','independent-geth-validator','reward-ledger',
+    checks=['two-successive-adoptions','offline-skip-replay','three-schema-epochs','container-preflight','registry-adoption','checkpoint-adoption','adoption-process-recovery','late-upgrade-rejection','pinned-old-registry','core-reference','ord-compare','ordinary-rejection','independent-geth-validator','reward-ledger',
             'schema-inheritance','tightened-collab','transfer','burn','process-restart','checkpoint-catchup','origin-replay','cross-boundary-reorg','stale-header-rejection'])
 (root/'report.json').write_text(json.dumps(report,indent=2)+'\n')
 PY

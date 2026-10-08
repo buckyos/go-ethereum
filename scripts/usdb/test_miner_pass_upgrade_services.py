@@ -98,6 +98,26 @@ class LiveUpgradeOracleTests(unittest.TestCase):
                 producer.terminate()
                 producer.wait()
 
+    def test_wire_writer_uses_nested_bindings_only_for_structured_schema(self):
+        import subprocess
+        source = Path(__file__).with_name('run_miner_pass_upgrade_services.sh').read_text()
+        writer = source[source.index('write_mint() {'):source.index('\nmint() {')]
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root)/'mint.json'
+            for version in (1, 901, 902):
+                for field in ('usdb_main', 'leader_pass_id', 'leader_btc_addr'):
+                    subprocess.run(['bash', '-c', writer + '\nwrite_mint "$@"', 'writer',
+                                    str(output), str(version), field, 'binding-value', 'previous-pass'], check=True)
+                    payload = json.loads(output.read_text())
+                    self.assertEqual(payload['v'], version)
+                    self.assertEqual(payload['prev'], ['previous-pass'])
+                    if version == 902:
+                        self.assertEqual(payload['binding'], {field: 'binding-value'})
+                        self.assertNotIn(field, payload)
+                    else:
+                        self.assertEqual(payload[field], 'binding-value')
+                        self.assertNotIn('binding', payload)
+
     def test_prepared_tools_reject_replaced_binary(self):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root)

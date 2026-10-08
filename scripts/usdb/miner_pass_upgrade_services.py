@@ -14,7 +14,7 @@ from verify_usdb_profile_e2e import VIEW_VERSION, decode_selector, level_for_ene
 
 SCOPE = "miner-pass-upgrade-conformance"
 MAX = 2**128 - 1
-HEIGHTS = [159, 160, 161, 162, 163, 164, 165, 166, 167, 169, 170, 171, 172, 173, 179, 180, 181, 182]
+HEIGHTS = [159, 160, 161, 162, 163, 164, 165, 166, 167, 169, 170, 171, 172, 173, 179, 180, 181, 182, 209, 210, 211, 212]
 
 
 def rpc(url, method, params=None, cookie=None, expected_error=None):

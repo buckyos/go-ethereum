@@ -456,7 +456,7 @@ def expected_policy_difficulty(parent, block, factor, policy_version):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--miner-pass-registry-checkpoint", type=int)
+    parser.add_argument("--miner-pass-registry-checkpoints", "--miner-pass-registry-checkpoint", type=int, nargs="+", default=[])
     parser.add_argument("--miner-pass-upgrade-golden", help="Explicit isolated regtest acceptance catalog")
     parser.add_argument("--blocks", required=True)
     parser.add_argument("--coinbase", required=True)
@@ -517,8 +517,10 @@ def main():
     if args.miner_pass_upgrade_golden:
         with open(args.miner_pass_upgrade_golden, encoding="utf-8") as stream:
             upgrade = json.load(stream)["registries"]
-        if len(upgrade) != 2 or not args.miner_pass_registry_checkpoint or args.miner_pass_registry_checkpoint < 2:
-            raise SystemExit("MinerPass registry upgrade requires two revisions and an explicit chain checkpoint")
+        if (len(upgrade) != len(args.miner_pass_registry_checkpoints) + 1 or not args.miner_pass_registry_checkpoints
+                or args.miner_pass_registry_checkpoints[0] < 2
+                or any(a >= b for a, b in zip(args.miner_pass_registry_checkpoints, args.miner_pass_registry_checkpoints[1:]))):
+            raise SystemExit("MinerPass registry upgrade requires ordered revisions and explicit increasing chain checkpoints")
         if (any(r["network_id"] != "btc-regtest" or r["rules_scope"] != "miner-pass-upgrade-conformance" for r in upgrade)
                 or args.activation_conformance_block is not None or args.economic_conformance_v2_block is not None):
             raise SystemExit("MinerPass upgrade golden requires its isolated regtest mode")
@@ -670,7 +672,7 @@ def main():
             )
         expected_set_id, expected_versions = args.expected_active_version_set_id, None
         if upgrade:
-            registry = upgrade[int(number >= args.miner_pass_registry_checkpoint)]
+            registry = upgrade[sum(number >= checkpoint for checkpoint in args.miner_pass_registry_checkpoints)]
             point = max((p for p in registry["activations"] if p["btc_height"] <= selector["btc_height"]), key=lambda p: p["btc_height"])
             expected_registry_id = registry["activation_registry_id"]
             expected_set_id, expected_versions = point["active_version_set_id"], point["active_version_set"]
@@ -882,10 +884,10 @@ def main():
             and number >= args.activation_conformance_block
         ):
             active_price_start = args.activation_conformance_block
-        elif upgrade and number >= args.miner_pass_registry_checkpoint:
+        elif upgrade:
             # The price range binds the full chain checkpoint, even when only
             # its BTC registry changes and the price formula itself is stable.
-            active_price_start = args.miner_pass_registry_checkpoint
+            active_price_start = max([0] + [checkpoint for checkpoint in args.miner_pass_registry_checkpoints if number >= checkpoint])
         elif economic_conformance:
             if number >= args.economic_conformance_v3_block:
                 active_price_start = args.economic_conformance_v3_block

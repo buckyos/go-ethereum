@@ -35,7 +35,7 @@
       "network_id": "btc-regtest",
       "rules_scope": "miner-pass-upgrade-conformance",
       "revision": 2,
-      "current": true,
+      "current": false,
       "stable_lag_blocks": 10,
       "activation_registry_id": "d7b011b2b5f34ccfc94613d9c7827e35f79245391fad38e7f27b9fa0bcd3bbff",
       "activations": [
@@ -171,6 +171,168 @@
             }
           },
           "active_version_set_id": "c037f079522775b81cd5a29061c86306ff65d83a1a494f473298f8c15fc2f4f0"
+        }
+      ]
+    },
+    {
+      "network_id": "btc-regtest",
+      "rules_scope": "miner-pass-upgrade-conformance",
+      "revision": 3,
+      "current": true,
+      "stable_lag_blocks": 10,
+      "activation_registry_id": "7ea4a42c97b99f714bc92fa68a4d5ad20827d50710f998c8f2d25457a2b4e219",
+      "activations": [
+        {
+          "btc_height": 0,
+          "active_version_set": {
+            "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
+            "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
+            "energy_formula_version": "uip-0003-pass-energy-formula:v1",
+            "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
+            "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-upgrade-conformance"
+            }
+          },
+          "active_version_set_id": "32a06d94dac77a1560936f6da4a44b35c9381fab6abfd5a531a7a908567b52ab"
+        },
+        {
+          "btc_height": 160,
+          "active_version_set": {
+            "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
+            "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
+            "energy_formula_version": "conformance-energy:double",
+            "effective_energy_formula_version": "uip-0004-collab-leader-effective-energy:v1",
+            "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-upgrade-conformance"
+            }
+          },
+          "active_version_set_id": "53e67071508ef421956b7ff0261302317bffc80fb46296f5f92904e95a7e49d8"
+        },
+        {
+          "btc_height": 163,
+          "active_version_set": {
+            "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
+            "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
+            "energy_formula_version": "conformance-energy:double",
+            "effective_energy_formula_version": "conformance-effective:quarter-collab",
+            "level_formula_version": "uip-0005-level-and-real-difficulty:v1",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-upgrade-conformance"
+            }
+          },
+          "active_version_set_id": "1a53857f190f9d8478d28d85b1ba5debda56a0cabedffb1d7fde7b07a6d52d02"
+        },
+        {
+          "btc_height": 166,
+          "active_version_set": {
+            "inscription_schema_version": "uip-0001-miner-pass-inscription:v1",
+            "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
+            "energy_formula_version": "conformance-energy:double",
+            "effective_energy_formula_version": "conformance-effective:quarter-collab",
+            "level_formula_version": "conformance-level:thousands",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-upgrade-conformance"
+            }
+          },
+          "active_version_set_id": "718edf591c4a2b76b19416903305e443f77bf6bc5dec4bfb7ee507ef2eacf375"
+        },
+        {
+          "btc_height": 170,
+          "active_version_set": {
+            "inscription_schema_version": "conformance-miner-pass-schema:901",
+            "pass_state_machine_version": "uip-0002-pass-state-machine:v2",
+            "energy_formula_version": "conformance-energy:double",
+            "effective_energy_formula_version": "conformance-effective:quarter-collab",
+            "level_formula_version": "conformance-level:thousands",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-upgrade-conformance"
+            }
+          },
+          "active_version_set_id": "bf5217d775e2c68da83a2dec07d1edb818783f91b7a030443ac87346d7b06670"
+        },
+        {
+          "btc_height": 172,
+          "active_version_set": {
+            "inscription_schema_version": "conformance-miner-pass-schema:901",
+            "pass_state_machine_version": "conformance-miner-pass-state:no-new-collab",
+            "energy_formula_version": "conformance-energy:double",
+            "effective_energy_formula_version": "conformance-effective:quarter-collab",
+            "level_formula_version": "conformance-level:thousands",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-upgrade-conformance"
+            }
+          },
+          "active_version_set_id": "39435c3a721780919b8276e0addfbd7553783d9ca0e13d2aa84653867ebc08e9"
+        },
+        {
+          "btc_height": 180,
+          "active_version_set": {
+            "inscription_schema_version": "conformance-miner-pass-schema:901",
+            "pass_state_machine_version": "conformance-miner-pass-state:no-new-collab",
+            "energy_formula_version": "conformance-energy:triple",
+            "effective_energy_formula_version": "conformance-effective:quarter-collab",
+            "level_formula_version": "conformance-level:thousands",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-upgrade-conformance"
+            }
+          },
+          "active_version_set_id": "c037f079522775b81cd5a29061c86306ff65d83a1a494f473298f8c15fc2f4f0"
+        },
+        {
+          "btc_height": 210,
+          "active_version_set": {
+            "inscription_schema_version": "conformance-miner-pass-schema:902",
+            "pass_state_machine_version": "conformance-miner-pass-state:no-new-collab",
+            "energy_formula_version": "conformance-energy:triple",
+            "effective_energy_formula_version": "conformance-effective:quarter-collab",
+            "level_formula_version": "conformance-level:thousands",
+            "query_semantics_version": "uip-0006-economic-query-semantics:v1",
+            "state_view_version": "uip-0006-usdb-economic-state-view:v1",
+            "commit_protocol_version": "uip-0008-usdb-local-state-commit:v1",
+            "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
+            "scope": {
+              "network_id": "btc-regtest",
+              "rules_scope": "miner-pass-upgrade-conformance"
+            }
+          },
+          "active_version_set_id": "88891b6234ee09a8b0494e60a47c1a053a7ddc42dc93504bce13c4b304e61ee9"
         }
       ]
     }

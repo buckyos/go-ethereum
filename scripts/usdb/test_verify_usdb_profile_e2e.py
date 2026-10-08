@@ -17,6 +17,21 @@ from verify_usdb_profile_e2e import (  # noqa: E402
 
 
 class VerifyUSDBProfileE2ETest(unittest.TestCase):
+    def test_registry_schedule_rejects_missing_duplicate_and_reversed_checkpoints(self):
+        import subprocess
+        golden = SCRIPT_DIR.parents[1] / 'internal/usdb/testdata/miner_pass_live_activation_golden.json'
+        for checkpoints in ([], ['2'], ['2', '2'], ['3', '2'], ['1', '3'], ['2', '3', '4']):
+            args = [sys.executable, str(SCRIPT_DIR/'verify_usdb_profile_e2e.py'),
+                    '--miner-pass-upgrade-golden', str(golden), '--blocks', 'not-read.json',
+                    '--coinbase', '0x' + '11'*20, '--balance-hex', '0x0',
+                    '--usdb-indexer-rpc-url', 'http://127.0.0.1:1',
+                    '--usdb-chain-rpc-url', 'http://127.0.0.1:1']
+            if checkpoints:
+                args += ['--miner-pass-registry-checkpoints', *checkpoints]
+            result = subprocess.run(args, capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('explicit increasing chain checkpoints', result.stderr)
+
     @staticmethod
     def selector_block(
         number: int,

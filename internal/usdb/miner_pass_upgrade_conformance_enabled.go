@@ -72,6 +72,6 @@ func supportsMinerPassConformanceContract(set ActiveVersionSet, family, value st
 	if err != nil || scope == nil || scope.NetworkID != "btc-regtest" || scope.RulesScope != "miner-pass-upgrade-conformance" {
 		return false
 	}
-	return family == "inscription_schema_version" && value == "conformance-miner-pass-schema:901" ||
+	return family == "inscription_schema_version" && (value == "conformance-miner-pass-schema:901" || value == "conformance-miner-pass-schema:902") ||
 		family == "pass_state_machine_version" && value == "conformance-miner-pass-state:no-new-collab"
 }
