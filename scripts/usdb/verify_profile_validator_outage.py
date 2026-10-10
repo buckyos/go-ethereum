@@ -13,6 +13,10 @@ import urllib.request
 def is_profile_transport_failure(line: str, endpoint: str) -> bool:
     """Accept validation errors from the configured upstream, not startup/miner logs."""
     if not any(marker in line for marker in (
+        # Retryable upstream failures now wait without reporting an invalid block.
+        "Block validation waiting for local external state",
+        "Chain validation waiting for external state",
+        "Propagated block waiting for external state",
         "Invalid header encountered", "Synchronisation failed", "Propagated block verification failed",
     )):
         return False

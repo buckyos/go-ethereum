@@ -18,7 +18,9 @@ import verify_profile_validator_outage as gate
 
 
 UPSTREAM = "http://127.0.0.1:28320"
-FAILURE = ('WARN [09-07|07:54:18.900] Invalid header encountered number=1 '
+VALIDATION_MARKER = "Block validation waiting for local external state"
+# Preserve the retryable log format that the weekly outage gate failed to recognize.
+FAILURE = ('WARN [10-10|16:06:11.411] Block validation waiting for local external state number=1 '
            'err="failed to resolve usdb difficulty profile: failed to call get_pass_economic_profile: '
            r'usdb-indexer rpc get_pass_economic_profile failed for \"http://127.0.0.1:28320\": connection refused"' + "\n")
 
@@ -100,13 +102,38 @@ class ValidatorOutageTests(unittest.TestCase):
         for line in (
             FAILURE.replace("28320", "28321"),
             FAILURE.replace("get_pass_economic_profile", "get_system_state_info"),
-            FAILURE.replace("Invalid header encountered", "USDB sealing work unavailable"),
+            FAILURE.replace(VALIDATION_MARKER, "USDB sealing work unavailable"),
             FAILURE.replace("connection refused", "request canceled"),
+            FAILURE.replace("connection refused", "invalid JSON response"),
+            FAILURE.replace("connection refused", "SNAPSHOT_ID_MISMATCH"),
             'WARN Invalid header encountered err="SNAPSHOT_ID_MISMATCH"',
             "Starting peer-to-peer node",
         ):
             with self.subTest(line=line):
                 self.assertFalse(gate.is_profile_transport_failure(line, UPSTREAM))
+
+    def test_retryable_validation_paths_require_full_observation(self):
+        for marker in (
+            VALIDATION_MARKER,
+            "Chain validation waiting for external state",
+            "Propagated block waiting for external state",
+        ):
+            with self.subTest(marker=marker):
+                self.now = 0
+                line = FAILURE.replace(VALIDATION_MARKER, marker)
+                self.log.write_text(line)
+                result = self.run_gate()
+                self.assertEqual(result["failure_evidence"], line.rstrip())
+                self.assertEqual(result["height"], 0)
+                self.assertGreaterEqual(result["observed_seconds"], 4)
+
+    def test_legacy_validation_errors_remain_recognized(self):
+        for marker in (
+            "Invalid header encountered", "Synchronisation failed", "Propagated block verification failed",
+        ):
+            with self.subTest(marker=marker):
+                self.assertTrue(gate.is_profile_transport_failure(
+                    FAILURE.replace(VALIDATION_MARKER, marker), UPSTREAM))
 
     def test_rpc_errors_and_missing_height_do_not_mean_genesis(self):
         for response in ({"error": {"code": -32603}}, {}, {"result": None}, {"result": ""}, [], {"result": 0}):
