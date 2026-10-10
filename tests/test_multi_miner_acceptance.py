@@ -14,7 +14,9 @@ import unittest
 from urllib import request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from multi_miner_acceptance import validate_chain, validate_lag, required_cases, common_head, MINER, SECOND_MINER, ANCHOR_MAX_AGE
+from multi_miner_acceptance import (validate_chain, validate_lag, required_cases, common_head,
+                                    expiry_log_evidence, validate_retry_expiry,
+                                    MultiMinerMatrix, MINER, SECOND_MINER, ANCHOR_MAX_AGE)
 from common.rpc_delay import BlockDelayProxy
 
 
@@ -33,6 +35,46 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(len(cases), len(set(cases)))
             self.assertIn(f"competing-delay-{cycles}-fork-choice", cases)
             self.assertEqual(cases[-3:], ["anchor-exhaustion", "invalid-block", "final-state"])
+            for mode, expected in (("downloader", ["usdb-indexer-delay-1-expiry"]),
+                                   ("all", ["balance-history-delay-1-expiry", "usdb-indexer-delay-1-expiry"])):
+                expanded = required_cases(cycles, mode)
+                self.assertEqual([c for c in expanded if c.endswith("-expiry")], expected)
+                for name in expected:
+                    self.assertEqual(expanded[expanded.index(name) + 1], name.removesuffix("-expiry") + "-recovery")
+
+    def test_retry_expiry_requires_new_session_and_the_actual_gossip_tip_eviction(self):
+        log = "\n".join([
+            'Chain validation waiting for external state operation="blocks 7..12"',
+            'External state wait budget exhausted operation="blocks 7..12"',
+            'Chain validation waiting for external state operation="blocks 7..12"',
+            'Expired propagated block awaiting validation peer=x number=12 hash=abc',
+            'Expired propagated block awaiting external state peer=x number=7 hash=def',
+        ])
+        parsed = expiry_log_evidence(log)
+        self.assertEqual(parsed["expired_block_numbers"], [7, 12])
+        evidence = {**parsed, "path": "fetcher", "observed_seconds": 1801,
+                    "target_hash_before": "abc", "target_hash_after": "abc", "target_height": 12,
+                    "validator_height": 11, "profile_errors": 4}
+        validate_retry_expiry(evidence)
+        for key, value in (("observed_seconds", 1799), ("target_hash_after", "new-block"),
+                           ("validator_height", 12), ("validator_height", 6), ("profile_errors", 0),
+                           ("expired_block_numbers", [7])):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                validate_retry_expiry({**evidence, key: value})
+        # With only the tip missing, the peer's advertised parent can equal the
+        # local head; no downloader session is guaranteed before recovery.
+        validate_retry_expiry({**evidence, "exhausted_sessions": 0, "new_session_after_exhaustion": False})
+        downloader = {**evidence, "path": "downloader", "observed_seconds": 121,
+                      "expired_block_numbers": []}
+        validate_retry_expiry(downloader)
+        with self.assertRaises(ValueError):
+            validate_retry_expiry({**downloader, "observed_seconds": 119})
+        for key, value in (("exhausted_sessions", 0), ("new_session_after_exhaustion", False)):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                validate_retry_expiry({**downloader, key: value})
+        # A wait earlier in the same session cannot establish a new session.
+        self.assertFalse(expiry_log_evidence(log.splitlines()[0] + "\n" + log.splitlines()[1])[
+            "new_session_after_exhaustion"])
 
     def test_lag_requires_live_committed_history_and_independent_progress(self):
         evidence = {"held_reads": 1, "old_anchor": 100, "target_anchor": 102, "indexer_height": 100,
@@ -49,6 +91,30 @@ class EvidenceTests(unittest.TestCase):
         validate_lag({**evidence, "kind": "balance-history", "balance_height": 100})
         with self.assertRaises(ValueError):
             validate_lag({**evidence, "kind": "balance-history"})
+
+    def test_failed_recovery_preserves_ready_dependency_and_stalled_head(self):
+        matrix = MultiMinerMatrix.__new__(MultiMinerMatrix)
+        matrix.args = SimpleNamespace(output_dir=Path('/unused'))
+        matrix.a = SimpleNamespace(block=lambda: self.block(2, 102, 0))
+        matrix.phase = lambda name: None
+        saved = []
+        matrix.report = {}
+        matrix.write_json = lambda path, value: saved.append((path, value))
+
+        def timeout(*args, **kwargs):
+            raise ValueError('automatic import timeout')
+
+        matrix.wait = timeout
+        replies = {'get_snapshot_info': {'stable_height': 102},
+                   'get_readiness': {'consensus_ready': True, 'synced_block_height': 102},
+                   'eth_blockNumber': '0x1', 'eth_syncing': False, 'admin_peers': [{'id': 'same-peer'}]}
+        node = SimpleNamespace(name='b', validator_identity=lambda: {'pid': 1, 'start_ticks': 2, 'starts': 1},
+                               rpc=lambda service: lambda method: replies[method])
+        with self.assertRaisesRegex(ValueError, 'automatic import timeout'):
+            matrix.recover(node, 'expiry', [], lambda: None, 1)
+        self.assertEqual(saved[0][0].name, 'expiry-recovery-failure.json')
+        self.assertEqual(saved[0][1]['observation'], replies)
+        self.assertEqual(matrix.report['recovery_failure']['target_height'], 2)
 
     @staticmethod
     def block(number, height, age, author=MINER, pass_byte=1, snapshot_byte=3):

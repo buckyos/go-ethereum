@@ -9,6 +9,17 @@ case "$MATRIX_SCENARIO" in
   *) echo "Unsupported MATRIX_SCENARIO: $MATRIX_SCENARIO" >&2; exit 1 ;;
 esac
 export MATRIX_SCENARIO
+MATRIX_RETRY_EXPIRY=${MATRIX_RETRY_EXPIRY:-none}
+case "$MATRIX_RETRY_EXPIRY" in
+  none | downloader | all) ;;
+  *) echo "Unsupported MATRIX_RETRY_EXPIRY: $MATRIX_RETRY_EXPIRY" >&2; exit 1 ;;
+esac
+if [[ "$MATRIX_RETRY_EXPIRY" == all ]]; then
+  MATRIX_TIMEOUT_SEC=${MATRIX_TIMEOUT_SEC:-2700}
+else
+  MATRIX_TIMEOUT_SEC=${MATRIX_TIMEOUT_SEC:-1200}
+fi
+export MATRIX_RETRY_EXPIRY MATRIX_TIMEOUT_SEC
 # Compilation belongs to the preparation budget. The inner invocation owns all
 # services and its EXIT trap also runs when the simulation budget expires.
 if [[ "${1:-}" != --execute ]]; then
@@ -102,7 +113,8 @@ if [[ "$MATRIX_SCENARIO" == multi-miner ]]; then
   second_pass=$(regtest_ord_inscribe_file "$ORD_WALLET_NAME_B" "$WORK_DIR/mint-b.json" "$second_owner" "$second_owner")
   regtest_mine_blocks 2 "$miner_address"
   regtest_fund_address "$second_owner" 1.0
-  scenario_args+=(--second-owner "$second_owner" --second-pass "$second_pass" --cycles "${MATRIX_CYCLES:-1}" --invalidblock "$MATRIX_WORK_ROOT/bin/invalidblock")
+  scenario_args+=(--second-owner "$second_owner" --second-pass "$second_pass" --cycles "${MATRIX_CYCLES:-1}" --invalidblock "$MATRIX_WORK_ROOT/bin/invalidblock"
+    --retry-expiry "${MATRIX_RETRY_EXPIRY:-none}" --timeout-sec "${MATRIX_TIMEOUT_SEC:-1200}")
   matrix_driver="$ROOT_DIR/tests/multi_miner_acceptance.py"
 fi
 # Keep the mint below every injected stable-frontier reorg and give its owner

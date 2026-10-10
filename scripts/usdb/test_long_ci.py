@@ -195,7 +195,8 @@ main "$@"
         integration = (WORKFLOWS / "usdb-integration.yml").read_text(encoding="utf-8")
         self.assertIn('weekly "${{ matrix.shard }}" --prepare-only', integration)
         self.assertIn('weekly "${{ matrix.shard }}" --run-only', integration)
-        self.assertIn("matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'multi-miner-soak') && 22", integration)
+        self.assertIn("matrix.shard == 'upstream-fault-matrix' && 22", integration)
+        self.assertIn("matrix.shard == 'multi-miner-soak' && 47", integration)
 
     def test_multi_miner_tiers_run_distinct_bounded_cycle_counts(self) -> None:
         harness = f"""
@@ -211,8 +212,10 @@ run_weekly multi-miner-soak
         self.assertEqual(result.returncode, 0, result.stderr)
         rows = result.stdout.splitlines()
         self.assertEqual(len(rows), 2)
-        for row, cycles in zip(rows, (1, 3)):
+        for row, cycles, expiry, budget in zip(rows, (1, 3), ('downloader', 'all'), (1200, 2700)):
             self.assertIn(f'MATRIX_CYCLES={cycles}', row)
+            self.assertIn(f'MATRIX_RETRY_EXPIRY={expiry}', row)
+            self.assertIn(f'MATRIX_TIMEOUT_SEC={budget}', row)
             self.assertIn('MATRIX_SCENARIO=multi-miner', row)
             self.assertIn('MATRIX_SKIP_BUILD=1', row)
             self.assertIn('GETH_BIN=/isolated/work/upstream-matrix/bin/geth', row)

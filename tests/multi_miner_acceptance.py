@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import signal
 import socket
 import subprocess
@@ -26,16 +27,54 @@ from common.rpc_delay import BlockDelayProxy
 
 SECOND_MINER = "0x2222222222222222222222222222222222222222"
 ANCHOR_MAX_AGE = 24
+RETRY_BUDGET_SECONDS = {"downloader": 120, "fetcher": 1800}
 
 
-def required_cases(cycles):
+def expiry_path(kind, cycle, mode):
+    if cycle == 1 and mode != "none":
+        if kind == "usdb-indexer":
+            return "downloader"
+        if kind == "balance-history" and mode == "all":
+            return "fetcher"
+    return None
+
+
+def required_cases(cycles, retry_expiry="none"):
     cases = ["baseline"]
     for cycle in range(1, cycles + 1):
         for fault in ("balance-history-delay", "usdb-indexer-delay", "rpc-outage"):
-            cases.extend([f"{fault}-{cycle}", f"{fault}-{cycle}-recovery"])
+            cases.append(f"{fault}-{cycle}")
+            if expiry_path(fault.removesuffix("-delay"), cycle, retry_expiry):
+                cases.append(f"{fault}-{cycle}-expiry")
+            cases.append(f"{fault}-{cycle}-recovery")
         cases.extend([f"competing-miners-{cycle}", f"competing-delay-{cycle}",
                       f"competing-delay-{cycle}-recovery", f"competing-delay-{cycle}-fork-choice"])
     return cases + ["anchor-exhaustion", "invalid-block", "final-state"]
+
+
+def expiry_log_evidence(text):
+    exhausted = "External state wait budget exhausted"
+    after_exhaustion = text.partition(exhausted)[2]
+    return {"exhausted_sessions": text.count(exhausted),
+            "new_session_after_exhaustion": "Chain validation waiting for external state" in after_exhaustion,
+            "expired_block_numbers": sorted({int(n) for n in re.findall(
+                r"Expired propagated block awaiting (?:validation|external state).*?number=(\d+)", text)})}
+
+
+def validate_retry_expiry(evidence):
+    """Require production expiry evidence and an unchanged, already existing tip."""
+    path = evidence["path"]
+    require(evidence["observed_seconds"] >= RETRY_BUDGET_SECONDS[path], "retry boundary was not crossed")
+    require(evidence["target_hash_before"] == evidence["target_hash_after"], "healthy tip moved during expiry")
+    require(evidence["validator_height"] < evidence["target_height"], "validator did not remain behind")
+    require(evidence["profile_errors"] > 0, "missing actual failed validation")
+    if path == "fetcher":
+        require(evidence["validator_height"] == evidence["target_height"] - 1,
+                "gossip expiry must exercise a single missing tip")
+        require(evidence["target_height"] in evidence["expired_block_numbers"], "gossip tip did not expire")
+    else:
+        require(evidence["exhausted_sessions"] > 0, "missing actual session expiry")
+        require(evidence["new_session_after_exhaustion"], "no automatic downloader session after expiry")
 
 
 def validate_chain(blocks, expected_passes):
@@ -133,7 +172,9 @@ class MultiMinerMatrix(Matrix):
         self.expected_bad_blocks = {n.name: set() for n in self.nodes}
         self.connected = []
         self.report.update(schema="usdb-multi-miner-delay:v1", seal_mode="fakepow-delay-1200ms",
-                           cycles=args.cycles, topology=[{"node": n.name, "root": str(n.root),
+                           cycles=args.cycles, retry_expiry=args.retry_expiry,
+                           retry_budgets_seconds=RETRY_BUDGET_SECONDS,
+                           topology=[{"node": n.name, "root": str(n.root),
                            "ports": n.ports, "miner": n.beneficiary if n.name != "c" else None} for n in self.nodes])
 
     def connect_once(self, node):
@@ -198,11 +239,28 @@ class MultiMinerMatrix(Matrix):
 
     def mine(self, node, count):
         initial = node.height()
+        log_offset = len(self.log_text(node))
         node.rpc("geth")("miner_start", [1])
         try:
-            self.wait(f"miner {node.name}: {count} new blocks", lambda: node.height() >= initial + count, interval=0.05)
+            if count == 1:
+                # In the delayed fake-PoW fixture, stop new work while the
+                # first seal is still in flight. Stopping after its import can
+                # already leave a second task running and break the lone-tip case.
+                self.wait(f"miner {node.name}: single seal submitted", lambda:
+                          "Commit new sealing work" in self.log_text(node)[log_offset:], interval=0.05)
+            else:
+                self.wait(f"miner {node.name}: {count} new blocks", lambda: node.height() >= initial + count, interval=0.05)
         finally:
             node.rpc("geth")("miner_stop")
+        if count == 1:
+            self.wait(f"miner {node.name}: single seal imported", lambda: node.height() >= initial + 1, interval=0.05)
+        # Stopping mining does not cancel an already submitted seal. Drain it
+        # before another miner starts or a test records the stationary parent,
+        # otherwise a valid old-anchor block can race the unavailable tip.
+        stopped = time.monotonic()
+        self.wait(f"miner {node.name}: in-flight seal drains", lambda: time.monotonic() - stopped >= 4, seconds=8)
+        if count == 1:
+            require(node.height() == initial + 1, "single-block fixture produced extra sealing work")
 
     def baseline(self):
         self.phase("baseline")
@@ -265,8 +323,8 @@ class MultiMinerMatrix(Matrix):
         validate_lag(evidence)
         return evidence
 
-    def recover(self, node, fault, failures, restore, stalled_height):
-        target = self.a.block()
+    def recover(self, node, fault, failures, restore, stalled_height, frozen_target=None):
+        target = frozen_target or self.a.block()
         recovery = {"validator_before": node.validator_identity(), "stalled_height": stalled_height,
                     "target_hash": target["hash"], "target_anchor": decode_selector(target)["btc_height"],
                     "target_height": int(target["number"], 16), "budget_seconds": 90,
@@ -277,15 +335,67 @@ class MultiMinerMatrix(Matrix):
         restore()
         # No peer RPC, miner_start, or geth restart may appear between restore
         # and the target import. Only the failed upstream is repaired.
-        self.wait(f"{node.name} automatic import after {fault}", lambda:
-                  (node.block(recovery["target_height"]) or {}).get("hash") == target["hash"], seconds=90)
+        try:
+            self.wait(f"{node.name} automatic import after {fault}", lambda:
+                      (node.block(recovery["target_height"]) or {}).get("hash") == target["hash"], seconds=90)
+        except ValueError:
+            # Preserve dependency readiness and the quiet chain's head on
+            # failure, so a lost sync trigger is distinguishable from slow BH.
+            observation = {}
+            for service, method in (("balance-history", "get_snapshot_info"),
+                                    ("usdb-indexer", "get_readiness"), ("geth", "eth_blockNumber"),
+                                    ("geth", "eth_syncing"), ("geth", "admin_peers")):
+                try:
+                    observation[method] = node.rpc(service)(method)
+                except (OSError, ValueError) as error:
+                    observation[method] = {"error": str(error)}
+            self.report["recovery_failure"] = {**recovery, "observation": observation,
+                                               "elapsed_seconds": round(time.monotonic() - started, 3)}
+            self.write_json(self.args.output_dir / f"{name}-failure.json", self.report["recovery_failure"])
+            raise
         recovery.update(validator_after=node.validator_identity(), blocks=node.height(), head_hash=node.block()["hash"],
                         canonical_target_hash=node.block(recovery["target_height"])["hash"],
                         elapsed_seconds=round(time.monotonic() - started, 3))
         recovery["retried_profiles"] = validate_auto_recovery(recovery, failures, node.proxy.profile_calls(name))
+        if frozen_target:
+            require(self.a.block()["hash"] == target["hash"], "healthy tip moved during recovery")
+            require(node.block()["hash"] == target["hash"], "recovery did not reach the frozen tip")
+            recovery.update(healthy_tip_unchanged=True, mining_during_recovery=False)
         self.wait_upstream(node)
         chain = self.audit_chain([n for n in (self.b, self.c) if n.name in self.connected])
         self.passed(name, **recovery, canonical=chain, peer_disconnects=0, manual_reconnections=0)
+
+    def wait_retry_expiry(self, node, kind, name, log_offset, started):
+        path = expiry_path(kind, 1, self.args.retry_expiry)
+        # miner_stop may leave an in-flight seal. Freeze only after it drains,
+        # then prohibit any new blocks throughout expiry and recovery.
+        stopped = time.monotonic()
+        self.wait("last seal drains before freezing expiry target", lambda: time.monotonic() - stopped >= 4, seconds=8)
+        target = self.a.block()
+        target_height = int(target["number"], 16)
+        budget = RETRY_BUDGET_SECONDS[path]
+        evidence = {}
+
+        def expired():
+            self.continuity()
+            require(self.a.block()["hash"] == target["hash"], "healthy miner advanced during retry expiry")
+            evidence.update(expiry_log_evidence(self.log_text(node)[log_offset:]))
+            boundary_crossed = (target_height in evidence["expired_block_numbers"] if path == "fetcher"
+                                else evidence["new_session_after_exhaustion"])
+            return boundary_crossed and time.monotonic() - started >= budget
+
+        # Keep the original fault phase for RPC audits; record expiry separately
+        # without discarding the selectors that failed before the first timeout.
+        self.report["active_case"] = {"name": name + "-expiry", "budget_seconds": budget}
+        self.write_json(self.args.output_dir / "summary.json", self.report)
+        self.wait(f"{node.name} {path} production retry expiry ({budget}s)", expired, seconds=budget + 60, interval=1)
+        evidence.update(path=path, observed_seconds=round(time.monotonic() - started, 3),
+                        target_height=target_height, target_hash_before=target["hash"],
+                        target_hash_after=self.a.block()["hash"], validator_height=node.height(),
+                        profile_errors=len(node.proxy.profile_calls(name, errors=True)))
+        validate_retry_expiry(evidence)
+        self.passed(name + "-expiry", **evidence)
+        return target
 
     def delay_case(self, node, kind, cycle, *, late_join=False):
         name = f"{kind}-delay-{cycle}"
@@ -301,7 +411,13 @@ class MultiMinerMatrix(Matrix):
             require(decode_selector(node.block())["btc_height"] == evidence["old_anchor"], "lagging miner used unavailable state")
             evidence["lagging_miner_blocks"] = node.height() - before
             before = node.height()
-        self.mine(self.a, 6)
+        fault_started = time.monotonic()
+        # A lone tip is the hard expiry case: its advertised parent may already
+        # equal the validator's head, so a higher-TD sync cannot mask lost gossip.
+        single_tip = expiry_path(kind, cycle, self.args.retry_expiry) == "fetcher"
+        self.mine(self.a, 1 if single_tip else 6)
+        if single_tip:
+            require(self.a.height() == before + 1, "expected exactly one unavailable gossip tip")
         if late_join:
             self.connect_once(node)
         self.wait(f"{node.name} rejects unavailable selector", lambda: bool(node.proxy.profile_calls(name, errors=True)), seconds=30)
@@ -318,7 +434,11 @@ class MultiMinerMatrix(Matrix):
                   expected in self.log_text(node)[log_offset:], seconds=15)
         self.passed(name, **evidence, validator_before=before, validator_after=node.height(), healthy_after=self.a.height(),
                     profile_errors=len(failures), path="downloader" if late_join else "gossip")
-        self.recover(node, name, failures, node.gates[kind].restore, node.height())
+        target = None
+        if expiry_path(kind, cycle, self.args.retry_expiry):
+            target = self.wait_retry_expiry(node, kind, name, log_offset, fault_started)
+            failures = node.proxy.profile_calls(name, errors=True)
+        self.recover(node, name, failures, node.gates[kind].restore, node.height(), target)
 
     def transport_case(self, cycle):
         name = f"rpc-outage-{cycle}"
@@ -464,7 +584,7 @@ class MultiMinerMatrix(Matrix):
             self.write_json(self.args.output_dir / f"final-{node.name}-state.json", state)
         self.passed("final-state", upstream_sha256=self.digest(states[0]), identities=self.identities,
                     **self.audit_chain([self.b, self.c]))
-        require([case["name"] for case in self.report["cases"]] == required_cases(self.args.cycles),
+        require([case["name"] for case in self.report["cases"]] == required_cases(self.args.cycles, self.args.retry_expiry),
                 "multi-miner acceptance coverage incomplete")
 
     def close(self):
@@ -490,6 +610,8 @@ def main():
     parser.add_argument("--port-base", type=int, default=22400)
     parser.add_argument("--timeout-sec", type=int, default=900)
     parser.add_argument("--cycles", type=int, choices=range(1, 6), default=1)
+    parser.add_argument("--retry-expiry", choices=("none", "downloader", "all"), default="none",
+                        help="Cross actual 2-minute downloader and optionally 30-minute fetcher limits once")
     args = parser.parse_args()
     matrix = MultiMinerMatrix(args)
 

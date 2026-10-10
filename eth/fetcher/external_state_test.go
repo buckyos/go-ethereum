@@ -120,7 +120,7 @@ func TestExternalStateBlockedDoesNotDropPeer(t *testing.T) {
 					}, func(*types.Block, bool) {}, func() uint64 { return 0 },
 					func([]*types.Header) (int, error) { return 0, consensus.ErrExternalStateBlocked },
 					func(types.Blocks) (int, error) { return 0, consensus.ErrExternalStateBlocked },
-					func(peer string) { dropped <- peer })
+					func(peer string) { dropped <- peer }, nil)
 				defer f.Stop()
 				f.importedHook = func(*types.Header, *types.Block) { t.Error("unverifiable block imported") }
 				if light {
@@ -148,7 +148,7 @@ func TestExternalStateBlockedDoesNotDropPeer(t *testing.T) {
 }
 
 func TestExternalStateQueueLimits(t *testing.T) {
-	f := NewBlockFetcher(false, nil, func(common.Hash) *types.Block { return nil }, nil, nil, func() uint64 { return 0 }, nil, nil, nil)
+	f := NewBlockFetcher(false, nil, func(common.Hash) *types.Block { return nil }, nil, nil, func() uint64 { return 0 }, nil, nil, nil, nil)
 	makeBlock := func(n int) *types.Block {
 		return types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Extra: []byte{byte(n), byte(n >> 8)}})
 	}
@@ -181,7 +181,7 @@ func TestExternalStateQueueLimits(t *testing.T) {
 }
 
 func TestExternalStateCompletionDoesNotBlockAfterStop(t *testing.T) {
-	f := NewBlockFetcher(false, nil, nil, nil, nil, nil, nil, nil, nil)
+	f := NewBlockFetcher(false, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	f.Stop()
 	done := make(chan struct{})
 	go func() { f.finishImport(common.Hash{}, consensus.ErrExternalStateUnavailable); close(done) }()
@@ -194,7 +194,7 @@ func TestExternalStateCompletionDoesNotBlockAfterStop(t *testing.T) {
 
 func TestExternalStateQueueExpiry(t *testing.T) {
 	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1)})
-	f := NewBlockFetcher(false, nil, func(common.Hash) *types.Block { return nil }, func(*types.Header) error { t.Error("expired block reached validation"); return nil }, nil, func() uint64 { return 0 }, nil, nil, nil)
+	f := NewBlockFetcher(false, nil, func(common.Hash) *types.Block { return nil }, func(*types.Header) error { t.Error("expired block reached validation"); return nil }, nil, func() uint64 { return 0 }, nil, nil, nil, nil)
 	f.enqueue("peer", nil, block)
 	f.queued[block.Hash()].firstSeen = time.Now().Add(-externalStateQueueTTL - time.Second)
 	popped := make(chan struct{}, 1)
@@ -217,6 +217,59 @@ func TestExternalStateQueueExpiry(t *testing.T) {
 	}
 }
 
+// Cover expiry both before validation starts and while a validation call is in
+// flight. Only retryable expiry hands a hint to the downloader, after releasing
+// the full body and all per-peer quotas.
+func TestExternalStateExpiryHandoff(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		queued  bool
+		err     error
+		handoff bool
+	}{
+		{"queued", true, nil, true},
+		{"in-flight-unavailable", false, consensus.ErrExternalStateUnavailable, true},
+		{"permanent-local", false, consensus.ErrExternalStateBlocked, false},
+		{"invalid", false, errors.New("invalid block"), false},
+		{"success", false, nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1)})
+			hints := make(chan common.Hash, 1)
+			f := NewBlockFetcher(false, nil, func(common.Hash) *types.Block { return nil }, nil, nil, func() uint64 { return 0 }, nil, nil, nil, nil)
+			f.expiredBlock = func(peer string, header *types.Header) {
+				if len(f.queued) != 0 || f.queueBytes != 0 || len(f.peerBytes) != 0 || len(f.queues) != 0 || len(f.waiting) != 0 {
+					t.Error("handoff retained block body or peer quotas")
+				}
+				if peer != "honest" {
+					t.Error("handoff changed the origin")
+				}
+				hints <- header.Hash()
+			}
+			f.enqueue("honest", nil, block)
+			f.queued[block.Hash()].firstSeen = time.Now().Add(-externalStateQueueTTL - time.Second)
+			if !test.queued {
+				f.queue.PopItem()
+				f.importing = 1
+			}
+			stopped := make(chan struct{})
+			go func() { f.loop(); close(stopped) }()
+			if !test.queued {
+				f.finishImport(block.Hash(), test.err)
+			}
+			f.FilterHeaders("honest", nil, time.Now()) // Loop barrier after expiry processing.
+			f.Stop()
+			<-stopped
+			if len(hints) != 0 != test.handoff {
+				t.Fatalf("handoff count %d, want handoff %v", len(hints), test.handoff)
+			}
+			if test.handoff && <-hints != block.Hash() {
+				t.Fatal("wrong recovery target")
+			}
+		})
+	}
+}
+
 func TestExternalStateConcurrentImportLimit(t *testing.T) {
 	entered := make(chan struct{}, maxQueuedBlocks)
 	release := make(chan struct{})
@@ -229,7 +282,7 @@ func TestExternalStateConcurrentImportLimit(t *testing.T) {
 		entered <- struct{}{}
 		<-release
 		return consensus.ErrExternalStateUnavailable
-	}, nil, func() uint64 { return 0 }, nil, nil, nil)
+	}, nil, func() uint64 { return 0 }, nil, nil, nil, nil)
 	for i := 0; i < 16; i++ {
 		f.enqueue("peer", nil, types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), ParentHash: genesis.Hash(), Extra: []byte{byte(i)}}))
 	}
@@ -296,7 +349,7 @@ func TestExternalStateLightHeaderRetry(t *testing.T) {
 					atomic.StoreInt32(&imported, 1)
 					return 0, nil
 				}, nil,
-				func(peer string) { dropped <- peer })
+				func(peer string) { dropped <- peer }, nil)
 			f.importedHook = func(*types.Header, *types.Block) { completed <- struct{}{} }
 			f.enqueue("honest", header, nil)
 			f.Start()

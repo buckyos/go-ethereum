@@ -1,0 +1,20 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "expired-gossip-tip-recovery",
+  "type": "fixed",
+  "scopes": ["node-runtime", "testing"],
+  "summary": "Resume synchronization after the last propagated block expires during an upstream outage",
+  "details": [
+    "When a propagated block leaves the thirty-minute validation queue, retain its download target in the connected peer's head metadata using a known local or advertised parent TD. This allows recovery even when the peer previously advertised only a parent already present locally.",
+    "Release block bodies and peer queue quotas on expiry, coalesce sync wakeups, and advance peer hints atomically so delayed parent gossip cannot overwrite the recovery target.",
+    "Re-download and validate the block through the existing downloader, preserving external-state retry budgets, cooldown, permanent local error handling and consensus verification. No new block, manual reconnection or recovery restart is required for a temporary upstream lag."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": true
+  },
+  "references": []
+}

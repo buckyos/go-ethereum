@@ -130,8 +130,7 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, block *types.Block, td
 		trueTD   = new(big.Int).Sub(td, block.Difficulty())
 	)
 	// Update the peer's total difficulty if better than the previous
-	if _, td := peer.Head(); trueTD.Cmp(td) > 0 {
-		peer.SetHead(trueHead, trueTD)
+	if peer.UpdateHead(trueHead, trueTD) {
 		h.chainSync.handlePeerEvent(peer)
 	}
 	return nil

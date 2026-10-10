@@ -226,11 +226,17 @@ collect_diagnostics() {
 
 run_multi_miner_matrix() {
   local cycles="$1"
+  local retry_expiry="$2"
+  local timeout_sec=1200
+  if [[ "$retry_expiry" == all ]]; then
+    timeout_sec=2700
+  fi
   require_regtest_tools
   run_case multi-miner-delay \
     env USDB_REPO_DIR="$USDB_REPO_DIR" BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
       GETH_BIN="$WORK_ROOT/upstream-matrix/bin/geth" \
       MATRIX_SKIP_BUILD=1 MATRIX_SCENARIO=multi-miner MATRIX_CYCLES="$cycles" \
+      MATRIX_RETRY_EXPIRY="$retry_expiry" MATRIX_TIMEOUT_SEC="$timeout_sec" \
       MATRIX_WORK_ROOT="$WORK_ROOT/upstream-matrix" \
       MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/multi-miner-delay" \
       bash "$ROOT_DIR/scripts/usdb/run_usdb_upstream_fault_matrix.sh"
@@ -240,7 +246,7 @@ run_nightly() {
   local shard="$1"
   case "$shard" in
     multi-miner-delay)
-      run_multi_miner_matrix 1
+      run_multi_miner_matrix 1 downloader
       ;;
     go-profile)
       require_regtest_tools
@@ -345,7 +351,7 @@ run_weekly() {
   local shard="$1"
   case "$shard" in
     multi-miner-soak)
-      run_multi_miner_matrix 3
+      run_multi_miner_matrix 3 all
       ;;
     upstream-fault-matrix)
       require_regtest_tools

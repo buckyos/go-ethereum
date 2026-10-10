@@ -1,0 +1,21 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "external-state-retry-expiry-acceptance",
+  "type": "changed",
+  "scopes": ["testing"],
+  "summary": "Require automatic recovery after external-state retry and gossip queue expiry",
+  "details": [
+    "Extend independent multi-miner acceptance beyond the production two-minute downloader wait budget and, in Weekly, the thirty-minute fetcher queue lifetime without shortening runtime limits.",
+    "Require actual session exhaustion and a subsequent automatic downloader session; separately expire a single missing gossip tip whose parent is already local, so a larger downloader backlog cannot hide a lost recovery trigger.",
+    "Require recovery to a frozen existing canonical tip without mining, chain restart or manual reconnection, and preserve dependency readiness, local head and peer evidence if recovery times out.",
+    "Retain selector retry, peer continuity, bad-block, historical state-root and reward checks. Give Weekly a separate forty-five-minute simulation budget after compilation."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": false
+  },
+  "references": []
+}

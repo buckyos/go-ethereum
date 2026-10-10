@@ -156,6 +156,19 @@ func (p *Peer) SetHead(hash common.Hash, td *big.Int) {
 	p.td.Set(td)
 }
 
+// UpdateHead advances the peer's advertised head only if its TD increases. The
+// comparison and update are atomic so gossip cannot undo an expiry recovery hint.
+func (p *Peer) UpdateHead(hash common.Hash, td *big.Int) bool {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if td.Cmp(p.td) <= 0 {
+		return false
+	}
+	p.head = hash
+	p.td.Set(td)
+	return true
+}
+
 // KnownBlock returns whether peer is known to already have a block.
 func (p *Peer) KnownBlock(hash common.Hash) bool {
 	return p.knownBlocks.Contains(hash)

@@ -18,19 +18,102 @@ package eth
 
 import (
 	"fmt"
+	"math/big"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/forkid"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/eth/protocols/snap"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
+
+// The only new block has expired from the fetcher, while the connected peer's
+// advertised parent is exactly our local head. No new gossip or reconnect may
+// be needed for the downloader to retrieve and validate that fixed tip.
+func TestExternalStateExpiredTipRecovery(t *testing.T) {
+	for _, version := range []uint{eth.ETH66, eth.ETH67} {
+		t.Run(fmt.Sprintf("eth%d", version), func(t *testing.T) {
+			local := newTestHandlerWithBlocks(5)
+			defer local.close()
+			remote := newTestHandlerWithBlocks(5)
+			defer remote.close()
+			parent := remote.chain.CurrentBlock()
+			if local.chain.CurrentBlock().Hash() != parent.Hash() {
+				t.Fatal("fixture parents differ")
+			}
+			caps := []p2p.Cap{{Name: "eth", Version: version}}
+			localPipe, remotePipe := p2p.MsgPipe()
+			defer localPipe.Close()
+			defer remotePipe.Close()
+			peer := eth.NewPeer(version, p2p.NewPeer(enode.ID{1}, "", caps), localPipe, local.txpool)
+			other := eth.NewPeer(version, p2p.NewPeer(enode.ID{2}, "", caps), remotePipe, remote.txpool)
+			defer peer.Close()
+			defer other.Close()
+			ready := make(chan struct{}, 2)
+			go local.handler.runEthPeer(peer, func(p *eth.Peer) error {
+				ready <- struct{}{}
+				return eth.Handle((*ethHandler)(local.handler), p)
+			})
+			go remote.handler.runEthPeer(other, func(p *eth.Peer) error {
+				ready <- struct{}{}
+				return eth.Handle((*ethHandler)(remote.handler), p)
+			})
+			for i := 0; i < 2; i++ {
+				select {
+				case <-ready:
+				case <-time.After(time.Second):
+					t.Fatal("peer handshake did not finish")
+				}
+			}
+			blocks, _ := core.GenerateChain(remote.chain.Config(), parent, ethash.NewFaker(), remote.db, 1, nil)
+			tip := blocks[0]
+			if _, err := remote.chain.InsertChain(blocks); err != nil {
+				t.Fatal(err)
+			}
+			// Direct insertion does not broadcast a mined-block event. The peer
+			// still advertises the parent established during the handshake.
+			if head, td := peer.Head(); head != parent.Hash() || td.Cmp(local.chain.GetTd(parent.Hash(), parent.NumberU64())) != 0 {
+				t.Fatal("expected equal local and advertised parent TD")
+			}
+			probe := newChainSyncer(local.handler)
+			probe.forced = true
+			if probe.nextSyncOp() != nil {
+				t.Fatal("fixture unexpectedly schedules sync without the expired tip hint")
+			}
+			heads := make(chan core.ChainHeadEvent, 8)
+			sub := local.chain.SubscribeChainHeadEvent(heads)
+			defer sub.Unsubscribe()
+			local.handler.retryExpiredBlock(peer.ID(), tip.Header())
+			deadline := time.NewTimer(15 * time.Second)
+			defer deadline.Stop()
+			for local.chain.CurrentBlock().Hash() != tip.Hash() {
+				select {
+				case <-heads:
+				case <-deadline.C:
+					t.Fatal("expired tip was not automatically downloaded")
+				}
+			}
+			if connected := local.handler.peers.peer(peer.ID()); connected == nil || connected.Peer != peer {
+				t.Fatal("recovery replaced or disconnected the peer")
+			}
+			// An older gossip callback cannot overwrite the recovery target.
+			local.handler.retryExpiredBlock(peer.ID(), parent.Header())
+			peer.UpdateHead(parent.Hash(), local.chain.GetTd(parent.Hash(), parent.NumberU64()))
+			if head, _ := peer.Head(); head != tip.Hash() {
+				t.Fatal("late parent hint rolled back the peer target")
+			}
+		})
+	}
+}
 
 // Complete a real downloader sync to block 5 with block 6 already queued in the
 // fetcher. The peer serves a fixed chain and never reannounces the queued tip.
@@ -216,5 +299,73 @@ func TestExternalStateSyncScheduling(t *testing.T) {
 	permanent.deferExternalState(consensus.ErrExternalStateBlocked)
 	if !permanent.externalStateBlocked || permanent.nextSyncOp() != nil {
 		t.Fatal("permanent local failure still schedules downloads")
+	}
+}
+
+func TestExternalStateExpiredTipHints(t *testing.T) {
+	local := newTestHandlerWithBlocks(1)
+	defer local.close()
+	// Keep scheduling idle so the hint boundary can be checked independently
+	// from the actual network download covered above.
+	h := &handler{chain: local.chain, peers: newPeerSet(), quitSync: make(chan struct{})}
+	h.chainSync = newChainSyncer(h)
+	pipe, other := p2p.MsgPipe()
+	defer pipe.Close()
+	defer other.Close()
+	p := eth.NewPeer(eth.ETH67, p2p.NewPeer(enode.ID{1}, "", nil), pipe, local.txpool)
+	defer p.Close()
+	remote := eth.NewPeer(eth.ETH67, p2p.NewPeer(enode.ID{2}, "", nil), other, local.txpool)
+	defer remote.Close()
+	parent := local.chain.CurrentBlock()
+	parentTD := local.chain.GetTd(parent.Hash(), parent.NumberU64())
+	errs := make(chan error, 2)
+	for _, peer := range []*eth.Peer{p, remote} {
+		go func(peer *eth.Peer) {
+			errs <- peer.Handshake(1, parentTD, parent.Hash(), local.chain.Genesis().Hash(),
+				forkid.NewID(local.chain.Config(), local.chain.Genesis().Hash(), parent.NumberU64()), local.handler.forkFilter)
+		}(peer)
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.peers.registerPeer(p, nil); err != nil {
+		t.Fatal(err)
+	}
+	unknownParent := common.HexToHash("0x1234")
+	header := &types.Header{Number: big.NewInt(3), ParentHash: unknownParent, Difficulty: big.NewInt(100)}
+	h.retryExpiredBlock(p.ID(), header)
+	if head, _ := p.Head(); head != parent.Hash() || len(h.chainSync.peerEventCh) != 0 {
+		t.Fatal("guessed TD for a parent unknown to both the chain and the peer")
+	}
+	// A peer can advertise a backlog parent that has not arrived locally yet.
+	p.SetHead(unknownParent, parentTD)
+	h.retryExpiredBlock(p.ID(), header)
+	wantTD := new(big.Int).Add(parentTD, header.Difficulty)
+	if head, td := p.Head(); head != header.Hash() || td.Cmp(wantTD) != 0 {
+		t.Fatal("lost the expired backlog tip")
+	}
+	if local.chain.CurrentBlock().Hash() != parent.Hash() {
+		t.Fatal("hint bypassed block validation")
+	}
+	// Coalesced wakeups must remain bounded and cannot block the fetcher even
+	// if the chain sync loop is busy or permanently blocked by local state.
+	h.chainSync.externalStateBlocked = true
+	for i := 0; i < 100; i++ {
+		if !h.chainSync.handlePeerEvent(p) {
+			t.Fatal("unexpected shutdown")
+		}
+	}
+	if len(h.chainSync.peerEventCh) != 1 || h.chainSync.nextSyncOp() != nil {
+		t.Fatal("wakeups bypassed permanent block or grew without bound")
+	}
+	if err := h.peers.unregisterPeer(p.ID()); err != nil {
+		t.Fatal(err)
+	}
+	h.retryExpiredBlock(p.ID(), header) // Disconnected peers leave no retry task behind.
+	close(h.quitSync)
+	if h.chainSync.handlePeerEvent(p) {
+		t.Fatal("accepted a wakeup after shutdown")
 	}
 }

@@ -317,7 +317,7 @@ jobs:
       - name: Run weekly shard
         # Give all 2500 rounds their own budget after compilation, retaining
         # headroom for setup and log upload within the six-hour job limit.
-        timeout-minutes: ${{ (matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'multi-miner-soak') && 22 || matrix.shard == 'world-soak' && 300 || 360 }}
+        timeout-minutes: ${{ matrix.shard == 'multi-miner-soak' && 47 || matrix.shard == 'upstream-fault-matrix' && 22 || matrix.shard == 'world-soak' && 300 || 360 }}
         env:
           BITCOIN_BIN_DIR: ${{ runner.temp }}/regtest-tools/bitcoin/bin
           ORD_BIN: ${{ runner.temp }}/regtest-tools/ord/ord

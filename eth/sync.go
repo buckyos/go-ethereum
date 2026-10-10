@@ -86,7 +86,7 @@ type chainSyncOp struct {
 func newChainSyncer(handler *handler) *chainSyncer {
 	return &chainSyncer{
 		handler:     handler,
-		peerEventCh: make(chan struct{}),
+		peerEventCh: make(chan struct{}, 1),
 	}
 }
 
@@ -95,10 +95,47 @@ func newChainSyncer(handler *handler) *chainSyncer {
 // chain head.
 func (cs *chainSyncer) handlePeerEvent(peer *eth.Peer) bool {
 	select {
+	case <-cs.handler.quitSync:
+		return false
+	default:
+	}
+	select {
 	case cs.peerEventCh <- struct{}{}:
 		return true
 	case <-cs.handler.quitSync:
 		return false
+	default:
+		// Peer state already contains the latest head. One pending wakeup is
+		// enough, including when several queued blocks expire together.
+		return true
+	}
+}
+
+// retryExpiredBlock preserves a downloader target after the fetcher releases a
+// propagated body. Gossip normally advertises only the parent, which can equal
+// our head forever when the network stops mining during an upstream outage.
+func (h *handler) retryExpiredBlock(origin string, header *types.Header) {
+	peer := h.peers.peer(origin)
+	if peer == nil || header.Number.Sign() <= 0 || header.Difficulty == nil || header.Difficulty.Sign() <= 0 || h.chain.HasBlock(header.Hash(), header.Number.Uint64()) {
+		return
+	}
+	parentTD := h.chain.GetTd(header.ParentHash, header.Number.Uint64()-1)
+	if parentTD == nil {
+		// A backlog can outlive the queue too. The peer's advertised parent
+		// supplies its TD even when that parent is not yet stored locally.
+		parent, td := peer.Head()
+		if parent != header.ParentHash {
+			return
+		}
+		parentTD = td
+	}
+	td := new(big.Int).Add(parentTD, header.Difficulty)
+	if peer.UpdateHead(header.Hash(), td) {
+		// This is an untrusted download hint, not a validated chain head. The
+		// downloader still verifies the header, body and external state, with
+		// its existing retry budget, cooldown and permanent-error handling.
+		log.Info("Scheduling expired propagated block for sync", "peer", origin, "number", header.Number, "hash", header.Hash(), "td", td)
+		h.chainSync.handlePeerEvent(peer.Peer)
 	}
 }
 

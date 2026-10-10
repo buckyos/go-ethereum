@@ -47,7 +47,12 @@ class BlockDelayProxy:
                         proxy.stream.write(json.dumps(event) + "\n")
                         proxy.stream.flush()
                 if held and not proxy.release.wait(timeout=90):
-                    self.send_error(504, "test block delay exceeded its safety bound")
+                    try:
+                        self.send_error(504, "test block delay exceeded its safety bound")
+                    except (BrokenPipeError, ConnectionResetError):
+                        # Long faults outlive the sync worker's request timeout.
+                        # Keep the gate active for its next real retry.
+                        pass
                     return
                 headers = {"Content-Type": "application/json"}
                 if self.headers.get("Authorization"):

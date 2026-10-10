@@ -201,14 +201,15 @@ type BlockFetcher struct {
 	importing  int
 
 	// Callbacks
-	getHeader      HeaderRetrievalFn  // Retrieves a header from the local chain
-	getBlock       blockRetrievalFn   // Retrieves a block from the local chain
-	verifyHeader   headerVerifierFn   // Checks if a block's headers have a valid proof of work
-	broadcastBlock blockBroadcasterFn // Broadcasts a block to connected peers
-	chainHeight    chainHeightFn      // Retrieves the current chain's height
-	insertHeaders  headersInsertFn    // Injects a batch of headers into the chain
-	insertChain    chainInsertFn      // Injects a batch of blocks into the chain
-	dropPeer       peerDropFn         // Drops a peer for misbehaving
+	getHeader      HeaderRetrievalFn           // Retrieves a header from the local chain
+	getBlock       blockRetrievalFn            // Retrieves a block from the local chain
+	verifyHeader   headerVerifierFn            // Checks if a block's headers have a valid proof of work
+	broadcastBlock blockBroadcasterFn          // Broadcasts a block to connected peers
+	chainHeight    chainHeightFn               // Retrieves the current chain's height
+	insertHeaders  headersInsertFn             // Injects a batch of headers into the chain
+	insertChain    chainInsertFn               // Injects a batch of blocks into the chain
+	dropPeer       peerDropFn                  // Drops a peer for misbehaving
+	expiredBlock   func(string, *types.Header) // Hands expired block hints back to the synchroniser
 
 	// Testing hooks
 	announceChangeHook func(common.Hash, bool)           // Method to call upon adding or deleting a hash from the blockAnnounce list
@@ -219,7 +220,9 @@ type BlockFetcher struct {
 }
 
 // NewBlockFetcher creates a block fetcher to retrieve blocks based on hash announcements.
-func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn) *BlockFetcher {
+// expiredBlock, if set, receives expired full-block hints after their queue quota
+// is released. It must not block or reenter the fetcher's event loop.
+func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetrievalFn, verifyHeader headerVerifierFn, broadcastBlock blockBroadcasterFn, chainHeight chainHeightFn, insertHeaders headersInsertFn, insertChain chainInsertFn, dropPeer peerDropFn, expiredBlock func(string, *types.Header)) *BlockFetcher {
 	return &BlockFetcher{
 		light:          light,
 		notify:         make(chan *blockAnnounce),
@@ -247,6 +250,7 @@ func NewBlockFetcher(light bool, getHeader HeaderRetrievalFn, getBlock blockRetr
 		insertHeaders:  insertHeaders,
 		insertChain:    insertChain,
 		dropPeer:       dropPeer,
+		expiredBlock:   expiredBlock,
 	}
 }
 
@@ -397,6 +401,7 @@ func (f *BlockFetcher) loop() {
 				log.Warn("Expired propagated block awaiting validation", "peer", op.origin, "number", op.number(), "hash", hash, "attempts", op.retries)
 				f.forgetHash(hash)
 				f.forgetBlock(hash)
+				f.retryExpiredBlock(op)
 				continue
 			}
 			// If too high up the chain or phase, continue later
@@ -515,6 +520,9 @@ func (f *BlockFetcher) loop() {
 			// Permanent failures and expired waits release all memory and peer quotas.
 			f.forgetHash(hash)
 			f.forgetBlock(hash)
+			if op != nil && (errors.Is(result.err, consensus.ErrExternalStateUnavailable) || waitingForParent) {
+				f.retryExpiredBlock(op)
+			}
 
 		case now := <-retryTicker.C:
 			for hash, op := range f.waiting {
@@ -808,6 +816,15 @@ func (f *BlockFetcher) loop() {
 				}
 			}
 		}
+	}
+}
+
+// retryExpiredBlock releases ownership of the body before handing a lightweight
+// hint to the synchroniser. Permanent validation failures never take this path.
+// The callback must not block or call back into the fetcher's event loop.
+func (f *BlockFetcher) retryExpiredBlock(op *blockOrHeaderInject) {
+	if !f.light && f.expiredBlock != nil {
+		f.expiredBlock(op.origin, op.block.Header())
 	}
 }
 
