@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
@@ -63,12 +64,14 @@ func (h *handler) syncTransactions(p *eth.Peer) {
 
 // chainSyncer coordinates blockchain sync components.
 type chainSyncer struct {
-	handler     *handler
-	force       *time.Timer
-	forced      bool // true when force timer fired
-	warned      time.Time
-	peerEventCh chan struct{}
-	doneCh      chan error // non-nil when sync is running
+	handler              *handler
+	force                *time.Timer
+	forced               bool // true when force timer fired
+	warned               time.Time
+	peerEventCh          chan struct{}
+	externalStateRetryAt time.Time
+	externalStateBlocked bool       // Permanent local failures require repair and restart.
+	doneCh               chan error // non-nil when sync is running
 }
 
 // chainSyncOp is a scheduled sync operation.
@@ -123,6 +126,9 @@ func (cs *chainSyncer) loop() {
 			// Peer information changed, recheck.
 		case err := <-cs.doneCh:
 			cs.doneCh = nil
+			cs.deferExternalState(err)
+			// Arm the wakeup after the cooldown deadline is recorded. Otherwise a
+			// slightly earlier timer could fire while nextSyncOp still refuses work.
 			cs.force.Reset(forceSyncCycle)
 			cs.forced = false
 
@@ -150,8 +156,24 @@ func (cs *chainSyncer) loop() {
 	}
 }
 
+// deferExternalState prevents local dependency failures from becoming hot sync
+// loops. Permanent retention/configuration faults require repair and restart;
+// they cannot be fixed by downloading the same remote blocks again.
+func (cs *chainSyncer) deferExternalState(err error) {
+	if errors.Is(err, consensus.ErrExternalStateBlocked) {
+		cs.externalStateBlocked = true
+		log.Error("Chain sync blocked by local external state; repair the dependency and restart", "err", err)
+	} else if errors.Is(err, consensus.ErrExternalStateUnavailable) {
+		cs.externalStateRetryAt = time.Now().Add(forceSyncCycle)
+	}
+}
+
 // nextSyncOp determines whether sync is required at this time.
 func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
+	if cs.externalStateBlocked || time.Now().Before(cs.externalStateRetryAt) {
+		return nil
+	}
+
 	if cs.doneCh != nil {
 		return nil // Sync already running
 	}

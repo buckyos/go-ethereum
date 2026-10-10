@@ -58,6 +58,12 @@ type ChainReader interface {
 	GetBlock(hash common.Hash, number uint64) *types.Block
 }
 
+// ErrorFinalizer is an optional import interface for engines with fallible external
+// dependencies. The caller must discard the working state when finalization fails.
+type ErrorFinalizer interface {
+	FinalizeWithError(ChainHeaderReader, *types.Header, *state.StateDB, []*types.Transaction, []*types.Header) error
+}
+
 // Engine is an algorithm agnostic consensus engine.
 type Engine interface {
 	// Author retrieves the Ethereum address of the account that minted the given

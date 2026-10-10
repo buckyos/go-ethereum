@@ -1,0 +1,27 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "external-state-validation-retry",
+  "type": "fixed",
+  "scopes": [
+    "consensus",
+    "node-runtime",
+    "testing"
+  ],
+  "summary": "Retry block validation when local USDB indexer state is temporarily unavailable",
+  "details": [
+    "Preserve structured local dependency errors through header validation and reward finalization; temporary RPC or height-readiness failures no longer become BAD BLOCK records or invalid-chain peer penalties.",
+    "Bound gossip waiting by block count, encoded bytes, peer quotas, distance, age and import concurrency; retry normal validation with backoff and preserve parent ordering.",
+    "Retry full-block and light/snap header imports within a bounded sync session, honor cancellation, and defer subsequent sessions without reconnecting peers. Permanent local retention/configuration errors stop automatic sync until repair and restart.",
+    "Require the new recovery, invalid-block, resource-limit and shutdown cases in Fast CI, and pin USDB committed-prefix query support."
+  ],
+  "operator_actions": [
+    "Observe waiting, resumed and expired validation messages. Repair permanent local indexer configuration or history faults before restarting; retries do not replace deep-reorg recovery."
+  ],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": true
+  },
+  "references": []
+}

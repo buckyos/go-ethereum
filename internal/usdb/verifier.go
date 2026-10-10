@@ -124,7 +124,7 @@ func resolveConsensusProfile(ctx context.Context, client Client, btcRegistry *bt
 	}
 	view, err := client.GetPassEconomicProfile(ctx, selector.PassID, query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query pass %s at BTC height %d: %w", selector.PassID.String(), selector.BTCHeight, err)
 	}
 	if view == nil {
 		return nil, fmt.Errorf("%w: pass %s", ErrProfileNotFound, selector.PassID.String())

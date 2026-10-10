@@ -2368,6 +2368,10 @@ func (bc *BlockChain) maintainTxIndex(ancients uint64) {
 
 // reportBlock logs a bad block error.
 func (bc *BlockChain) reportBlock(block *types.Block, receipts types.Receipts, err error) {
+	if consensus.IsExternalStateError(err) {
+		log.Warn("Block validation waiting for local external state", "number", block.Number(), "hash", block.Hash(), "err", err)
+		return
+	}
 	rawdb.WriteBadBlock(bc.db, block)
 
 	var receiptString string

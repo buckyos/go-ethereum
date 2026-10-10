@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/downloader"
@@ -200,5 +201,20 @@ func testSnapSyncDisabling(t *testing.T, ethVer uint, snapVer uint) {
 	}
 	if atomic.LoadUint32(&empty.handler.snapSync) == 1 {
 		t.Fatalf("snap sync not disabled after successful synchronisation")
+	}
+}
+
+// A busy peer set must not bypass the local dependency cooldown or permanent
+// operator block. A nil handler deliberately catches accidental scheduling.
+func TestExternalStateSyncScheduling(t *testing.T) {
+	temporary := &chainSyncer{}
+	temporary.deferExternalState(consensus.ErrExternalStateUnavailable)
+	if temporary.externalStateBlocked || !time.Now().Before(temporary.externalStateRetryAt) || temporary.nextSyncOp() != nil {
+		t.Fatal("temporary failure did not defer sync")
+	}
+	permanent := &chainSyncer{}
+	permanent.deferExternalState(consensus.ErrExternalStateBlocked)
+	if !permanent.externalStateBlocked || permanent.nextSyncOp() != nil {
+		t.Fatal("permanent local failure still schedules downloads")
 	}
 }

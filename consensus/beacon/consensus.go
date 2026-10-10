@@ -358,6 +358,17 @@ func (beacon *Beacon) Finalize(chain consensus.ChainHeaderReader, header *types.
 	header.Root = state.IntermediateRoot(true)
 }
 
+// FinalizeWithError preserves the underlying PoW engine's fallible finalization.
+func (beacon *Beacon) FinalizeWithError(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header) error {
+	if !beacon.IsPoSHeader(header) {
+		if finalizer, ok := beacon.ethone.(consensus.ErrorFinalizer); ok {
+			return finalizer.FinalizeWithError(chain, header, state, txs, uncles)
+		}
+	}
+	beacon.Finalize(chain, header, state, txs, uncles)
+	return nil
+}
+
 // FinalizeAndAssemble implements consensus.Engine, setting the final state and
 // assembling the block.
 func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (*types.Block, error) {

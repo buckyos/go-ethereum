@@ -1,12 +1,22 @@
 {
   "github.com/ethereum/go-ethereum/eth": [
-    "TestSyncCompletionImportsQueuedTip"
+    "TestSyncCompletionImportsQueuedTip",
+    "TestExternalStateSyncScheduling"
   ],
   "github.com/ethereum/go-ethereum/eth/downloader": [
-    "TestSyncCompletionHeaderTD"
+    "TestSyncCompletionHeaderTD",
+    "TestExternalStateRetryRecoveryAndCancellation",
+    "TestExternalStateDownloaderPaths",
+    "TestExternalStateDownloaderDoesNotBlamePeer"
   ],
   "github.com/ethereum/go-ethereum/eth/fetcher": [
     "TestSyncCompletionImportsQueuedBlock",
-    "TestSyncCompletionNotificationDoesNotBlock"
+    "TestSyncCompletionNotificationDoesNotBlock",
+    "TestExternalStateRetryImportsDescendants",
+    "TestExternalStateQueueLimits",
+    "TestExternalStateCompletionDoesNotBlockAfterStop",
+    "TestExternalStateQueueExpiry",
+    "TestExternalStateConcurrentImportLimit",
+    "TestExternalStateLightHeaderRetry"
   ]
 }

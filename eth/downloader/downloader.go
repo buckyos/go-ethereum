@@ -27,6 +27,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -352,6 +353,10 @@ func (d *Downloader) LegacySync(id string, head common.Hash, td, ttd *big.Int, m
 	}
 	if errors.Is(err, ErrMergeTransition) {
 		return err // This is an expected fault, don't keep printing it in a spin-loop
+	}
+	if errors.Is(err, consensus.ErrExternalStateBlocked) {
+		log.Error("Synchronisation blocked by local external state", "peer", id, "err", err)
+		return err
 	}
 	log.Warn("Synchronisation failed, retrying", "err", err)
 	return err
@@ -1410,7 +1415,12 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 						}
 					}
 					if len(chunkHeaders) > 0 {
-						if n, err := d.lightchain.InsertHeaderChain(chunkHeaders, frequency); err != nil {
+						if n, err := d.retryExternalState(fmt.Sprintf("headers %d..%d", chunkHeaders[0].Number, chunkHeaders[len(chunkHeaders)-1].Number), func() (int, error) {
+							return d.lightchain.InsertHeaderChain(chunkHeaders, frequency)
+						}); err != nil {
+							if consensus.IsExternalStateError(err) || errors.Is(err, errCanceled) {
+								return err
+							}
 							rollbackErr = err
 
 							// If some headers were inserted, track them as uncertain
@@ -1555,7 +1565,12 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 	// Downloaded blocks are always regarded as trusted after the
 	// transition. Because the downloaded chain is guided by the
 	// consensus-layer.
-	if index, err := d.blockchain.InsertChain(blocks); err != nil {
+	if index, err := d.retryExternalState(fmt.Sprintf("blocks %d..%d", first.Number, last.Number), func() (int, error) {
+		return d.blockchain.InsertChain(blocks)
+	}); err != nil {
+		if consensus.IsExternalStateError(err) || errors.Is(err, errCanceled) {
+			return err
+		}
 		if index < len(results) {
 			log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "err", err)
 

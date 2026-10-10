@@ -325,27 +325,6 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	if header.Time <= parent.Time {
 		return errOlderBlockTime
 	}
-	// Verify the block's difficulty based on its timestamp and parent's difficulty
-	expected := ethash.CalcDifficulty(chain, header.Time, parent)
-	if activation != nil {
-		policy := &activation.Versions
-		profile, err := ethash.resolveUSDBProfile(activation.BTCActivationRegistryID, header.Extra)
-		if err != nil {
-			return fmt.Errorf("failed to resolve usdb difficulty profile: %w", err)
-		}
-		quoteDecision, err := resolveUSDBQuotePolicy(policy, header, profile)
-		if err != nil {
-			return fmt.Errorf("failed to resolve usdb quote policy: %w", err)
-		}
-		expected, err = applyUSDBDifficultyPolicy(policy, expected, quoteDecision)
-		if err != nil {
-			return fmt.Errorf("failed to apply usdb difficulty policy: %w", err)
-		}
-	}
-
-	if expected.Cmp(header.Difficulty) != 0 {
-		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expected)
-	}
 	// Verify that the gas limit is <= 2^63-1
 	if header.GasLimit > params.MaxGasLimit {
 		return fmt.Errorf("invalid gasLimit: have %v, max %v", header.GasLimit, params.MaxGasLimit)
@@ -366,6 +345,27 @@ func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, pa
 	} else if err := misc.VerifyEip1559Header(chain.Config(), parent, header); err != nil {
 		// Verify the header's EIP-1559 attributes.
 		return err
+	}
+	// Verify the block's difficulty based on its timestamp and parent's difficulty
+	expected := ethash.CalcDifficulty(chain, header.Time, parent)
+	if activation != nil {
+		policy := &activation.Versions
+		profile, err := ethash.resolveUSDBProfile(activation.BTCActivationRegistryID, header.Extra)
+		if err != nil {
+			return fmt.Errorf("failed to resolve usdb difficulty profile: %w", err)
+		}
+		quoteDecision, err := resolveUSDBQuotePolicy(policy, header, profile)
+		if err != nil {
+			return fmt.Errorf("failed to resolve usdb quote policy: %w", err)
+		}
+		expected, err = applyUSDBDifficultyPolicy(policy, expected, quoteDecision)
+		if err != nil {
+			return fmt.Errorf("failed to apply usdb difficulty policy: %w", err)
+		}
+	}
+
+	if expected.Cmp(header.Difficulty) != 0 {
+		return fmt.Errorf("invalid difficulty: have %v, want %v", header.Difficulty, expected)
 	}
 	// Verify the engine specific seal securing the block
 	if seal {
@@ -775,12 +775,16 @@ func validateUSDBBTCAnchorTransition(
 
 func (ethash *Ethash) resolveUSDBProfile(btcActivationRegistryID string, headerExtra []byte) (*usdb.ResolvedConsensusProfile, error) {
 	if ethash.usdbProfileResolverErr != nil {
-		return nil, ethash.usdbProfileResolverErr
+		return nil, &consensus.ExternalStateError{Cause: ethash.usdbProfileResolverErr}
 	}
 	if ethash.usdbProfileResolver == nil {
-		return nil, errors.New("usdb profile resolver not configured")
+		return nil, &consensus.ExternalStateError{Cause: errors.New("usdb profile resolver not configured")}
 	}
-	return ethash.usdbProfileResolver.ResolveProfile(context.Background(), btcActivationRegistryID, headerExtra)
+	profile, err := ethash.usdbProfileResolver.ResolveProfile(context.Background(), btcActivationRegistryID, headerExtra)
+	if local, retry := usdb.ClassifyQueryFailure(err); local {
+		err = &consensus.ExternalStateError{Cause: err, Retry: retry}
+	}
+	return profile, err
 }
 
 func resolveUSDBQuotePolicy(
@@ -839,15 +843,21 @@ func applyUSDBDifficultyPolicy(
 // Finalize implements consensus.Engine, accumulating the block and uncle rewards,
 // setting the final state on the header
 func (ethash *Ethash) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header) {
-	// Finalize cannot return an error through the consensus.Engine interface.
-	// When usdb-indexer-backed reward resolution fails during block import, keep the state
-	// unchanged apart from recomputing the root. The imported block header still
-	// carries the rewarded state root from the producer side, so the caller will
-	// reject the block later via state-root mismatch instead of silently accepting it.
+	// Legacy callers cannot receive the error. Import uses FinalizeWithError.
+	if err := ethash.FinalizeWithError(chain, header, state, txs, uncles); err != nil {
+		ethash.config.Log.Error("Failed to apply block rewards", "number", header.Number, "err", err)
+		header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	}
+}
+
+// FinalizeWithError preserves external-state errors instead of disguising them
+// as a state-root mismatch. The importer discards this state on any error.
+func (ethash *Ethash) FinalizeWithError(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header) error {
 	if err := ethash.accumulateRewards(chain.Config(), state, header, uncles); err != nil {
-		ethash.config.Log.Error("Failed to apply block rewards", "number", header.Number.Uint64(), "err", err)
+		return err
 	}
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	return nil
 }
 
 // FinalizeAndAssemble implements consensus.Engine, accumulating the block and
