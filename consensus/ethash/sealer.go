@@ -49,23 +49,36 @@ var (
 // Seal implements consensus.Engine, attempting to find a nonce that satisfies
 // the block's difficulty requirements.
 func (ethash *Ethash) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
-	// If we're running a fake PoW, simply return a 0 nonce immediately
+	// Fake PoW returns a zero nonce, optionally after an asynchronous test delay.
 	if ethash.config.PowMode == ModeFake || ethash.config.PowMode == ModeFullFake {
-		if ethash.config.FakeSealDelay > 0 {
-			timer := time.NewTimer(ethash.config.FakeSealDelay)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-			case <-stop:
-				return nil
-			}
-		}
 		header := block.Header()
 		header.Nonce, header.MixDigest = types.BlockNonce{}, common.Hash{}
-		select {
-		case results <- block.WithSeal(header):
-		default:
-			ethash.config.Log.Warn("Sealing result is not read by miner", "mode", "fake", "sealhash", ethash.SealHash(block.Header()))
+		publish := func() {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			select {
+			case results <- block.WithSeal(header):
+			default:
+				ethash.config.Log.Warn("Sealing result is not read by miner", "mode", "fake", "sealhash", ethash.SealHash(block.Header()))
+			}
+		}
+		if delay := ethash.config.FakeSealDelay; delay > 0 {
+			// Match the asynchronous real sealer: worker.taskLoop must return to
+			// its select so new work or shutdown can close this task's stop channel.
+			go func() {
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					publish()
+				case <-stop:
+				}
+			}()
+		} else {
+			publish()
 		}
 		return nil
 	}

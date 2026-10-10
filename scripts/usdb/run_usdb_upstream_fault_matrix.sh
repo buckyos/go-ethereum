@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
+MATRIX_SCENARIO=${MATRIX_SCENARIO:-fault}
+case "$MATRIX_SCENARIO" in
+  fault | multi-miner) ;;
+  *) echo "Unsupported MATRIX_SCENARIO: $MATRIX_SCENARIO" >&2; exit 1 ;;
+esac
+export MATRIX_SCENARIO
 # Compilation belongs to the preparation budget. The inner invocation owns all
 # services and its EXIT trap also runs when the simulation budget expires.
 if [[ "${1:-}" != --execute ]]; then
@@ -13,6 +19,13 @@ if [[ "${1:-}" != --execute ]]; then
     [[ -x "${GETH_BIN:-}" ]] || { echo "Missing prepared GETH_BIN" >&2; exit 1; }
   fi
   usdb_prepare_geth_binary GETH_BIN "$ROOT_DIR" "$MATRIX_WORK_ROOT/bin/geth"
+  if [[ "$MATRIX_SCENARIO" == multi-miner ]]; then
+    if [[ "${MATRIX_SKIP_BUILD:-0}" == 1 ]]; then
+      [[ -x "$MATRIX_WORK_ROOT/bin/invalidblock" ]] || { echo "Missing prepared invalidblock fixture tool" >&2; exit 1; }
+    else
+      (cd "$ROOT_DIR" && usdb_go build -o "$MATRIX_WORK_ROOT/bin/invalidblock" ./tests/common/invalidblock)
+    fi
+  fi
   # Build once, then all nodes run the same immutable executable copies.
   for package in balance-history usdb-indexer; do
     binary="$MATRIX_WORK_ROOT/bin/$package"
@@ -76,6 +89,22 @@ regtest_wait_until_ord_server_synced_to_bitcoind
 printf '%s\n' '{"p":"usdb","op":"mint","v":1,"usdb_main":"0x1111111111111111111111111111111111111111","prev":[]}' >"$WORK_DIR/mint.json"
 pass_id=$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$WORK_DIR/mint.json" "$owner_address" "$owner_address")
 regtest_mine_blocks 2 "$miner_address"
+scenario_args=()
+matrix_driver="$ROOT_DIR/scripts/usdb/upstream_fault_matrix.py"
+if [[ "$MATRIX_SCENARIO" == multi-miner ]]; then
+  # A distinct owner and beneficiary are necessary to exercise two miners,
+  # rather than two processes mining with the same pass and payout address.
+  second_owner=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME_B")
+  regtest_fund_address "$second_owner" 5.0
+  regtest_mine_blocks 2 "$miner_address"
+  regtest_wait_until_ord_server_synced_to_bitcoind
+  printf '%s\n' '{"p":"usdb","op":"mint","v":1,"usdb_main":"0x2222222222222222222222222222222222222222","prev":[]}' >"$WORK_DIR/mint-b.json"
+  second_pass=$(regtest_ord_inscribe_file "$ORD_WALLET_NAME_B" "$WORK_DIR/mint-b.json" "$second_owner" "$second_owner")
+  regtest_mine_blocks 2 "$miner_address"
+  regtest_fund_address "$second_owner" 1.0
+  scenario_args+=(--second-owner "$second_owner" --second-pass "$second_pass" --cycles "${MATRIX_CYCLES:-1}" --invalidblock "$MATRIX_WORK_ROOT/bin/invalidblock")
+  matrix_driver="$ROOT_DIR/tests/multi_miner_acceptance.py"
+fi
 # Keep the mint below every injected stable-frontier reorg and give its owner
 # a nonzero energy history before creating any USDB blocks.
 regtest_fund_address "$owner_address" 1.0
@@ -89,9 +118,10 @@ regtest_wait_balance_history_consensus_ready
 regtest_start_usdb_indexer
 regtest_wait_usdb_rpc_ready
 regtest_wait_usdb_consensus_ready
-python3 "$ROOT_DIR/scripts/usdb/upstream_fault_matrix.py" \
+python3 "$matrix_driver" \
   --work-dir "$MATRIX_DIR" --output-dir "$MATRIX_OUTPUT_DIR" \
   --usdb-repo "$USDB_REPO_DIR" --geth "$GETH_BIN" \
   --bitcoin "$BITCOIND_BIN" --ord "$ORD_BIN" --port-base "$MATRIX_PORT_BASE" \
   --balance-history "$MATRIX_WORK_ROOT/bin/balance-history" --indexer "$MATRIX_WORK_ROOT/bin/usdb-indexer" \
-  --miner-address "$miner_address" --owner-address "$owner_address" --pass-id "$pass_id"
+  --miner-address "$miner_address" --owner-address "$owner_address" --pass-id "$pass_id" \
+  "${scenario_args[@]}"

@@ -145,7 +145,14 @@ def validate_auto_recovery(evidence, failures, successes):
     require(0 < evidence["budget_seconds"] <= AUTO_RECOVERY_TIMEOUT_SEC
             and 0 <= evidence["elapsed_seconds"] <= evidence["budget_seconds"],
             "automatic recovery exceeded its deadline")
-    require(evidence["blocks"] > evidence["stalled_height"] and evidence["head_hash"] == evidence["target_hash"],
+    # A miner_stop may leave an already sealed block in flight. A later valid
+    # descendant must not make recovery fail after the captured target imported.
+    if "canonical_target_hash" in evidence:
+        require(type(evidence.get("target_height")) is int
+                and evidence["stalled_height"] < evidence["target_height"] <= evidence["blocks"],
+                "canonical recovery target height was not imported")
+    recovered_hash = evidence.get("canonical_target_hash", evidence["head_hash"])
+    require(evidence["blocks"] > evidence["stalled_height"] and recovered_hash == evidence["target_hash"],
             "automatic recovery did not import the stalled canonical chain")
     key = lambda call: json.dumps(call["params"], sort_keys=True)
     failed = {key(call): call for call in failures if "error" in call}

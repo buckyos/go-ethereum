@@ -13,6 +13,7 @@ WORK_ROOT=${USDB_LONG_CI_WORK_DIR:-/tmp/usdb-long-ci-work}
 declare -a NIGHTLY_SHARDS=(
   go-profile
   go-activation
+  multi-miner-delay
   miner-pass-upgrade
   balance-history
   indexer-protocol
@@ -23,6 +24,7 @@ declare -a WEEKLY_SHARDS=(
   world-soak
   miner-pass-upgrade-soak
   upstream-fault-matrix
+  multi-miner-soak
   economic-capacity
   balance-history-extended
   release-e2e
@@ -156,7 +158,7 @@ prepare_usdb_service_binaries() {
           "$ROOT_DIR/scripts/usdb/run_miner_pass_upgrade_services.sh" --prepare-only
       return
       ;;
-    nightly:go-profile | nightly:go-activation | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:upstream-fault-matrix | weekly:release-e2e)
+    nightly:go-profile | nightly:go-activation | nightly:multi-miner-delay | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:upstream-fault-matrix | weekly:multi-miner-soak | weekly:release-e2e)
       # Build each package with the same selection used by its later cargo run.
       # A combined build unifies dependency features and does not warm the
       # single-package fingerprints used inside the readiness window.
@@ -172,11 +174,15 @@ prepare_usdb_service_binaries() {
           --bin balance-history
       ;;
   esac
-  if [[ "${tier}:${shard}" == weekly:upstream-fault-matrix ]]; then
+  if [[ "${tier}:${shard}" == weekly:upstream-fault-matrix || "$shard" == multi-miner-delay || "$shard" == multi-miner-soak ]]; then
     # Keep Go compilation outside the twenty-minute fault simulation budget.
     source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
     run_case go-upstream-matrix-build \
       usdb_build_geth "$ROOT_DIR" "$WORK_ROOT/upstream-matrix/bin/geth"
+    if [[ "$shard" == multi-miner-delay || "$shard" == multi-miner-soak ]]; then
+      (cd "$ROOT_DIR" && run_case go-invalid-block-fixture-build \
+        usdb_go build -o "$WORK_ROOT/upstream-matrix/bin/invalidblock" ./tests/common/invalidblock)
+    fi
     local package
     for package in balance-history usdb-indexer; do
       cp "${CARGO_TARGET_DIR:-$USDB_REPO_DIR/src/btc/target}/debug/$package" "$WORK_ROOT/upstream-matrix/bin/$package"
@@ -218,9 +224,24 @@ collect_diagnostics() {
   )
 }
 
+run_multi_miner_matrix() {
+  local cycles="$1"
+  require_regtest_tools
+  run_case multi-miner-delay \
+    env USDB_REPO_DIR="$USDB_REPO_DIR" BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+      GETH_BIN="$WORK_ROOT/upstream-matrix/bin/geth" \
+      MATRIX_SKIP_BUILD=1 MATRIX_SCENARIO=multi-miner MATRIX_CYCLES="$cycles" \
+      MATRIX_WORK_ROOT="$WORK_ROOT/upstream-matrix" \
+      MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/multi-miner-delay" \
+      bash "$ROOT_DIR/scripts/usdb/run_usdb_upstream_fault_matrix.sh"
+}
+
 run_nightly() {
   local shard="$1"
   case "$shard" in
+    multi-miner-delay)
+      run_multi_miner_matrix 1
+      ;;
     go-profile)
       require_regtest_tools
       run_case profile \
@@ -323,6 +344,9 @@ run_nightly() {
 run_weekly() {
   local shard="$1"
   case "$shard" in
+    multi-miner-soak)
+      run_multi_miner_matrix 3
+      ;;
     upstream-fault-matrix)
       require_regtest_tools
       run_case upstream-fault-matrix \

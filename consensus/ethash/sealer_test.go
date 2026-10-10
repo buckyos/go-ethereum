@@ -44,16 +44,53 @@ func TestFakeSealDelay(t *testing.T) {
 	if err := engine.Seal(nil, block, results, nil); err != nil {
 		t.Fatalf("failed to fake-seal block: %v", err)
 	}
-	if elapsed := time.Since(started); elapsed < delay {
-		t.Fatalf("fake seal returned before configured delay: have %s, want at least %s", elapsed, delay)
-	}
 	select {
 	case sealed := <-results:
+		if elapsed := time.Since(started); elapsed < delay {
+			t.Fatalf("fake result arrived before configured delay: have %s, want at least %s", elapsed, delay)
+		}
 		if sealed.Nonce() != 0 || sealed.MixDigest() != (common.Hash{}) {
 			t.Fatalf("fake seal did not clear PoW fields")
 		}
-	default:
+	case <-time.After(time.Second):
 		t.Fatalf("fake seal did not publish a result")
+	}
+}
+
+func TestFakeSealDelayDoesNotBlockTaskReplacement(t *testing.T) {
+	engine := New(Config{PowMode: ModeFake, FakeSealDelay: time.Hour}, nil, false)
+	defer engine.Close()
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1)})
+	stop := make(chan struct{})
+	defer close(stop)
+	returned := make(chan error, 1)
+	go func() { returned <- engine.Seal(nil, block, make(chan *types.Block, 1), stop) }()
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delayed fake seal blocks taskLoop from cancelling obsolete work")
+	}
+}
+
+func TestFakeSealDelayCancellation(t *testing.T) {
+	const delay = 50 * time.Millisecond
+	engine := New(Config{PowMode: ModeFake, FakeSealDelay: delay}, nil, false)
+	defer engine.Close()
+	block := types.NewBlockWithHeader(&types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(1)})
+	results := make(chan *types.Block, 1)
+	stop := make(chan struct{})
+	if err := engine.Seal(nil, block, results, stop); err != nil {
+		t.Fatal(err)
+	}
+	// taskLoop can cancel only after Seal has returned control to its select.
+	close(stop)
+	select {
+	case <-results:
+		t.Fatal("cancelled fake task published an obsolete block")
+	case <-time.After(2 * delay):
 	}
 }
 

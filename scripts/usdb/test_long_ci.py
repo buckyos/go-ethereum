@@ -46,6 +46,7 @@ class LongCiRunnerTests(unittest.TestCase):
             [
                 "go-profile",
                 "go-activation",
+                "multi-miner-delay",
                 "miner-pass-upgrade",
                 "balance-history",
                 "indexer-protocol",
@@ -63,6 +64,7 @@ class LongCiRunnerTests(unittest.TestCase):
                 "world-soak",
                 "miner-pass-upgrade-soak",
                 "upstream-fault-matrix",
+                "multi-miner-soak",
                 "economic-capacity",
                 "balance-history-extended",
                 "release-e2e",
@@ -191,9 +193,32 @@ main "$@"
 
     def test_upstream_matrix_has_separate_build_and_short_simulation_budget(self) -> None:
         integration = (WORKFLOWS / "usdb-integration.yml").read_text(encoding="utf-8")
-        self.assertIn("weekly upstream-fault-matrix --prepare-only", integration)
-        self.assertIn("weekly upstream-fault-matrix --run-only", integration)
-        self.assertIn("matrix.shard == 'upstream-fault-matrix' && 22", integration)
+        self.assertIn('weekly "${{ matrix.shard }}" --prepare-only', integration)
+        self.assertIn('weekly "${{ matrix.shard }}" --run-only', integration)
+        self.assertIn("matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'multi-miner-soak') && 22", integration)
+
+    def test_multi_miner_tiers_run_distinct_bounded_cycle_counts(self) -> None:
+        harness = f"""
+source {shlex.quote(str(RUNNER))}
+require_regtest_tools() {{ :; }}
+run_case() {{ printf '%s\\n' "$*"; }}
+run_nightly multi-miner-delay
+run_weekly multi-miner-soak
+"""
+        env = dict(os.environ, BITCOIN_BIN_DIR='/isolated/core', ORD_BIN='/isolated/ord',
+                   USDB_LONG_CI_WORK_DIR='/isolated/work')
+        result = subprocess.run(['bash', '-c', harness], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = result.stdout.splitlines()
+        self.assertEqual(len(rows), 2)
+        for row, cycles in zip(rows, (1, 3)):
+            self.assertIn(f'MATRIX_CYCLES={cycles}', row)
+            self.assertIn('MATRIX_SCENARIO=multi-miner', row)
+            self.assertIn('MATRIX_SKIP_BUILD=1', row)
+            self.assertIn('GETH_BIN=/isolated/work/upstream-matrix/bin/geth', row)
+        workflow = (WORKFLOWS / 'usdb-integration.yml').read_text()
+        self.assertIn('          - multi-miner-delay', workflow)
+        self.assertIn('shard: multi-miner-soak', workflow)
 
     def test_miner_pass_upgrade_shards_prepare_once_and_isolate_each_seed(self) -> None:
         harness = f"""

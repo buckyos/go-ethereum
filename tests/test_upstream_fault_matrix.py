@@ -118,6 +118,16 @@ class AutomaticRecoveryTests(unittest.TestCase):
         self.assertEqual(retries[0]["block_height"], 150)
         self.assertEqual(retries[0]["previous_error_code"], -32098)
 
+    def test_later_head_requires_proof_of_canonical_target_import(self):
+        evidence, failed, success = self.fixture()
+        evidence.update(target_height=evidence["blocks"], canonical_target_hash=evidence["target_hash"],
+                        head_hash="later-descendant", blocks=evidence["blocks"] + 1)
+        validate_auto_recovery(evidence, failed, success)
+        for field, value in (("canonical_target_hash", "fork"), ("target_height", evidence["blocks"] + 1),
+                             ("target_height", evidence["stalled_height"]), ("target_height", None)):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_auto_recovery({**evidence, field: value}, failed, success)
+
     def test_rejects_restart_pid_reuse_or_extended_deadline(self):
         for field, value in (("pid", 124), ("start_ticks", 457), ("starts", 2)):
             with self.subTest(field=field):

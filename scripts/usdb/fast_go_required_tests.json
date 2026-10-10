@@ -1,5 +1,8 @@
 {
   "github.com/ethereum/go-ethereum/consensus/ethash": [
+    "TestFakeSealDelay",
+    "TestFakeSealDelayDoesNotBlockTaskReplacement",
+    "TestFakeSealDelayCancellation",
     "TestPrepareKTransitionMatchesIndependent50405StepOracle",
     "TestPrepareKTransitionUsesPriorFullWindowAndReplacesOldestSample",
     "TestPrepareKTransitionRejectsCorruptWindowState",

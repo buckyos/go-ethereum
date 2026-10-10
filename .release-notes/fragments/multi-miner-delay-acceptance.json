@@ -1,0 +1,21 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "multi-miner-delay-acceptance",
+  "type": "changed",
+  "scopes": ["testing"],
+  "summary": "Exercise independent upstream delay and recovery with two miners and a late validator",
+  "details": [
+    "Make delayed fake PoW asynchronous and cancellable so the test miner can replace obsolete work without blocking its task loop; the normal PoW path is unchanged.",
+    "Run real isolated Bitcoin, balance-history and indexer stores for three nodes, with distinct MinerPass owners and miner beneficiaries.",
+    "Require gossip and downloader recovery without chain restart or peer reconnection, competing-anchor fork convergence, historical reward equality, anchor exhaustion recovery and invalid-block rejection.",
+    "Add one-cycle nightly and three-cycle weekly acceptance shards, with RPC audits and bounded failure evidence. Delayed fake PoW is confined to these test fixtures."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": false
+  },
+  "references": []
+}

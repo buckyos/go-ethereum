@@ -67,8 +67,9 @@ compatibility linker 参数不是 release 策略。长期方案仍是升级或�
 
 ## Go 依赖预下载
 
-Fast 的 Go job、Nightly 的 `go-profile` / `go-activation`、Weekly 的
-`upstream-fault-matrix` / `release-e2e` 在构建前运行独立的 `Prepare Go modules`。
+Fast 的 Go job、Nightly 的 `go-profile` / `go-activation` / `miner-pass-upgrade` /
+`multi-miner-delay`、Weekly 的 `upstream-fault-matrix` / `release-e2e` /
+`miner-pass-upgrade-soak` / `multi-miner-soak` 在构建前运行独立的 `Prepare Go modules`。
 该步骤使用 workflow 选定的 canonical Go 执行 `go mod download -json`，预取
 当前 `go.mod` 声明的构建和测试依赖，不修改 Go 版本、依赖版本、代理或校验策略。
 Rust-only 分片不增加此步骤。本版仍保持 `cache: false`，跨 job 模块缓存后续单独实施。
@@ -120,8 +121,8 @@ USDB_FAST_SCOPE=sourcedao scripts/usdb/run_fast_ci.sh
 
 | Workflow | 默认触发 | 内容 |
 | --- | --- | --- |
-| `usdb-nightly.yml` | 每日 `08:37 UTC`，也可手工运行 | profile、activation/bootstrap、balance-history、indexer protocol/reorg/validator |
-| `usdb-weekly.yml` | 每周日 `09:23 UTC`，也可手工运行 | 完整 Nightly，加 world soak、独立上游故障矩阵、economic capacity、balance-history extended、public release E2E |
+| `usdb-nightly.yml` | 每日 `08:37 UTC`，也可手工运行 | profile、activation/bootstrap、pass upgrade、多矿工延迟、balance-history、indexer protocol/reorg/validator |
+| `usdb-weekly.yml` | 每周日 `09:23 UTC`，也可手工运行 | 完整 Nightly，加 world/pass upgrade soak、多矿工连续恢复、独立上游故障矩阵、economic capacity、balance-history extended、public release E2E |
 | `usdb-integration.yml` | reusable only | 校验 lock、准备固定 regtest 工具、按 shard 执行和归档 |
 
 Nightly / Weekly 始终以触发 workflow 的 Go SHA 为 coordinator，并按
@@ -157,6 +158,12 @@ Weekly 还运行独立的 [多节点上游故障矩阵](usdb-independent-upstrea
 三个 geth 各用一套 BTC/Ord/balance-history/indexer，覆盖中断、稳定分叉、
 恢复与空目录完整重放。该 shard 单独编译，模拟内部预算 20 分钟；不改变
 world-soak 的轮次与种子。
+
+Nightly 的 `multi-miner-delay` 和 Weekly 的 `multi-miner-soak` 增加
+[多矿工独立上游延迟矩阵](usdb-multi-miner-delay-matrix.md)。前者执行一轮，后者在同一批
+三节点上连续执行三轮，覆盖 BH/indexer 分别落后、gossip/downloader 等待、RPC 中断、
+不同 anchor 竞争分支、自动恢复、使用次数上限和真正无效块的拒绝。两名矿工使用不同 pass
+及收益地址；最终核对历史执行状态和收益。封块使用 delayed fake PoW，不作为算力基准。
 
 等待重组收敛时，模拟器只将精确的 `-32041 / SNAPSHOT_NOT_READY` 视为可重试状态；
 持续未就绪仍然超时，高度、哈希和 consensus readiness 校验保持严格。
