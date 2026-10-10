@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"sync/atomic"
 	"testing"
@@ -98,6 +99,51 @@ func TestExternalStateRetryImportsDescendants(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func TestExternalStateBlockedDoesNotDropPeer(t *testing.T) {
+	for _, light := range []bool{false, true} {
+		for _, phase := range []string{"header", "import"} {
+			t.Run(fmt.Sprintf("light=%v/%s", light, phase), func(t *testing.T) {
+				hashes, blocks := makeChain(1, 0, genesis)
+				block := blocks[hashes[0]]
+				dropped := make(chan string, 1)
+				f := NewBlockFetcher(light,
+					func(common.Hash) *types.Header { return genesis.Header() },
+					func(common.Hash) *types.Block { return genesis },
+					func(*types.Header) error {
+						if phase == "header" {
+							return consensus.ErrExternalStateBlocked
+						}
+						return nil
+					}, func(*types.Block, bool) {}, func() uint64 { return 0 },
+					func([]*types.Header) (int, error) { return 0, consensus.ErrExternalStateBlocked },
+					func(types.Blocks) (int, error) { return 0, consensus.ErrExternalStateBlocked },
+					func(peer string) { dropped <- peer })
+				defer f.Stop()
+				f.importedHook = func(*types.Header, *types.Block) { t.Error("unverifiable block imported") }
+				if light {
+					f.importHeaders("honest", block.Header())
+				} else {
+					f.importBlocks("honest", block)
+				}
+				// Wait for the importer to finish before checking peer handling.
+				select {
+				case result := <-f.done:
+					if !errors.Is(result.err, consensus.ErrExternalStateBlocked) {
+						t.Fatalf("local failure lost: %v", result.err)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("import did not finish")
+				}
+				select {
+				case peer := <-dropped:
+					t.Fatalf("local failure dropped peer %s", peer)
+				default:
+				}
+			})
+		}
 	}
 }
 

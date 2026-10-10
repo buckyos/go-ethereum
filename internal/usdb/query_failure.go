@@ -27,6 +27,10 @@ func ClassifyQueryFailure(err error) (local, retry bool) {
 			return true, false
 		}
 	}
+	var response *rpcResponseError
+	if errors.As(err, &response) {
+		return true, false
+	}
 	var transport *rpcTransportError
 	if errors.As(err, &transport) {
 		if errors.Is(err, context.Canceled) {

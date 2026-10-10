@@ -1,0 +1,21 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "usdb-rpc-result-error-classification",
+  "type": "fixed",
+  "scopes": ["consensus", "node-runtime", "testing"],
+  "summary": "Classify malformed USDB RPC result data as a local dependency fault",
+  "details": [
+    "Preserve JSON decoding failures from system-state, pass-profile and miner-candidate responses as nonretryable local errors, including malformed results inside valid JSON-RPC envelopes.",
+    "Header and reward validation preserve the decoder cause without recording BAD BLOCK or penalizing peers. Permanent local faults pause automatic sync until the dependency is repaired and the chain service is restarted."
+  ],
+  "operator_actions": [
+    "Repair malformed indexer responses before restarting a chain service blocked by a local RPC response error."
+  ],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": true
+  },
+  "references": []
+}

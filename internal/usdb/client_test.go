@@ -321,6 +321,39 @@ func TestRPCClientPropagatesProfileCallErrorsAndNull(t *testing.T) {
 	}
 }
 
+func TestRPCClientClassifiesMalformedResults(t *testing.T) {
+	selector := newTestSelector(t, 123)
+	query := QueryContext{RequestedHeight: selector.BTCHeight}
+	for _, method := range []string{"get_system_state_info", "get_pass_economic_profile", "resolve_miner_candidate"} {
+		for _, raw := range []string{`{`, `[]`, `{"local_synced_block_height":"bad","external_state":{"btc_height":"bad"}}`} {
+			t.Run(method+"/"+raw, func(t *testing.T) {
+				client := &RPCClient{client: &stubJSONRPCClient{response: json.RawMessage(raw)}}
+				var err error
+				switch method {
+				case "get_system_state_info":
+					_, err = client.GetSystemStateInfo(context.Background())
+				case "get_pass_economic_profile":
+					_, err = client.GetPassEconomicProfile(context.Background(), selector.PassID, query)
+				case "resolve_miner_candidate":
+					_, err = client.ResolveMinerCandidate(context.Background(), common.Address{}, query)
+				}
+				local, retry := ClassifyQueryFailure(err)
+				if !local || retry {
+					t.Fatalf("malformed local response: local=%v retry=%v err=%v", local, retry, err)
+				}
+				var syntax *json.SyntaxError
+				var wrongType *json.UnmarshalTypeError
+				if !errors.As(err, &syntax) && !errors.As(err, &wrongType) {
+					t.Fatalf("decoder cause lost: %v", err)
+				}
+				if !strings.Contains(err.Error(), method) {
+					t.Fatalf("method context lost: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestRPCClientMapsConsensusErrors(t *testing.T) {
 	selector := newTestSelector(t, 123)
 	query := QueryContext{RequestedHeight: selector.BTCHeight}

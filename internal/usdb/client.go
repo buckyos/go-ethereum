@@ -263,7 +263,7 @@ func (c *RPCClient) GetSystemStateInfo(ctx context.Context) (*SystemStateInfo, e
 	}
 	var info SystemStateInfo
 	if err := json.Unmarshal(raw, &info); err != nil {
-		return nil, fmt.Errorf("failed to decode get_system_state_info result: %w", err)
+		return nil, &rpcResponseError{operation: "get_system_state_info", cause: err}
 	}
 	return &info, nil
 }
@@ -285,7 +285,7 @@ func (c *RPCClient) GetPassEconomicProfile(ctx context.Context, passID PassID, q
 	}
 	var profile PassEconomicProfileView
 	if err := json.Unmarshal(raw, &profile); err != nil {
-		return nil, fmt.Errorf("failed to decode get_pass_economic_profile result: %w", err)
+		return nil, &rpcResponseError{operation: "get_pass_economic_profile", cause: err}
 	}
 	return &profile, nil
 }
@@ -307,7 +307,7 @@ func (c *RPCClient) ResolveMinerCandidate(ctx context.Context, usdbMain common.A
 	}
 	var candidate MinerCandidateProfileView
 	if err := json.Unmarshal(raw, &candidate); err != nil {
-		return nil, fmt.Errorf("failed to decode resolve_miner_candidate result: %w", err)
+		return nil, &rpcResponseError{operation: "resolve_miner_candidate", cause: err}
 	}
 	return &candidate, nil
 }
@@ -315,6 +315,19 @@ func (c *RPCClient) ResolveMinerCandidate(ctx context.Context, usdbMain common.A
 func isNullJSON(raw json.RawMessage) bool {
 	return len(raw) == 0 || string(raw) == "null"
 }
+
+// rpcResponseError identifies malformed local RPC data, never peer-supplied
+// consensus input. Preserve the decoder cause for diagnosis without retrying it.
+type rpcResponseError struct {
+	operation string
+	cause     error
+}
+
+func (e *rpcResponseError) Error() string {
+	return fmt.Sprintf("failed to decode %s result: %v", e.operation, e.cause)
+}
+
+func (e *rpcResponseError) Unwrap() error { return e.cause }
 
 type rpcTransportError struct {
 	operation string

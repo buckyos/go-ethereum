@@ -13,6 +13,7 @@
     "TestSyncCompletionImportsQueuedBlock",
     "TestSyncCompletionNotificationDoesNotBlock",
     "TestExternalStateRetryImportsDescendants",
+    "TestExternalStateBlockedDoesNotDropPeer",
     "TestExternalStateQueueLimits",
     "TestExternalStateCompletionDoesNotBlockAfterStop",
     "TestExternalStateQueueExpiry",
