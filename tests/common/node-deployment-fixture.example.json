@@ -1,0 +1,13 @@
+{
+  "schema": "usdb-node-deployment-fixture:v1",
+  "dedicated_test_node": true,
+  "hostname": "dedicated-node-acceptance",
+  "launcher": "/home/test/.local/bin/usdb-node",
+  "kit_root": "/home/test/.local/share/usdb/releases/REPLACE_WITH_INSTALLED_RELEASE",
+  "node_env": "/home/test/.config/usdb/usdb-testnet-v1/node.env",
+  "data_root": "/data/usdb-acceptance",
+  "identity_files": ["/data/usdb-acceptance/networks/usdb-testnet-v1/usdb-chain/geth/nodekey"],
+  "balance_history_rpc": "http://127.0.0.1:19110",
+  "indexer_rpc": "http://127.0.0.1:19120",
+  "chain_rpc": "http://127.0.0.1:18545"
+}

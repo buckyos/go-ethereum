@@ -1226,7 +1226,7 @@ class Matrix:
         require(not errors, f"cleanup failures: {errors}")
 
 
-def main():
+def main(matrix_type=Matrix):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe-ports", type=int)
     for name in ("work-dir", "output-dir", "usdb-repo", "geth", "bitcoin", "ord", "balance-history", "indexer"):
@@ -1242,7 +1242,7 @@ def main():
     for name in ("work_dir", "output_dir", "usdb_repo", "geth", "bitcoin", "ord", "balance_history", "indexer", "miner_address", "owner_address", "pass_id"):
         require(getattr(args, name) is not None, f"missing --{name.replace('_', '-')}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    matrix = Matrix(args)
+    matrix = matrix_type(args)
     def interrupted(signum, _frame):
         raise RuntimeError(f"matrix interrupted by signal {signum}")
     for signum in (signal.SIGINT, signal.SIGTERM):

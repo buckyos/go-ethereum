@@ -85,6 +85,7 @@ jobs:
           - go-profile
           - go-activation
           - multi-miner-delay
+          - node-restart
           - miner-pass-upgrade
           - balance-history
           - indexer-protocol
@@ -124,7 +125,7 @@ jobs:
           cache: false
 
       - name: Prepare Go modules
-        if: matrix.shard == 'go-profile' || matrix.shard == 'go-activation' || matrix.shard == 'miner-pass-upgrade' || matrix.shard == 'multi-miner-delay'
+        if: matrix.shard == 'go-profile' || matrix.shard == 'go-activation' || matrix.shard == 'miner-pass-upgrade' || matrix.shard == 'multi-miner-delay' || matrix.shard == 'node-restart'
         timeout-minutes: 12
         run: >-
           python3 go-ethereum/scripts/usdb/prepare_go_modules.py

@@ -1,0 +1,36 @@
+name: USDB deployment restart acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: usdb-dedicated-deployment-restart
+  cancel-in-progress: false
+
+jobs:
+  deployment-restart:
+    # This runner owns a configured, disposable full node. Never use a miner or
+    # an ordinary shared runner. Provisioning/snapshot sync is outside this job.
+    runs-on: [self-hosted, linux, usdb-deployment-acceptance]
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run actual node down/up
+        env:
+          FIXTURE: ${{ vars.USDB_DEPLOYMENT_FIXTURE }}
+          OUTPUT: ${{ runner.temp }}/usdb-deployment-restart-${{ github.run_id }}-${{ github.run_attempt }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          test -n "$FIXTURE"
+          python3 tests/node_deployment_restart.py --fixture "$FIXTURE" --output "$OUTPUT" --execute
+      - name: Upload restart evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: usdb-deployment-restart-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/usdb-deployment-restart-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
+          retention-days: 14

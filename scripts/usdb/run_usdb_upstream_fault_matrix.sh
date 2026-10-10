@@ -5,7 +5,7 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
 MATRIX_SCENARIO=${MATRIX_SCENARIO:-fault}
 case "$MATRIX_SCENARIO" in
-  fault | multi-miner) ;;
+  fault | multi-miner | restart) ;;
   *) echo "Unsupported MATRIX_SCENARIO: $MATRIX_SCENARIO" >&2; exit 1 ;;
 esac
 export MATRIX_SCENARIO
@@ -102,6 +102,9 @@ pass_id=$(regtest_ord_inscribe_file "$ORD_WALLET_NAME" "$WORK_DIR/mint.json" "$o
 regtest_mine_blocks 2 "$miner_address"
 scenario_args=()
 matrix_driver="$ROOT_DIR/scripts/usdb/upstream_fault_matrix.py"
+if [[ "$MATRIX_SCENARIO" == restart ]]; then
+  matrix_driver="$ROOT_DIR/tests/node_restart_acceptance.py"
+fi
 if [[ "$MATRIX_SCENARIO" == multi-miner ]]; then
   # A distinct owner and beneficiary are necessary to exercise two miners,
   # rather than two processes mining with the same pass and payout address.

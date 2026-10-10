@@ -47,6 +47,7 @@ class LongCiRunnerTests(unittest.TestCase):
                 "go-profile",
                 "go-activation",
                 "multi-miner-delay",
+                "node-restart",
                 "miner-pass-upgrade",
                 "balance-history",
                 "indexer-protocol",
@@ -222,6 +223,21 @@ run_weekly multi-miner-soak
         workflow = (WORKFLOWS / 'usdb-integration.yml').read_text()
         self.assertIn('          - multi-miner-delay', workflow)
         self.assertIn('shard: multi-miner-soak', workflow)
+
+    def test_restart_shard_runs_real_matrix_with_prepared_binaries(self) -> None:
+        harness = f"""
+source {shlex.quote(str(RUNNER))}
+require_regtest_tools() {{ :; }}
+run_case() {{ printf '%s\\n' "$*"; }}
+run_nightly node-restart
+"""
+        env = dict(os.environ, BITCOIN_BIN_DIR='/isolated/core', ORD_BIN='/isolated/ord',
+                   USDB_LONG_CI_WORK_DIR='/isolated/work')
+        result = subprocess.run(['bash', '-c', harness], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for expected in ('MATRIX_SCENARIO=restart', 'MATRIX_SKIP_BUILD=1', 'MATRIX_TIMEOUT_SEC=1200',
+                         'GETH_BIN=/isolated/work/upstream-matrix/bin/geth', 'run_usdb_upstream_fault_matrix.sh'):
+            self.assertIn(expected, result.stdout)
 
     def test_miner_pass_upgrade_shards_prepare_once_and_isolate_each_seed(self) -> None:
         harness = f"""
