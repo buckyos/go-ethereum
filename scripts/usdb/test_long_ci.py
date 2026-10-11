@@ -48,6 +48,7 @@ class LongCiRunnerTests(unittest.TestCase):
                 "go-activation",
                 "multi-miner-delay",
                 "node-restart",
+                "node-restart-p1",
                 "miner-pass-upgrade",
                 "balance-history",
                 "indexer-protocol",
@@ -230,6 +231,7 @@ source {shlex.quote(str(RUNNER))}
 require_regtest_tools() {{ :; }}
 run_case() {{ printf '%s\\n' "$*"; }}
 run_nightly node-restart
+run_nightly node-restart-p1
 """
         env = dict(os.environ, BITCOIN_BIN_DIR='/isolated/core', ORD_BIN='/isolated/ord',
                    USDB_LONG_CI_WORK_DIR='/isolated/work')
@@ -238,6 +240,8 @@ run_nightly node-restart
         for expected in ('MATRIX_SCENARIO=restart', 'MATRIX_SKIP_BUILD=1', 'MATRIX_TIMEOUT_SEC=1200',
                          'GETH_BIN=/isolated/work/upstream-matrix/bin/geth', 'run_usdb_upstream_fault_matrix.sh'):
             self.assertIn(expected, result.stdout)
+        self.assertIn('MATRIX_SCENARIO=restart-p1', result.stdout)
+        self.assertIn('long-ci-output/node-restart-p1', result.stdout)
 
     def test_miner_pass_upgrade_shards_prepare_once_and_isolate_each_seed(self) -> None:
         harness = f"""

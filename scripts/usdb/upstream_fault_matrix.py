@@ -48,6 +48,7 @@ def ports(base, index):
     # Core also binds P2P+1 for inbound onion traffic, even on regtest.
     result["btc-p2p"] = base + index * 20 + 10
     result["btc-onion"] = base + index * 20 + 11
+    result["geth-ws"] = base + index * 20 + 9
     return result
 
 

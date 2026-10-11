@@ -89,3 +89,5 @@ CI 入口 `.github/workflows/usdb-deployment-restart.yml`：使用标签
 退化成 mock 或记录为通过。artifact 保留 14 天。
 
 VM 整机重启、强制断电、fsync/块设备故障、mainnet AssumeUTXO 导入中断留到后续层次。
+
+下一批进程层的实现、运行入口及部署/VM 层边界见 [P1 恢复验收](node-restart-p1-design.md)。

@@ -53,6 +53,8 @@ class RestartNode(Node):
 class RestartMatrix(Matrix):
     """Keep the healthy miner as an independent state and execution oracle."""
 
+    node_type = RestartNode
+
     def phase(self, name):
         super().phase(name)
         self.record("phase", phase=name)
@@ -273,7 +275,7 @@ class RestartMatrix(Matrix):
 
     def run(self):
         self.report["schema"] = "usdb-node-restart:v1"
-        self.b = RestartNode(self, "b", 1)
+        self.b = self.node_type(self, "b", 1)
         self.nodes = [self.a, self.b]
         self.report["topology"] = self.report["topology"][:2]
         self.wait_upstream(self.a)
@@ -293,12 +295,15 @@ class RestartMatrix(Matrix):
         self.guard_dir = self.b.root / "geth/recovery/deep-btc-reorg"
         self.guard()
         self.compare_states("baseline", [self.b])
+        self.run_cases()
+        self.check_alive()
+
+    def run_cases(self):
         self.group_restart()
         self.core_regression()
         self.service_crashes()
         self.downstream_first()
         require([c["name"] for c in self.report["cases"]] == list(P0_CASES), "P0 coverage incomplete")
-        self.check_alive()
 
     def close(self):
         try:

@@ -15,6 +15,7 @@ declare -a NIGHTLY_SHARDS=(
   go-activation
   multi-miner-delay
   node-restart
+  node-restart-p1
   miner-pass-upgrade
   balance-history
   indexer-protocol
@@ -159,7 +160,7 @@ prepare_usdb_service_binaries() {
           "$ROOT_DIR/scripts/usdb/run_miner_pass_upgrade_services.sh" --prepare-only
       return
       ;;
-    nightly:go-profile | nightly:go-activation | nightly:multi-miner-delay | nightly:node-restart | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:upstream-fault-matrix | weekly:multi-miner-soak | weekly:release-e2e)
+    nightly:go-profile | nightly:go-activation | nightly:multi-miner-delay | nightly:node-restart | nightly:node-restart-p1 | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:upstream-fault-matrix | weekly:multi-miner-soak | weekly:release-e2e)
       # Build each package with the same selection used by its later cargo run.
       # A combined build unifies dependency features and does not warm the
       # single-package fingerprints used inside the readiness window.
@@ -175,7 +176,7 @@ prepare_usdb_service_binaries() {
           --bin balance-history
       ;;
   esac
-  if [[ "${tier}:${shard}" == weekly:upstream-fault-matrix || "$shard" == node-restart || "$shard" == multi-miner-delay || "$shard" == multi-miner-soak ]]; then
+  if [[ "${tier}:${shard}" == weekly:upstream-fault-matrix || "$shard" == node-restart || "$shard" == node-restart-p1 || "$shard" == multi-miner-delay || "$shard" == multi-miner-soak ]]; then
     # Keep Go compilation outside the twenty-minute fault simulation budget.
     source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
     run_case go-upstream-matrix-build \
@@ -246,13 +247,15 @@ run_multi_miner_matrix() {
 run_nightly() {
   local shard="$1"
   case "$shard" in
-    node-restart)
+    node-restart | node-restart-p1)
       require_regtest_tools
-      run_case node-restart \
+      local scenario=restart
+      [[ "$shard" == node-restart-p1 ]] && scenario=restart-p1
+      run_case "$shard" \
         env USDB_REPO_DIR="$USDB_REPO_DIR" BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
-          GETH_BIN="$WORK_ROOT/upstream-matrix/bin/geth" MATRIX_SKIP_BUILD=1 MATRIX_SCENARIO=restart \
+          GETH_BIN="$WORK_ROOT/upstream-matrix/bin/geth" MATRIX_SKIP_BUILD=1 MATRIX_SCENARIO="$scenario" \
           MATRIX_TIMEOUT_SEC=1200 MATRIX_WORK_ROOT="$WORK_ROOT/upstream-matrix" \
-          MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/node-restart" \
+          MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/$shard" \
           bash "$ROOT_DIR/scripts/usdb/run_usdb_upstream_fault_matrix.sh"
       ;;
     multi-miner-delay)
