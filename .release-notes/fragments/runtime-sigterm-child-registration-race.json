@@ -1,0 +1,20 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "runtime-sigterm-child-registration-race",
+  "type": "fixed",
+  "scopes": ["node-runtime", "deployment", "testing"],
+  "summary": "Stop runtime children when SIGTERM arrives during child startup",
+  "details": [
+    "Include newly started guard, geth and retry-delay processes in container shutdown even when the signal arrives before the supervisor has recorded their PIDs.",
+    "Wait for children to exit and ignore repeated stop signals during cleanup, preserving graceful geth shutdown and preventing retry delays from holding the container open.",
+    "Exercise the child-registration window for startup checks, live monitoring, geth and retry sleeps in the existing Fast CI runtime tests."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": true
+  },
+  "references": []
+}

@@ -2,6 +2,7 @@
 """Exercise the real chain entrypoint and guard against controlled upstream faults."""
 import json
 import os
+from pathlib import Path
 import signal
 import time
 import unittest
@@ -175,6 +176,83 @@ class RuntimeDeepReorgTest(RuntimeGuardFixture):
         self.wait_for(lambda: self.server.failures > 0, "guard request did not start")
         self.assert_group_stopped(runtime)
         self.assertEqual(self.line_count(self.starts), 0)
+
+    def test_sigterm_before_child_pid_registration(self) -> None:
+        # DEBUG runs before the PID assignment, after Bash has started the child.
+        # Stop only the supervisor here so the child can reach its blocking work.
+        hook = self.write_executable("pause-before-child-pid.sh", '''
+set -T
+test_launch_count=0
+trap 'if [[ "$BASH_COMMAND" == "$TEST_PID_ASSIGNMENT" ]]; then
+  test_launch_count=$((test_launch_count + 1))
+  if [[ "$test_launch_count" == "$TEST_LAUNCH_NUMBER" ]]; then
+    printf "%s\\n" "$!" >"$TEST_CHILD_PID_FILE"
+    kill -STOP "$$"
+  fi
+fi' DEBUG
+''')
+        for phase, assignment, occurrence, fault in (
+            ("sleep", "sleep_pid=$!", "1", "http"),
+            ("guard-check", "guard_pid=$!", "1", "timeout"),
+            ("geth", "geth_pid=$!", "1", ""),
+            ("guard-watch", "guard_pid=$!", "2", ""),
+        ):
+            with self.subTest(phase=phase):
+                self.server.fault = fault
+                starts_before = self.line_count(self.starts)
+                failures_before = self.server.failures
+                child_pid_file = self.root / f"{phase}-child.pid"
+                runtime = self.start_runtime(
+                    self.prepare_data_dir(f"launch-{phase}"), BASH_ENV=str(hook),
+                    TEST_PID_ASSIGNMENT=assignment, TEST_LAUNCH_NUMBER=occurrence,
+                    TEST_CHILD_PID_FILE=str(child_pid_file),
+                    USDB_DEEP_REORG_GUARD_POLL_INTERVAL_SECS="30" if phase == "sleep" else "0.1",
+                    USDB_DEEP_REORG_GUARD_REQUEST_TIMEOUT_SECS="30",
+                )
+                try:
+                    stat = Path(f"/proc/{runtime.pid}/stat")
+                    self.wait_for(
+                        lambda: child_pid_file.exists() and stat.read_text().rsplit(")", 1)[1].split()[0] == "T",
+                        f"{phase} did not pause before registering its child",
+                    )
+                    child_pid = int(child_pid_file.read_text())
+                    if phase in ("geth", "guard-watch"):
+                        self.wait_for(lambda: self.line_count(self.starts) == starts_before + 1,
+                                      "geth did not install its signal handler")
+                    if phase == "guard-watch":
+                        self.server.fault = "timeout"
+                    if phase in ("guard-check", "guard-watch"):
+                        self.wait_for(lambda: self.server.failures > failures_before,
+                                      "guard did not enter its blocking RPC")
+                    os.kill(child_pid, 0)
+                    # Queue SIGTERM while the assignment is paused, then resume.
+                    self.assert_group_stopped(runtime, resume=True)
+                    with self.assertRaises(ProcessLookupError):
+                        os.kill(child_pid, 0)
+                    expected_starts = starts_before + (phase in ("geth", "guard-watch"))
+                    self.assertEqual(self.line_count(self.starts), expected_starts)
+                    self.assertEqual(self.line_count(self.stops), expected_starts)
+                finally:
+                    self.stop_process(runtime)
+
+    def test_repeated_signals_wait_for_one_graceful_geth_stop(self) -> None:
+        requests = self.root / "geth-stop-requests.log"
+        runtime = self.start_runtime(
+            self.prepare_data_dir("repeated-stop"),
+            FAKE_GETH_STOP_DELAY="1",
+            FAKE_GETH_STOP_REQUESTS=str(requests),
+        )
+        self.wait_for(lambda: self.line_count(self.starts) == 1, "geth did not start")
+        runtime.send_signal(signal.SIGTERM)
+        self.wait_for(lambda: self.line_count(requests) == 1, "geth did not begin shutdown")
+        self.assertIsNone(runtime.poll(), "supervisor exited before geth finished shutdown")
+        for stop_signal in (signal.SIGTERM, signal.SIGINT, signal.SIGTERM):
+            runtime.send_signal(stop_signal)
+        self.assertEqual(runtime.wait(timeout=3), 0)
+        self.assertEqual(self.line_count(requests), 1, "geth received repeated stop signals")
+        self.assertEqual(self.line_count(self.stops), 1)
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(runtime.pid, 0)
 
     def test_unexpected_guard_exit_stops_container(self) -> None:
         for phase, code in (("check", 7), ("watch", 0), ("watch", 7)):

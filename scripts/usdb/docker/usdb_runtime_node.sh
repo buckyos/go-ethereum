@@ -186,17 +186,15 @@ guard_pid=""
 sleep_pid=""
 # shellcheck disable=SC2317  # Invoked indirectly by the signal trap below.
 stop_children() {
-  if [[ -n "${guard_pid}" ]] && kill -0 "${guard_pid}" 2>/dev/null; then
-    kill -TERM "${guard_pid}" 2>/dev/null || true
-  fi
-  if [[ -n "${geth_pid}" ]] && kill -0 "${geth_pid}" 2>/dev/null; then
-    kill -TERM "${geth_pid}" 2>/dev/null || true
-  fi
-  if [[ -n "${sleep_pid}" ]] && kill -0 "${sleep_pid}" 2>/dev/null; then
-    kill -TERM "${sleep_pid}" 2>/dev/null || true
-  fi
+  local child_pid
+  # A signal can arrive after fork but before the next *_pid=$! assignment.
+  # Bash already tracks that child as a job, so include it in shutdown too.
+  for child_pid in $(jobs -p); do
+    kill -TERM "${child_pid}" 2>/dev/null || true
+  done
 }
-trap 'stop_children; wait || true; exit 0' TERM INT
+# Repeated stop signals must not interrupt reaping or signal geth twice.
+trap 'trap "" TERM INT; stop_children; wait || true; exit 0' TERM INT
 
 # Track every child so Docker SIGTERM also interrupts checks and retry delays.
 guard_sleep() {

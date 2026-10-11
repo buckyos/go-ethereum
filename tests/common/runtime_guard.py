@@ -96,6 +96,10 @@ stops = os.environ["FAKE_GETH_STOPS"]
 events = os.environ["FAKE_GETH_EVENTS"]
 
 def stop(_signum, _frame):
+    requests = os.environ.get("FAKE_GETH_STOP_REQUESTS")
+    if requests:
+        with open(requests, "a", encoding="utf-8") as output:
+            output.write(f"{_signum}\\n")
     time.sleep(float(os.environ.get("FAKE_GETH_STOP_DELAY", "0")))
     with open(events, "a", encoding="utf-8") as output:
         output.write(json.dumps({"action": "stop", "pid": os.getpid()}) + "\\n")
@@ -223,9 +227,11 @@ while True:
             output = process.output_path.read_text()
             self.fail(f"{label} exited with status {status}:\n{output}")
 
-    def assert_group_stopped(self, process: subprocess.Popen[str]) -> None:
+    def assert_group_stopped(self, process: subprocess.Popen[str], *, resume: bool = False) -> None:
         """Signal PID 1 only, as Docker does, and require all children to be reaped."""
         process.send_signal(signal.SIGTERM)
+        if resume:
+            process.send_signal(signal.SIGCONT)
         self.assertEqual(process.wait(timeout=3), 0)
         with self.assertRaises(ProcessLookupError):
             os.killpg(process.pid, 0)
