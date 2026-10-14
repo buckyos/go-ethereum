@@ -42,7 +42,7 @@ func TestPayloadBuilderBuildsValidatedCurrentProfileSelector(t *testing.T) {
 		system:  newTestSystemStateInfo(t, selector),
 		profile: newTestProfileView(t, selector, "1000000", "500000"),
 	}
-	builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, 7), 0)
+	builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, 7), 0, 0)
 	if err != nil {
 		t.Fatalf("failed to build payload builder: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestPayloadBuilderMonitorsSystemStateWithoutRecomputingProfile(t *testing.T
 		system:  newTestSystemStateInfo(t, selector),
 		profile: newTestProfileView(t, selector, "1000000", "500000"),
 	}
-	builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0)
+	builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0, 0)
 	if err != nil {
 		t.Fatalf("failed to build payload builder: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestPayloadBuilderFollowsSameUSDBMainRemint(t *testing.T) {
 		system:  newTestSystemStateInfo(t, first),
 		profile: newTestProfileView(t, first, "100", "0"),
 	}
-	builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0)
+	builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0, 0)
 	if err != nil {
 		t.Fatalf("failed to build payload builder: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestPayloadBuilderRejectsMissingOrWrongAddressCandidate(t *testing.T) {
 	parentExtra := testBuilderParentExtra(t, selector, DifficultyPolicyVersionV1, 0)
 
 	missing := &stubProfileClient{system: newTestSystemStateInfo(t, selector)}
-	builder, err := NewPayloadBuilder(missing, config, 0)
+	builder, err := NewPayloadBuilder(missing, config, 0, 0)
 	if err != nil {
 		t.Fatalf("failed to construct missing-candidate builder: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestPayloadBuilderRejectsMissingOrWrongAddressCandidate(t *testing.T) {
 		system:  newTestSystemStateInfo(t, selector),
 		profile: wrongAddressProfile,
 	}
-	builder, err = NewPayloadBuilder(wrong, config, 0)
+	builder, err = NewPayloadBuilder(wrong, config, 0, 0)
 	if err != nil {
 		t.Fatalf("failed to construct wrong-address builder: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestPayloadBuilderDerivesAndEnforcesBTCAnchorAge(t *testing.T) {
 			system:  newTestSystemStateInfo(t, systemSelector),
 			profile: newTestProfileView(t, systemSelector, "0", "0"),
 		}
-		builder, err := NewPayloadBuilder(client, config, 0)
+		builder, err := NewPayloadBuilder(client, config, 0, 0)
 		if err != nil {
 			t.Fatalf("construct builder: %v", err)
 		}
@@ -328,7 +328,7 @@ func TestPayloadBuilderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 			},
 		},
 	}}
-	builder, err := NewPayloadBuilder(client, config, 0)
+	builder, err := NewPayloadBuilder(client, config, 0, 0)
 	if err != nil {
 		t.Fatalf("failed to build payload builder: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestPayloadBuilderRejectsNonCandidateConfiguredPass(t *testing.T) {
 				system:  newTestSystemStateInfo(t, selector),
 				profile: profile,
 			}
-			builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0)
+			builder, err := NewPayloadBuilder(client, testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1), 0, 0)
 			if err != nil {
 				t.Fatalf("failed to build payload builder: %v", err)
 			}
@@ -393,12 +393,12 @@ func TestPayloadBuilderRejectsNonCandidateConfiguredPass(t *testing.T) {
 
 func TestPayloadBuilderRejectsUnavailableConsensusPolicy(t *testing.T) {
 	selector := newTestSelector(t, 123)
-	if _, err := NewPayloadBuilder(&stubProfileClient{}, nil, 0); err == nil {
+	if _, err := NewPayloadBuilder(&stubProfileClient{}, nil, 0, 0); err == nil {
 		t.Fatal("expected nil chain config to be rejected")
 	}
 	unknownRegistry := testBuilderChainConfig(ProfileSelectorPayloadVersionV1, DifficultyPolicyVersionV1)
 	unknownRegistry.USDB.Activations[0].BTCActivationRegistryID = repeatHex("99", 32)
-	unknownBuilder, err := NewPayloadBuilder(&stubProfileClient{}, unknownRegistry, 0)
+	unknownBuilder, err := NewPayloadBuilder(&stubProfileClient{}, unknownRegistry, 0, 0)
 	if err != nil {
 		t.Fatalf("future registry must not fail builder construction: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestPayloadBuilderRejectsUnavailableConsensusPolicy(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			builder, err := NewPayloadBuilder(&stubProfileClient{}, test.config, 0)
+			builder, err := NewPayloadBuilder(&stubProfileClient{}, test.config, 0, 0)
 			if err != nil {
 				return
 			}
@@ -449,7 +449,7 @@ func TestPayloadBuilderRejectsUnavailableCurrentStateAndProfile(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			builder, err := NewPayloadBuilder(test.client, config, 0)
+			builder, err := NewPayloadBuilder(test.client, config, 0, 0)
 			if err != nil {
 				t.Fatalf("failed to construct builder: %v", err)
 			}
@@ -471,7 +471,7 @@ func TestPayloadBuilderRejectsInvalidOrChangingActivationIdentity(t *testing.T) 
 		system:  invalidState,
 		profile: newTestProfileView(t, selector, "0", "0"),
 	}
-	builder, err := NewPayloadBuilder(client, config, 0)
+	builder, err := NewPayloadBuilder(client, config, 0, 0)
 	if err != nil {
 		t.Fatalf("failed to construct builder: %v", err)
 	}

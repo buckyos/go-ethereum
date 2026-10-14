@@ -137,6 +137,7 @@ var (
 		utils.MinerNoVerifyFlag,
 		utils.MinerUSDBIndexerRPCURLFlag,
 		utils.MinerUSDBIndexerTimeoutFlag,
+		utils.MinerUSDBAnchorGapFlag,
 		utils.NATFlag,
 		utils.NoDiscoverFlag,
 		utils.DiscoveryV5Flag,

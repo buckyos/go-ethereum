@@ -121,7 +121,12 @@ func loadConfigPresence(file string, cfg *gethConfigPresence) error {
 	if err != nil {
 		return err
 	}
-	err = tomlSettings.NewDecoder(bytes.NewReader(data)).Decode(cfg)
+	// The full config has already passed strict validation in loadConfig.
+	// This second pass projects only presence-sensitive fields, so valid Eth
+	// settings (including miner.USDB) and other Node fields must be ignored.
+	presenceSettings := tomlSettings
+	presenceSettings.MissingField = func(reflect.Type, string) error { return nil }
+	err = presenceSettings.NewDecoder(bytes.NewReader(data)).Decode(cfg)
 	if _, ok := err.(*toml.LineError); ok {
 		err = errors.New(file + ", " + err.Error())
 	}

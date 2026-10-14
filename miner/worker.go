@@ -335,7 +335,7 @@ type worker struct {
 }
 
 type profileSelectorBuilder interface {
-	// BuildCurrentPayload fetches the current USDB state and returns the encoded
+	// BuildCurrentPayload selects a historical USDB state and returns the encoded
 	// payload and reward recipient for the candidate block.
 	BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (*usdb.BuiltProfileSelector, error)
 	// HasSystemStateChanged compares the current lightweight state identity with
@@ -386,13 +386,14 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 				config.USDB.IndexerRPCURL,
 				chainConfig,
 				config.USDB.IndexerQueryTimeout,
+				config.USDB.EffectiveAnchorGap(),
 			)
 			if err != nil {
 				worker.usdbPayloadBuilderErr = fmt.Errorf("failed to initialize usdb payload builder: %w", err)
 				log.Warn("USDB miner profile builder unavailable", "endpoint", endpoint, "query_timeout", queryTimeout, "err", worker.usdbPayloadBuilderErr)
 			} else {
 				worker.usdbPayloadBuilder = builder
-				log.Info("USDB miner profile builder initialized", "endpoint", endpoint, "query_timeout", queryTimeout)
+				log.Info("USDB miner profile builder initialized", "endpoint", endpoint, "query_timeout", queryTimeout, "anchor_gap", config.USDB.EffectiveAnchorGap())
 			}
 		}
 	}
@@ -1321,6 +1322,10 @@ func (w *worker) resolveHeaderProfile(
 		if built == nil {
 			return nil, nil, errors.New("usdb payload builder returned nil result")
 		}
+		selection := built.AnchorSelection
+		log.Debug("USDB miner BTC anchor selected", "block", blockNumber, "latest_height", selection.LatestHeight,
+			"selected_height", selection.SelectedHeight, "configured_gap", selection.ConfiguredGap,
+			"actual_gap", selection.ActualGap, "reason", selection.Reason)
 		return built, policy, nil
 	}
 	if builderErr != nil {

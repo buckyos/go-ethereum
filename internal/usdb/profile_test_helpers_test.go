@@ -9,16 +9,56 @@ import (
 )
 
 type stubProfileClient struct {
-	system         *SystemStateInfo
-	profile        *PassEconomicProfileView
-	systemErr      error
-	profileErr     error
-	candidateErr   error
-	lastPassID     PassID
-	lastUSDBMain   common.Address
-	lastQuery      QueryContext
-	systemCalls    int
-	candidateCalls int
+	system          *SystemStateInfo
+	profile         *PassEconomicProfileView
+	systemErr       error
+	profileErr      error
+	candidateErr    error
+	lastPassID      PassID
+	lastUSDBMain    common.Address
+	lastQuery       QueryContext
+	systemCalls     int
+	candidateCalls  int
+	stateRef        *HistoricalStateRefInfo
+	stateRefErr     error
+	stateRefQueries []QueryContext
+	stateRefHook    func()
+}
+
+func (s *stubProfileClient) GetStateRefAtHeight(_ context.Context, query QueryContext) (*HistoricalStateRefInfo, error) {
+	s.stateRefQueries = append(s.stateRefQueries, query)
+	if s.stateRefHook != nil {
+		s.stateRefHook()
+	}
+	if s.stateRef != nil || s.stateRefErr != nil {
+		return s.stateRef, s.stateRefErr
+	}
+	if s.system == nil || query.RequestedHeight != s.system.LocalSyncedBlockHeight {
+		return nil, ErrHistoryNotAvailable
+	}
+	// Legacy latest-height fixtures support compatible registry projection just
+	// like the service. Historical fixtures must supply their own exact state ref.
+	system := *s.system
+	system.ActivationRegistryID = query.ExpectedState.ActivationRegistryID
+	return testHistoricalStateRef(system), nil
+}
+
+func testHistoricalStateRef(system SystemStateInfo) *HistoricalStateRefInfo {
+	return &HistoricalStateRefInfo{
+		BlockHeight: system.LocalSyncedBlockHeight,
+		SnapshotInfo: HistoricalSnapshotInfo{
+			LocalSyncedBlockHeight:     system.LocalSyncedBlockHeight,
+			BalanceHistoryStableHeight: system.LocalSyncedBlockHeight,
+			SnapshotID:                 system.UpstreamSnapshotID, StableBlockHash: repeatHex("44", 32),
+		},
+		LocalStateCommitInfo: HistoricalLocalStateInfo{
+			LocalSyncedBlockHeight: system.LocalSyncedBlockHeight,
+			UpstreamSnapshotID:     system.UpstreamSnapshotID, LocalStateCommit: system.LocalStateCommit,
+			ActivationRegistryID: system.ActivationRegistryID, ActiveVersionSet: system.ActiveVersionSet,
+			ActiveVersionSetID: system.ActiveVersionSetID,
+		},
+		SystemStateInfo: system,
+	}
 }
 
 func (s *stubProfileClient) ResolveMinerCandidate(_ context.Context, usdbMain common.Address, query QueryContext) (*MinerCandidateProfileView, error) {
@@ -117,6 +157,7 @@ func newTestSystemStateInfo(t *testing.T, selector ProfileSelectorPayload) *Syst
 		ActiveVersionSetID:     activeVersionSetID,
 		LocalSyncedBlockHeight: selector.BTCHeight,
 		UpstreamSnapshotID:     selector.SnapshotIDHex(),
+		LocalStateCommit:       repeatHex("55", 32),
 		SystemStateID:          selector.SystemStateIDHex(),
 	}
 }

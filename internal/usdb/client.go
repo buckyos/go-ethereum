@@ -110,6 +110,8 @@ type QueryContext struct {
 // additionally pin the activation registry and active version set.
 type QueryExpectedState struct {
 	SnapshotID           string `json:"snapshot_id,omitempty"`
+	StableBlockHash      string `json:"stable_block_hash,omitempty"`
+	LocalStateCommit     string `json:"local_state_commit,omitempty"`
 	ActivationRegistryID string `json:"activation_registry_id,omitempty"`
 	ActiveVersionSetID   string `json:"active_version_set_id,omitempty"`
 	SystemStateID        string `json:"system_state_id,omitempty"`
@@ -122,7 +124,39 @@ type SystemStateInfo struct {
 	ActiveVersionSetID     string           `json:"active_version_set_id"`
 	LocalSyncedBlockHeight uint32           `json:"local_synced_block_height"`
 	UpstreamSnapshotID     string           `json:"upstream_snapshot_id"`
+	LocalStateCommit       string           `json:"local_state_commit"`
 	SystemStateID          string           `json:"system_state_id"`
+}
+
+// HistoricalSnapshotInfo is the upstream portion of an exact-height state ref.
+type HistoricalSnapshotInfo struct {
+	LocalSyncedBlockHeight     uint32 `json:"local_synced_block_height"`
+	BalanceHistoryStableHeight uint32 `json:"balance_history_stable_height"`
+	SnapshotID                 string `json:"snapshot_id"`
+	StableBlockHash            string `json:"stable_block_hash"`
+}
+
+// HistoricalLocalStateInfo pins the local commit to its height and rule set.
+type HistoricalLocalStateInfo struct {
+	LocalSyncedBlockHeight uint32           `json:"local_synced_block_height"`
+	UpstreamSnapshotID     string           `json:"upstream_snapshot_id"`
+	LocalStateCommit       string           `json:"local_state_commit"`
+	ActivationRegistryID   string           `json:"activation_registry_id"`
+	ActiveVersionSet       ActiveVersionSet `json:"active_version_set"`
+	ActiveVersionSetID     string           `json:"active_version_set_id"`
+}
+
+// HistoricalStateRefInfo matches the indexer's get_state_ref_at_height response.
+type HistoricalStateRefInfo struct {
+	BlockHeight          uint32                   `json:"block_height"`
+	SnapshotInfo         HistoricalSnapshotInfo   `json:"snapshot_info"`
+	LocalStateCommitInfo HistoricalLocalStateInfo `json:"local_state_commit_info"`
+	SystemStateInfo      SystemStateInfo          `json:"system_state_info"`
+}
+
+type stateRefAtHeightParams struct {
+	BlockHeight uint32       `json:"block_height"`
+	Context     QueryContext `json:"context"`
 }
 
 // EconomicExternalState is the exact historical state identity returned by UIP-0006.
@@ -197,6 +231,7 @@ type resolveMinerCandidateParams struct {
 // Client is the minimal usdb-indexer RPC surface needed to build and resolve selectors.
 type Client interface {
 	GetSystemStateInfo(ctx context.Context) (*SystemStateInfo, error)
+	GetStateRefAtHeight(ctx context.Context, query QueryContext) (*HistoricalStateRefInfo, error)
 	GetPassEconomicProfile(ctx context.Context, passID PassID, query QueryContext) (*PassEconomicProfileView, error)
 	ResolveMinerCandidate(ctx context.Context, usdbMain common.Address, query QueryContext) (*MinerCandidateProfileView, error)
 	Close()
@@ -264,6 +299,23 @@ func (c *RPCClient) GetSystemStateInfo(ctx context.Context) (*SystemStateInfo, e
 	var info SystemStateInfo
 	if err := json.Unmarshal(raw, &info); err != nil {
 		return nil, &rpcResponseError{operation: "get_system_state_info", cause: err}
+	}
+	return &info, nil
+}
+
+// GetStateRefAtHeight resolves exactly one historical height under the expected registry.
+func (c *RPCClient) GetStateRefAtHeight(ctx context.Context, query QueryContext) (*HistoricalStateRefInfo, error) {
+	const method = "get_state_ref_at_height"
+	var raw json.RawMessage
+	if err := c.client.CallContext(ctx, &raw, method, stateRefAtHeightParams{query.RequestedHeight, query}); err != nil {
+		return nil, fmt.Errorf("failed to call %s at height=%d: %w", method, query.RequestedHeight, c.mapCallError(method, err))
+	}
+	if isNullJSON(raw) {
+		return nil, nil
+	}
+	var info HistoricalStateRefInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return nil, &rpcResponseError{operation: method, cause: err}
 	}
 	return &info, nil
 }

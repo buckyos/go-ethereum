@@ -52,6 +52,7 @@ import (
 	"github.com/ethereum/go-ethereum/graphql"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/internal/flags"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/les"
 	lescatalyst "github.com/ethereum/go-ethereum/les/catalyst"
 	"github.com/ethereum/go-ethereum/log"
@@ -586,6 +587,12 @@ var (
 	MinerUSDBIndexerTimeoutFlag = &cli.DurationFlag{
 		Name:     "miner.usdb-indexer.timeout",
 		Usage:    "Timeout for one usdb-indexer reward payload build query",
+		Category: flags.MinerCategory,
+	}
+	MinerUSDBAnchorGapFlag = &cli.Uint64Flag{
+		Name:     "miner.usdb-anchor-gap",
+		Usage:    "Preferred BTC block gap for USDB mining (local policy; 0 selects latest; may yield to parent anchor and age limits)",
+		Value:    uint64(usdb.DefaultMinerAnchorGap),
 		Category: flags.MinerCategory,
 	}
 
@@ -1727,6 +1734,14 @@ func setMiner(ctx *cli.Context, cfg *miner.Config) {
 	}
 	if ctx.IsSet(MinerUSDBIndexerTimeoutFlag.Name) {
 		cfg.USDB.IndexerQueryTimeout = ctx.Duration(MinerUSDBIndexerTimeoutFlag.Name)
+	}
+	if ctx.IsSet(MinerUSDBAnchorGapFlag.Name) {
+		gap := ctx.Uint64(MinerUSDBAnchorGapFlag.Name)
+		if gap > math.MaxUint32 {
+			Fatalf("miner.usdb-anchor-gap exceeds BTC height range: have=%d maximum=%d", gap, uint64(math.MaxUint32))
+		}
+		value := uint32(gap)
+		cfg.USDB.AnchorGap = &value
 	}
 	if ctx.IsSet(LegacyMinerGasTargetFlag.Name) {
 		log.Warn("The generic --miner.gastarget flag is deprecated and will be removed in the future!")

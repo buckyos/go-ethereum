@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/usdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -63,6 +64,17 @@ type USDBConfig struct {
 	IndexerRPCURL string `toml:",omitempty"`
 	// IndexerQueryTimeout bounds one current-state payload build against usdb-indexer.
 	IndexerQueryTimeout time.Duration `toml:",omitempty"`
+	// AnchorGap is a local BTC-height preference. Nil uses the recommended
+	// default; a non-nil zero explicitly selects latest, including in old TOML.
+	AnchorGap *uint32 `toml:",omitempty"`
+}
+
+// EffectiveAnchorGap preserves explicit zero while defaulting omitted settings.
+func (config USDBConfig) EffectiveAnchorGap() uint32 {
+	if config.AnchorGap == nil {
+		return usdb.DefaultMinerAnchorGap
+	}
+	return *config.AnchorGap
 }
 
 // Miner creates blocks and searches for proof-of-work values.

@@ -14,6 +14,7 @@ import (
 type BuiltProfileSelector struct {
 	Payload         []byte
 	RewardRecipient common.Address
+	AnchorSelection MinerAnchorSelection
 }
 
 // PayloadBuilder creates the current UIP-0007 selector used by miner/header assembly.
@@ -21,13 +22,25 @@ type PayloadBuilder struct {
 	client       Client
 	chainConfig  *params.ChainConfig
 	queryTimeout time.Duration
+	anchorGap    uint32
 
 	stateMu           sync.RWMutex
-	lastSystemStateID string
+	lastObservedState observedSystemState
+}
+
+// observedSystemState tracks the head observed by a successful build separately
+// from its selected historical state. A pinned history must not trigger a loop.
+type observedSystemState struct {
+	height                                         uint32
+	snapshotID, systemID, registryID, versionSetID string
+}
+
+func observedState(info *SystemStateInfo) observedSystemState {
+	return observedSystemState{info.LocalSyncedBlockHeight, info.UpstreamSnapshotID, info.SystemStateID, info.ActivationRegistryID, info.ActiveVersionSetID}
 }
 
 // NewPayloadBuilder constructs a builder from an already-configured USDB client.
-func NewPayloadBuilder(client Client, chainConfig *params.ChainConfig, queryTimeout time.Duration) (*PayloadBuilder, error) {
+func NewPayloadBuilder(client Client, chainConfig *params.ChainConfig, queryTimeout time.Duration, anchorGap uint32) (*PayloadBuilder, error) {
 	if client == nil {
 		return nil, fmt.Errorf("nil usdb client")
 	}
@@ -41,11 +54,12 @@ func NewPayloadBuilder(client Client, chainConfig *params.ChainConfig, queryTime
 		client:       client,
 		chainConfig:  chainConfig,
 		queryTimeout: EffectiveQueryTimeout(queryTimeout),
+		anchorGap:    anchorGap,
 	}, nil
 }
 
 // NewRPCPayloadBuilder dials one usdb-indexer endpoint and uses it to generate current selectors.
-func NewRPCPayloadBuilder(endpoint string, chainConfig *params.ChainConfig, queryTimeout time.Duration) (*PayloadBuilder, error) {
+func NewRPCPayloadBuilder(endpoint string, chainConfig *params.ChainConfig, queryTimeout time.Duration, anchorGap uint32) (*PayloadBuilder, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultQueryTimeout)
 	defer cancel()
 
@@ -53,7 +67,7 @@ func NewRPCPayloadBuilder(endpoint string, chainConfig *params.ChainConfig, quer
 	if err != nil {
 		return nil, err
 	}
-	builder, err := NewPayloadBuilder(client, chainConfig, queryTimeout)
+	builder, err := NewPayloadBuilder(client, chainConfig, queryTimeout, anchorGap)
 	if err != nil {
 		client.Close()
 		return nil, err
@@ -87,14 +101,14 @@ func (b *PayloadBuilder) HasSystemStateChanged(ctx context.Context) (bool, error
 		return false, fmt.Errorf("usdb returned an empty system_state_id")
 	}
 	b.stateMu.RLock()
-	lastSystemStateID := b.lastSystemStateID
+	lastObservedState := b.lastObservedState
 	b.stateMu.RUnlock()
-	return lastSystemStateID == "" || systemState.SystemStateID != lastSystemStateID, nil
+	return lastObservedState.systemID == "" || observedState(systemState) != lastObservedState, nil
 }
 
 // BuildCurrentPayload emits a selector for blockNumber only after resolving its
 // consensus policy, resolving a pass for usdbMain, deriving its age from
-// parentExtra, and validating the selected profile in current state.
+// parentExtra, and validating the profile at the locally selected historical height.
 func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (*BuiltProfileSelector, error) {
 	activation, err := b.chainConfig.USDBActivationAt(blockNumber)
 	if err != nil {
@@ -129,6 +143,13 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if systemState == nil {
 		return nil, fmt.Errorf("usdb returned no current system state")
 	}
+	observed := observedState(systemState)
+	if _, err := parseCanonicalHex32("current system_state_id", systemState.SystemStateID); err != nil {
+		return nil, err
+	}
+	if _, err := parseCanonicalHex32("current snapshot_id", systemState.UpstreamSnapshotID); err != nil {
+		return nil, err
+	}
 	if err := validateCurrentActivationIdentity(
 		b.chainConfig.USDB.BTCIndexOriginHeight,
 		systemState.LocalSyncedBlockHeight,
@@ -139,25 +160,54 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	); err != nil {
 		return nil, fmt.Errorf("invalid current usdb activation identity: %w", err)
 	}
-	expectedActivation, err := btcRegistry.lookup(systemState.LocalSyncedBlockHeight)
+	selection, err := SelectMinerAnchorHeight(systemState.LocalSyncedBlockHeight,
+		b.chainConfig.USDB.BTCIndexOriginHeight, b.anchorGap, parentSelector,
+		policy.BTCAnchorPolicyVersion, activation.BTCAnchorMaxAgeBlocks)
+	if err != nil {
+		return nil, fmt.Errorf("cannot select miner BTC anchor: block=%d latest_height=%d gap=%d: %w", blockNumber, systemState.LocalSyncedBlockHeight, b.anchorGap, err)
+	}
+	expectedActivation, err := btcRegistry.lookup(selection.SelectedHeight)
 	if err != nil {
 		return nil, err
 	}
 	query := QueryContext{
-		RequestedHeight: systemState.LocalSyncedBlockHeight,
+		RequestedHeight: selection.SelectedHeight,
 		ExpectedState: QueryExpectedState{
-			SnapshotID:           systemState.UpstreamSnapshotID,
 			ActivationRegistryID: btcRegistry.ActivationRegistryID,
 			ActiveVersionSetID:   expectedActivation.ActiveVersionSetID,
-			SystemStateID:        systemState.SystemStateID,
 		},
 	}
+	if selection.SelectedHeight == systemState.LocalSyncedBlockHeight {
+		query.ExpectedState.SnapshotID = systemState.UpstreamSnapshotID
+		query.ExpectedState.SystemStateID = systemState.SystemStateID
+	}
+	if parentSelector != nil && selection.SelectedHeight == parentSelector.BTCHeight {
+		query.ExpectedState.SnapshotID = parentSelector.SnapshotIDHex()
+		query.ExpectedState.SystemStateID = parentSelector.SystemStateIDHex()
+		if selection.SelectedHeight == systemState.LocalSyncedBlockHeight &&
+			(query.ExpectedState.SnapshotID != systemState.UpstreamSnapshotID || query.ExpectedState.SystemStateID != systemState.SystemStateID) {
+			return nil, fmt.Errorf("%w: height=%d current_snapshot=%s parent_snapshot=%s current_system=%s parent_system=%s", ErrBTCAnchorIdentityMismatch,
+				selection.SelectedHeight, systemState.UpstreamSnapshotID, query.ExpectedState.SnapshotID, systemState.SystemStateID, query.ExpectedState.SystemStateID)
+		}
+	}
+	stateRef, err := b.client.GetStateRefAtHeight(queryCtx, query)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve miner historical state: block=%d latest_height=%d selected_height=%d gap=%d: %w", blockNumber, selection.LatestHeight, selection.SelectedHeight, b.anchorGap, err)
+	}
+	if err := validateMinerStateRef(btcRegistry, query, stateRef); err != nil {
+		return nil, fmt.Errorf("invalid miner historical state: block=%d selected_height=%d: %w", blockNumber, selection.SelectedHeight, err)
+	}
+	selectedState := &stateRef.SystemStateInfo
+	query.ExpectedState.SnapshotID = selectedState.UpstreamSnapshotID
+	query.ExpectedState.SystemStateID = selectedState.SystemStateID
+	query.ExpectedState.LocalStateCommit = selectedState.LocalStateCommit
+	query.ExpectedState.StableBlockHash = stateRef.SnapshotInfo.StableBlockHash
 	candidate, err := b.client.ResolveMinerCandidate(queryCtx, usdbMain, query)
 	if err != nil {
-		return nil, fmt.Errorf("cannot resolve miner candidate for usdb_main %s: %w", usdbMain, err)
+		return nil, fmt.Errorf("cannot resolve miner candidate: usdb_main=%s selected_height=%d latest_height=%d gap=%d: %w", usdbMain, selection.SelectedHeight, selection.LatestHeight, b.anchorGap, err)
 	}
 	if candidate == nil {
-		return nil, fmt.Errorf("%w: usdb_main %s", ErrMinerCandidateNotFound, usdbMain)
+		return nil, fmt.Errorf("%w: usdb_main=%s selected_height=%d latest_height=%d gap=%d", ErrMinerCandidateNotFound, usdbMain, selection.SelectedHeight, selection.LatestHeight, b.anchorGap)
 	}
 	if candidate.SelectionRule != MinerCandidateSelectionRuleV1 || candidate.MatchingCandidateCount == 0 {
 		return nil, fmt.Errorf(
@@ -168,10 +218,10 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	}
 	payload, err := NewProfileSelectorPayload(
 		policy.DifficultyPolicyVersion,
-		systemState.LocalSyncedBlockHeight,
+		selection.SelectedHeight,
 		0,
-		systemState.UpstreamSnapshotID,
-		systemState.SystemStateID,
+		selectedState.UpstreamSnapshotID,
+		selectedState.SystemStateID,
 		candidate.Pass.PassID,
 	)
 	if err != nil {
@@ -194,10 +244,13 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	}
 	profile, err := resolveConsensusProfileView(btcRegistry, *payload, view)
 	if err != nil {
-		return nil, fmt.Errorf("resolved pass %s is not valid in current usdb state: %w", candidate.Pass.PassID, err)
+		return nil, fmt.Errorf("resolved pass %s is not valid at selected_height=%d: %w", candidate.Pass.PassID, selection.SelectedHeight, err)
 	}
-	if profile.View.ExternalState.ActiveVersionSetID != systemState.ActiveVersionSetID {
-		return nil, fmt.Errorf("current usdb activation identity changed while building payload")
+	external := profile.View.ExternalState
+	if external.ActiveVersionSetID != selectedState.ActiveVersionSetID ||
+		external.LocalStateCommit != selectedState.LocalStateCommit || external.StableBlockHash != stateRef.SnapshotInfo.StableBlockHash {
+		return nil, fmt.Errorf("historical state changed while building payload: height=%d expected_version=%s actual_version=%s expected_commit=%s actual_commit=%s expected_block=%s actual_block=%s",
+			selection.SelectedHeight, selectedState.ActiveVersionSetID, external.ActiveVersionSetID, selectedState.LocalStateCommit, external.LocalStateCommit, stateRef.SnapshotInfo.StableBlockHash, external.StableBlockHash)
 	}
 	if profile.RewardRecipient != usdbMain {
 		return nil, fmt.Errorf(
@@ -211,11 +264,12 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 		return nil, err
 	}
 	b.stateMu.Lock()
-	b.lastSystemStateID = systemState.SystemStateID
+	b.lastObservedState = observed
 	b.stateMu.Unlock()
 	return &BuiltProfileSelector{
 		Payload:         encoded,
 		RewardRecipient: profile.RewardRecipient,
+		AnchorSelection: selection,
 	}, nil
 }
 

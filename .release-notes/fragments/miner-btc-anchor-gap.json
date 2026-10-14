@@ -1,0 +1,23 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "miner-btc-anchor-gap",
+  "type": "added",
+  "scopes": ["node-runtime", "testing"],
+  "summary": "Prefer a configurable two-BTC-block mining anchor gap under UIP-0018",
+  "details": [
+    "Select exact committed historical indexer state for mining, yielding to the parent anchor and its checkpoint reuse limit. Difficulty and rewards remain bound to the selected historical profile.",
+    "Keep the observed latest state separate from the selected anchor for work refresh; failed historical queries remain retryable without searching other heights.",
+    "Add --miner.usdb-anchor-gap and Eth.Miner.USDB.AnchorGap. Omitted settings use 2; explicit zero selects latest and survives TOML round trips. Validator acceptance rules and network identities are unchanged.",
+    "Cover historical RPC identity, activation boundaries, mixed-gap recovery, work refresh and real Ethash block preparation/finalization in local regression tests. Node-kit UI integration and independent multi-node gap measurements remain separate work."
+  ],
+  "operator_actions": [
+    "The new geth default may delay use of newly committed pass or balance changes. Keep the recommended gap unless intentionally overriding the local mining strategy; existing indexer data and mining authorization are retained."
+  ],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": true
+  },
+  "references": ["https://github.com/buckyos/usdb/issues/52"]
+}

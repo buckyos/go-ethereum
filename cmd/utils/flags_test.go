@@ -128,6 +128,44 @@ func TestSetMinerAppliesUSDBFlags(t *testing.T) {
 	}
 }
 
+func TestSetMinerAnchorGapPreservesDefaultAndExplicitZero(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		initial uint32
+		args    []string
+		want    uint32
+	}{
+		{"default", ethconfig.Defaults.Miner.USDB.EffectiveAnchorGap(), nil, 2},
+		{"toml zero", 0, nil, 0},
+		{"toml override", 5, nil, 5},
+		{"explicit zero", 2, []string{"--miner.usdb-anchor-gap", "0"}, 0},
+		{"explicit one", 2, []string{"--miner.usdb-anchor-gap", "1"}, 1},
+		{"height ceiling", 2, []string{"--miner.usdb-anchor-gap", "4294967295"}, 4294967295},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := ethconfig.Defaults.Miner
+			if test.name != "default" {
+				initial := test.initial
+				cfg.USDB.AnchorGap = &initial
+			}
+			ctx := newCLIContext(t, []cli.Flag{MinerUSDBAnchorGapFlag}, test.args...)
+			setMiner(ctx, &cfg)
+			if cfg.USDB.EffectiveAnchorGap() != test.want {
+				t.Fatalf("got=%d want=%d", cfg.USDB.EffectiveAnchorGap(), test.want)
+			}
+		})
+	}
+	for _, value := range []string{"-1", "1.5", "18446744073709551616"} {
+		set := flag.NewFlagSet("invalid-gap", flag.ContinueOnError)
+		if err := MinerUSDBAnchorGapFlag.Apply(set); err != nil {
+			t.Fatal(err)
+		}
+		if err := set.Parse([]string{"--miner.usdb-anchor-gap", value}); err == nil {
+			t.Fatalf("accepted %s", value)
+		}
+	}
+}
+
 func TestSetEthashAppliesUSDBFlags(t *testing.T) {
 	ctx := newCLIContext(t, []cli.Flag{
 		EthashUSDBIndexerRPCURLFlag,
