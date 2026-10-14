@@ -2,6 +2,7 @@ package usdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ type BuiltProfileSelector struct {
 	Payload         []byte
 	RewardRecipient common.Address
 	AnchorSelection MinerAnchorSelection
+	Diagnostics     MinerBuildStatus
 }
 
 // PayloadBuilder creates the current UIP-0007 selector used by miner/header assembly.
@@ -26,6 +28,7 @@ type PayloadBuilder struct {
 
 	stateMu           sync.RWMutex
 	lastObservedState observedSystemState
+	lastBuildStatus   MinerBuildStatus
 }
 
 // observedSystemState tracks the head observed by a successful build separately
@@ -109,7 +112,20 @@ func (b *PayloadBuilder) HasSystemStateChanged(ctx context.Context) (bool, error
 // BuildCurrentPayload emits a selector for blockNumber only after resolving its
 // consensus policy, resolving a pass for usdbMain, deriving its age from
 // parentExtra, and validating the profile at the locally selected historical height.
-func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (*BuiltProfileSelector, error) {
+func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber uint64, parentExtra []byte, usdbMain common.Address) (built *BuiltProfileSelector, buildErr error) {
+	diagnostic := MinerBuildStatus{BlockNumber: blockNumber, MinerAddress: usdbMain, Stage: "policy"}
+	defer func() {
+		diagnostic.ObservedAt = time.Now().UTC()
+		if buildErr != nil {
+			diagnostic.Failure = minerBuildFailure(buildErr)
+		}
+		if built != nil {
+			built.Diagnostics = diagnostic.Copy()
+		}
+		b.stateMu.Lock()
+		b.lastBuildStatus = diagnostic.Copy()
+		b.stateMu.Unlock()
+	}()
 	activation, err := b.chainConfig.USDBActivationAt(blockNumber)
 	if err != nil {
 		return nil, err
@@ -120,6 +136,7 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if usdbMain == (common.Address{}) {
 		return nil, fmt.Errorf("usdb miner address is not configured")
 	}
+	diagnostic.MaxAnchorAge = activation.BTCAnchorMaxAgeBlocks
 	policy := &activation.Versions
 	if policy.PayloadVersion != ProfileSelectorPayloadVersionV1 {
 		return nil, fmt.Errorf("%w: chain config expects %d, builder supports %d", ErrProfileSelectorVersion, policy.PayloadVersion, ProfileSelectorPayloadVersionV1)
@@ -136,6 +153,7 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	queryCtx, cancel := context.WithTimeout(ctx, b.queryTimeout)
 	defer cancel()
 
+	diagnostic.Stage = "latest_state"
 	systemState, err := b.client.GetSystemStateInfo(queryCtx)
 	if err != nil {
 		return nil, err
@@ -143,6 +161,8 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	if systemState == nil {
 		return nil, fmt.Errorf("usdb returned no current system state")
 	}
+	latest := systemState.LocalSyncedBlockHeight
+	diagnostic.LatestHeight = &latest
 	observed := observedState(systemState)
 	if _, err := parseCanonicalHex32("current system_state_id", systemState.SystemStateID); err != nil {
 		return nil, err
@@ -160,12 +180,24 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	); err != nil {
 		return nil, fmt.Errorf("invalid current usdb activation identity: %w", err)
 	}
+	diagnostic.Stage = "select_height"
 	selection, err := SelectMinerAnchorHeight(systemState.LocalSyncedBlockHeight,
 		b.chainConfig.USDB.BTCIndexOriginHeight, b.anchorGap, parentSelector,
 		policy.BTCAnchorPolicyVersion, activation.BTCAnchorMaxAgeBlocks)
 	if err != nil {
+		if errors.Is(err, ErrBTCAnchorHeightRegression) && parentSelector != nil {
+			required := parentSelector.BTCHeight
+			diagnostic.RequiredHeight = &required
+		} else if errors.Is(err, ErrBTCAnchorAgeExceeded) && parentSelector != nil && parentSelector.BTCHeight < ^uint32(0) {
+			required := parentSelector.BTCHeight + 1
+			diagnostic.RequiredHeight = &required
+		} else if errors.Is(err, ErrStateNotRetained) && systemState.LocalSyncedBlockHeight < b.chainConfig.USDB.BTCIndexOriginHeight {
+			required := b.chainConfig.USDB.BTCIndexOriginHeight
+			diagnostic.RequiredHeight = &required
+		}
 		return nil, fmt.Errorf("cannot select miner BTC anchor: block=%d latest_height=%d gap=%d: %w", blockNumber, systemState.LocalSyncedBlockHeight, b.anchorGap, err)
 	}
+	diagnostic.Selection = &selection
 	expectedActivation, err := btcRegistry.lookup(selection.SelectedHeight)
 	if err != nil {
 		return nil, err
@@ -190,6 +222,7 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 				selection.SelectedHeight, systemState.UpstreamSnapshotID, query.ExpectedState.SnapshotID, systemState.SystemStateID, query.ExpectedState.SystemStateID)
 		}
 	}
+	diagnostic.Stage = "historical_state"
 	stateRef, err := b.client.GetStateRefAtHeight(queryCtx, query)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve miner historical state: block=%d latest_height=%d selected_height=%d gap=%d: %w", blockNumber, selection.LatestHeight, selection.SelectedHeight, b.anchorGap, err)
@@ -202,6 +235,8 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 	query.ExpectedState.SystemStateID = selectedState.SystemStateID
 	query.ExpectedState.LocalStateCommit = selectedState.LocalStateCommit
 	query.ExpectedState.StableBlockHash = stateRef.SnapshotInfo.StableBlockHash
+	diagnostic.SnapshotID, diagnostic.SystemStateID = selectedState.UpstreamSnapshotID, selectedState.SystemStateID
+	diagnostic.Stage = "candidate"
 	candidate, err := b.client.ResolveMinerCandidate(queryCtx, usdbMain, query)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve miner candidate: usdb_main=%s selected_height=%d latest_height=%d gap=%d: %w", usdbMain, selection.SelectedHeight, selection.LatestHeight, b.anchorGap, err)
@@ -216,6 +251,7 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 			candidate.MatchingCandidateCount,
 		)
 	}
+	diagnostic.Stage = "validate_profile"
 	payload, err := NewProfileSelectorPayload(
 		policy.DifficultyPolicyVersion,
 		selection.SelectedHeight,
@@ -259,12 +295,15 @@ func (b *PayloadBuilder) BuildCurrentPayload(ctx context.Context, blockNumber ui
 			usdbMain,
 		)
 	}
+	diagnostic.PassID = candidate.Pass.PassID
+	diagnostic.AnchorAge = payload.BTCAnchorAgeBlocks
 	encoded, err := payload.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
 	b.stateMu.Lock()
 	b.lastObservedState = observed
+	diagnostic.Stage = "validated"
 	b.stateMu.Unlock()
 	return &BuiltProfileSelector{
 		Payload:         encoded,

@@ -161,6 +161,7 @@ while True:
 
     def start_runtime(self, data_dir: Path, **overrides: str) -> subprocess.Popen[str]:
         env = os.environ.copy()
+        env.pop("USDB_MINER_ANCHOR_GAP", None)
         env.update(
             {
                 "USDB_CHAIN_DATA_DIR": str(data_dir),

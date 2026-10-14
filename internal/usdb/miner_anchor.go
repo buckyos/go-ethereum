@@ -8,11 +8,11 @@ const DefaultMinerAnchorGap uint32 = 2
 
 // MinerAnchorSelection describes one local height decision, not a wire field.
 type MinerAnchorSelection struct {
-	LatestHeight   uint32
-	SelectedHeight uint32
-	ConfiguredGap  uint32
-	ActualGap      uint32
-	Reason         string
+	LatestHeight   uint32 `json:"latest_height"`
+	SelectedHeight uint32 `json:"selected_height"`
+	ConfiguredGap  uint32 `json:"configured_gap"`
+	ActualGap      uint32 `json:"actual_gap"`
+	Reason         string `json:"reason"`
 }
 
 // SelectMinerAnchorHeight applies UIP-0018 without querying or ranking passes.

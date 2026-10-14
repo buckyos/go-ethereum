@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
@@ -80,6 +81,12 @@ type MinerAPI struct {
 // NewMinerAPI create a new MinerAPI instance.
 func NewMinerAPI(e *Ethereum) *MinerAPI {
 	return &MinerAPI{e}
+}
+
+// GetUSDBWorkStatus observes local UIP-0018 work without querying external services.
+// The miner namespace is intended for trusted local operator access.
+func (api *MinerAPI) GetUSDBWorkStatus() miner.USDBWorkStatus {
+	return api.e.Miner().USDBWorkStatus()
 }
 
 // Start starts the miner with the given number of threads. If threads is nil,

@@ -1,0 +1,28 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "miner-anchor-gap-work-diagnostics",
+  "type": "added",
+  "scopes": [
+    "node-runtime",
+    "testing"
+  ],
+  "summary": "Expose read-only miner work diagnostics and pass node-kit anchor gap to geth",
+  "details": [
+    "Add miner_getUSDBWorkStatus in the trusted local miner namespace. Return bounded in-memory last-attempt and submitted-work snapshots without external queries or raw upstream errors.",
+    "Bind each historical build to the submitted work seal hash and parent; invalidate current-work status when mining stops or the canonical parent changes. Distinguish a failed newer build from previous submitted work.",
+    "Propagate USDB_MINER_ANCHOR_GAP to explicit geth arguments for all roles; default to 2 and preserve zero. Network identity and validator rules are unchanged."
+  ],
+  "operator_actions": [
+    "Use usdb-node mining configure --anchor-gap N only for advanced local policy changes, then usdb-node up and mining status. Ordinary setup keeps the recommended gap.",
+    "Upgrade the node kit and chain image together. Independent multi-node gap measurements remain a separate qualification stage."
+  ],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": true
+  },
+  "references": [
+    "https://github.com/buckyos/usdb/issues/52"
+  ]
+}

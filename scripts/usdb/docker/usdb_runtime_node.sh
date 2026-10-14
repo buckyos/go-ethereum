@@ -104,7 +104,15 @@ elif [[ "${tracing}" == "1" ]]; then
   http_apis+=",debug"
 fi
 
+# This local mining preference is independent of chain/network identity.
+anchor_gap="${USDB_MINER_ANCHOR_GAP-2}"
+if [[ ! "${anchor_gap}" =~ ^(0|[1-9][0-9]{0,9})$ ]] || (( anchor_gap > 4294967295 )); then
+  echo "USDB_MINER_ANCHOR_GAP must be an integer from 0 to 4294967295" >&2
+  exit 1
+fi
+
 args=(
+  --miner.usdb-anchor-gap "${anchor_gap}"
   --datadir "${data_dir}"
   --networkid "${network_id}"
   --syncmode full

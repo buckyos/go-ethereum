@@ -90,7 +90,8 @@ var (
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
 type environment struct {
-	signer types.Signer
+	usdbBuild *usdb.MinerBuildStatus // Immutable diagnostics travel with this exact work.
+	signer    types.Signer
 
 	state     *state.StateDB // apply state changes here
 	ancestors mapset.Set     // ancestor set (used for checking uncle parent validity)
@@ -108,6 +109,7 @@ type environment struct {
 // copy creates a deep copy of environment.
 func (env *environment) copy() *environment {
 	cpy := &environment{
+		usdbBuild: env.usdbBuild,
 		signer:    env.signer,
 		state:     env.state.Copy(),
 		ancestors: env.ancestors.Clone(),
@@ -153,6 +155,7 @@ func (env *environment) discard() {
 
 // task contains all information for consensus engine sealing and result submitting.
 type task struct {
+	usdbBuild *usdb.MinerBuildStatus
 	receipts  []*types.Receipt
 	state     *state.StateDB
 	block     *types.Block
@@ -306,6 +309,8 @@ type worker struct {
 
 	// A failed USDB work build must poll external state until it recovers.
 	usdbWorkFailure usdbWorkFailureTracker
+	usdbWorkMu      sync.RWMutex
+	usdbSealingWork *USDBSealingWork
 
 	// noempty is the flag used to control whether the feature of pre-seal empty
 	// block is enabled. The default value is false(pre-seal is enabled by default).
@@ -503,6 +508,7 @@ func (w *worker) start() {
 // stop sets the running status as 0.
 func (w *worker) stop() {
 	atomic.StoreInt32(&w.running, 0)
+	w.recordUSDBSealingWork(nil, nil)
 }
 
 // isRunning returns an indicator whether worker is running or not.
@@ -862,6 +868,7 @@ func (w *worker) taskLoop() {
 			// Interrupt previous sealing operation
 			interrupt()
 			stopCh, prev = make(chan struct{}), sealHash
+			w.recordUSDBSealingWork(nil, nil)
 
 			if w.skipSealHook != nil && w.skipSealHook(task) {
 				continue
@@ -875,6 +882,8 @@ func (w *worker) taskLoop() {
 				w.pendingMu.Lock()
 				delete(w.pendingTasks, sealHash)
 				w.pendingMu.Unlock()
+			} else {
+				w.recordUSDBSealingWork(task.block, task.usdbBuild)
 			}
 		case <-w.exitCh:
 			interrupt()
@@ -1212,6 +1221,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		Coinbase:   genParams.coinbase,
 	}
 	var usdbPolicy *params.USDBConsensusVersions
+	var usdbBuild *usdb.MinerBuildStatus
 	if !genParams.noExtra || w.chainConfig.HasUSDBConsensus() {
 		usdbMain := genParams.coinbase
 		if usdbMain == (common.Address{}) {
@@ -1233,6 +1243,10 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 			return nil, err
 		}
 		usdbPolicy = policy
+		if built != nil && built.Diagnostics.Stage == "validated" {
+			d := built.Diagnostics.Copy()
+			usdbBuild = &d
+		}
 		if built != nil && len(built.Payload) != 0 {
 			header.Extra = built.Payload
 		}
@@ -1292,6 +1306,7 @@ func (w *worker) prepareWork(genParams *generateParams) (*environment, error) {
 		commitUncles(w.localUncles)
 		commitUncles(w.remoteUncles)
 	}
+	env.usdbBuild = usdbBuild
 	return env, nil
 }
 
@@ -1441,7 +1456,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		// If we're post merge, just ignore
 		if !w.isTTDReached(block.Header()) {
 			select {
-			case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now()}:
+			case w.taskCh <- &task{usdbBuild: env.usdbBuild, receipts: env.receipts, state: env.state, block: block, createdAt: time.Now()}:
 				w.unconfirmed.Shift(block.NumberU64() - 1)
 				log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 					"uncles", len(env.uncles), "txs", env.tcount,

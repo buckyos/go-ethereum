@@ -149,7 +149,7 @@ run_go_checks() {
       usdb_go_with_geth_linker_compat test ./p2p/discover -run '^TestDNSBootstrap|^TestUDPv4_(ENRPreservesContactFamily|EIP868)$'
       usdb_go_with_geth_linker_compat test ./tests -run '^TestP2P(Transport|DNS)Bootstrap$' -timeout=180s
       usdb_go_with_geth_linker_compat test ./core -run 'USDB|Usdb'
-      usdb_go_with_geth_linker_compat test ./eth -run '^TestUSDBEconomics'
+      usdb_go_with_geth_linker_compat test ./eth -run '^TestUSDB(Economics|MiningWorkStatus)'
       run_consensus_checks "$consensus_tests"
       usdb_go_with_geth_linker_compat test ./miner -run "$miner_tests"
       local sync_report="$FAST_OUTPUT_DIR/sync-completion.jsonl"

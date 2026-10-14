@@ -211,6 +211,7 @@ func newTestWorker(t *testing.T, chainConfig *params.ChainConfig, engine consens
 }
 
 type stubPayloadBuilder struct {
+	diagnostics  usdb.MinerBuildStatus
 	payload      []byte
 	recipient    common.Address
 	err          error
@@ -231,6 +232,7 @@ func (s *stubPayloadBuilder) BuildCurrentPayload(_ context.Context, blockNumber 
 	}
 	return &usdb.BuiltProfileSelector{
 		Payload:         append([]byte(nil), s.payload...),
+		Diagnostics:     s.diagnostics.Copy(),
 		RewardRecipient: s.recipient,
 	}, nil
 }
@@ -352,8 +354,9 @@ func TestPrepareWorkUsesUSDBProfileRewardRecipient(t *testing.T) {
 
 	rewardRecipient := common.HexToAddress("0x0000000000000000000000000000000000007777")
 	w.usdbPayloadBuilder = &stubPayloadBuilder{
-		payload:   bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size),
-		recipient: rewardRecipient,
+		payload:     bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size),
+		recipient:   rewardRecipient,
+		diagnostics: usdb.MinerBuildStatus{Stage: "validated", PassID: "historical-test-pass"},
 	}
 	env, err := w.prepareWork(&generateParams{
 		timestamp: uint64(time.Now().Unix()) + 1,
@@ -361,6 +364,9 @@ func TestPrepareWorkUsesUSDBProfileRewardRecipient(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("prepareWork failed: %v", err)
+	}
+	if env.usdbBuild == nil || env.copy().usdbBuild.PassID != "historical-test-pass" {
+		t.Fatal("work lost builder diagnostics")
 	}
 	if env.header.Coinbase != rewardRecipient || env.coinbase != rewardRecipient {
 		t.Fatalf(
