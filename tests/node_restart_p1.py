@@ -31,6 +31,7 @@ class RuntimeNode(RestartNode):
                "USDB_GENESIS_VALIDATOR": str(ROOT / "scripts/usdb/docker/validate_usdb_genesis.py"),
                "USDB_GETH_BIN": str(self.matrix.args.geth), "USDB_CHAIN_ID": "20260323", "USDB_NETWORK_ID": "20260323",
                "USDB_NODE_ROLE": "full", "USDB_CHAIN_GCMODE": "archive", "USDB_INDEXER_RPC_URL": self.url("audit"),
+               "USDB_MINER_ANCHOR_GAP": str(self.anchor_gap),
                "USDB_HTTP_ADDR": "127.0.0.1", "USDB_HTTP_PORT": str(self.ports["geth"]),
                "USDB_WS_ADDR": "127.0.0.1", "USDB_WS_PORT": str(self.ports["geth-ws"]),
                "USDB_AUTHRPC_ADDR": "127.0.0.1", "USDB_AUTHRPC_PORT": str(self.ports["auth"]),

@@ -47,6 +47,7 @@ class LongCiRunnerTests(unittest.TestCase):
                 "go-profile",
                 "go-activation",
                 "multi-miner-delay",
+                "miner-anchor-gap",
                 "node-restart",
                 "node-restart-p1",
                 "miner-pass-upgrade",
@@ -67,6 +68,7 @@ class LongCiRunnerTests(unittest.TestCase):
                 "miner-pass-upgrade-soak",
                 "upstream-fault-matrix",
                 "multi-miner-soak",
+                "miner-anchor-gap-soak",
                 "economic-capacity",
                 "balance-history-extended",
                 "release-e2e",
@@ -242,6 +244,29 @@ run_nightly node-restart-p1
             self.assertIn(expected, result.stdout)
         self.assertIn('MATRIX_SCENARIO=restart-p1', result.stdout)
         self.assertIn('long-ci-output/node-restart-p1', result.stdout)
+
+    def test_gap_shards_use_prepared_services_and_separate_artifacts(self) -> None:
+        harness = f"""
+source {shlex.quote(str(RUNNER))}
+require_regtest_tools() {{ :; }}
+run_case() {{ printf '%s\\n' "$*"; }}
+run_nightly miner-anchor-gap
+run_weekly miner-anchor-gap-soak
+"""
+        env = dict(os.environ, BITCOIN_BIN_DIR='/isolated/core', ORD_BIN='/isolated/ord',
+                   USDB_LONG_CI_WORK_DIR='/isolated/work')
+        result = subprocess.run(['bash', '-c', harness], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = result.stdout.splitlines()
+        self.assertEqual(len(rows), 2)
+        for row, tier in zip(rows, ('nightly', 'weekly')):
+            self.assertIn('GETH_BIN=/isolated/work/upstream-matrix/bin/geth', row)
+            self.assertIn(f'MATRIX_OUTPUT_DIR=/tmp/usdb-long-ci-output/miner-anchor-gap-{tier}', row)
+            self.assertIn('MATRIX_TIMEOUT_SEC=900', row)
+            self.assertTrue(row.endswith('run_miner_gap_matrix.sh ' + tier))
+        workflow = (WORKFLOWS / 'usdb-integration.yml').read_text()
+        self.assertIn('          - miner-anchor-gap\n', workflow)
+        self.assertIn('shard: miner-anchor-gap-soak', workflow)
 
     def test_miner_pass_upgrade_shards_prepare_once_and_isolate_each_seed(self) -> None:
         harness = f"""

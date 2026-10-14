@@ -283,7 +283,7 @@ class AuditProxy:
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 event = {"phase": proxy.phase, "method": payload["method"], "params": payload.get("params", []),
-                         "connection_id": self.connection_id}
+                         "connection_id": self.connection_id, "started_monotonic": time.monotonic()}
                 try:
                     result = RPC(upstream)(payload["method"], payload.get("params", []))
                     reply = {"jsonrpc": "2.0", "id": payload["id"], "result": result}
@@ -294,6 +294,7 @@ class AuditProxy:
                         # Preserve a real transport failure at geth's RPC client,
                         # instead of replacing a dead upstream with a JSON error.
                         event["transport_closed"] = True
+                event["completed_monotonic"] = time.monotonic()
                 with proxy.lock:
                     proxy.events.append(event)
                     proxy.stream.write(json.dumps(event) + "\n")
@@ -345,6 +346,9 @@ class Node:
         self.proxy = None
         self.pinned_geth = None
         self.geth_starts = 0
+        # Existing fault/restart cases require the newest anchor. New policy
+        # acceptance overrides this explicitly, independent of CLI defaults.
+        self.anchor_gap = 0
 
     def url(self, service):
         return f"http://127.0.0.1:{self.ports[service]}"
@@ -489,6 +493,7 @@ class Node:
                             "--ethash.dagdir", str(self.root / "dag"), "--ethash.dagsondisk", "1",
                             "--ethash.cachedir", str(self.root / "ethash"),
                             "--miner.etherbase", MINER, "--miner.usdb-indexer.rpcurl", self.url("audit"),
+                            "--miner.usdb-anchor-gap", str(self.anchor_gap),
                             "--miner.usdb-indexer.timeout", "3s", "--ethash.usdb-indexer.rpcurl", self.url("audit"),
                             "--ethash.usdb-indexer.timeout", "3s"])
         self.matrix.wait(f"{self.name} geth RPC", lambda: self.rpc("geth")("eth_chainId") == hex(20260323))

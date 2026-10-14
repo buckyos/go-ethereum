@@ -1,0 +1,25 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "miner-anchor-gap-acceptance",
+  "type": "added",
+  "scopes": [
+    "testing"
+  ],
+  "summary": "Add independent multi-node miner anchor gap acceptance",
+  "details": [
+    "Add isolated gap 0/1/2 controls against validators delayed by one, two or three committed BTC heights, using real independent Core, balance-history and indexer stores.",
+    "Exercise mixed miner policies, progressive small-M anchor exhaustion, timed upstream delays and automatic fault recovery; audit canonical selectors, execution state and both beneficiaries.",
+    "Record submitted-work identity, bounded validation failures and unresolved import observations without inventing wire receipt times. Keep existing fault and restart fixtures explicitly at gap zero.",
+    "Wire bounded controls into a separate Nightly shard and mixed policies, 10/30/60/120-second delays and competing branches into Weekly. Delayed fake PoW is functional evidence only."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": false
+  },
+  "references": [
+    "https://github.com/buckyos/usdb/issues/52"
+  ]
+}

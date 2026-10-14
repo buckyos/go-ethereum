@@ -85,6 +85,7 @@ jobs:
           - go-profile
           - go-activation
           - multi-miner-delay
+          - miner-anchor-gap
           - node-restart
           - node-restart-p1
           - miner-pass-upgrade
@@ -126,7 +127,7 @@ jobs:
           cache: false
 
       - name: Prepare Go modules
-        if: matrix.shard == 'go-profile' || matrix.shard == 'go-activation' || matrix.shard == 'miner-pass-upgrade' || matrix.shard == 'multi-miner-delay' || matrix.shard == 'node-restart' || matrix.shard == 'node-restart-p1'
+        if: matrix.shard == 'go-profile' || matrix.shard == 'go-activation' || matrix.shard == 'miner-pass-upgrade' || matrix.shard == 'multi-miner-delay' || matrix.shard == 'miner-anchor-gap' || matrix.shard == 'node-restart' || matrix.shard == 'node-restart-p1'
         timeout-minutes: 12
         run: >-
           python3 go-ethereum/scripts/usdb/prepare_go_modules.py
@@ -217,6 +218,10 @@ jobs:
             shard: multi-miner-soak
             artifact_suffix: multi-miner-soak
             world_soak_seeds: ''
+          - name: miner-anchor-gap-soak
+            shard: miner-anchor-gap-soak
+            artifact_suffix: miner-anchor-gap-soak
+            world_soak_seeds: ''
           - name: economic-capacity
             shard: economic-capacity
             artifact_suffix: economic-capacity
@@ -263,7 +268,7 @@ jobs:
           check-latest: false
 
       - name: Prepare Go modules
-        if: matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'release-e2e' || matrix.shard == 'miner-pass-upgrade-soak' || matrix.shard == 'multi-miner-soak'
+        if: matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'release-e2e' || matrix.shard == 'miner-pass-upgrade-soak' || matrix.shard == 'multi-miner-soak' || matrix.shard == 'miner-anchor-gap-soak'
         timeout-minutes: 12
         run: >-
           python3 go-ethereum/scripts/usdb/prepare_go_modules.py
@@ -307,7 +312,7 @@ jobs:
         run: go-ethereum/scripts/usdb/run_long_ci.sh weekly world-soak --prepare-only
 
       - name: Build independent upstream matrix services
-        if: matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'multi-miner-soak'
+        if: matrix.shard == 'upstream-fault-matrix' || matrix.shard == 'multi-miner-soak' || matrix.shard == 'miner-anchor-gap-soak'
         timeout-minutes: 40
         env:
           USDB_LONG_CI_OUTPUT_DIR: ${{ runner.temp }}/long-ci-output
@@ -332,7 +337,7 @@ jobs:
           chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
           if [[ "${{ matrix.shard }}" == world-soak ]]; then
             go-ethereum/scripts/usdb/run_long_ci.sh weekly world-soak --run-only
-          elif [[ "${{ matrix.shard }}" == upstream-fault-matrix || "${{ matrix.shard }}" == multi-miner-soak ]]; then
+          elif [[ "${{ matrix.shard }}" == upstream-fault-matrix || "${{ matrix.shard }}" == multi-miner-soak || "${{ matrix.shard }}" == miner-anchor-gap-soak ]]; then
             go-ethereum/scripts/usdb/run_long_ci.sh weekly "${{ matrix.shard }}" --run-only
           else
             go-ethereum/scripts/usdb/run_long_ci.sh weekly "${{ matrix.shard }}"

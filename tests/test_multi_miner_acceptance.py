@@ -18,6 +18,7 @@ from multi_miner_acceptance import (validate_chain, validate_lag, required_cases
                                     expiry_log_evidence, validate_retry_expiry,
                                     MultiMinerMatrix, MINER, SECOND_MINER, ANCHOR_MAX_AGE)
 from common.rpc_delay import BlockDelayProxy
+from common.profile_blocks import selector_block
 
 
 class EvidenceTests(unittest.TestCase):
@@ -116,12 +117,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(saved[0][1]['observation'], replies)
         self.assertEqual(matrix.report['recovery_failure']['target_height'], 2)
 
-    @staticmethod
-    def block(number, height, age, author=MINER, pass_byte=1, snapshot_byte=3):
-        payload = (bytes([1]) + (1).to_bytes(2, "big") + height.to_bytes(4, "big") + age.to_bytes(4, "big")
-                   + bytes([snapshot_byte]) * 32 + bytes([4]) * 32 + bytes([pass_byte]) * 32 + bytes(4))
-        return {"number": hex(number), "hash": f"hash-{number}", "parentHash": f"hash-{number - 1}",
-                "miner": author, "extraData": "0x" + payload.hex()}
+    block = staticmethod(selector_block)
 
     def test_chain_checks_anchors_and_distinct_beneficiaries(self):
         passes = {MINER: "01" * 32 + "i0", SECOND_MINER: "02" * 32 + "i0"}

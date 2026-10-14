@@ -14,6 +14,7 @@ declare -a NIGHTLY_SHARDS=(
   go-profile
   go-activation
   multi-miner-delay
+  miner-anchor-gap
   node-restart
   node-restart-p1
   miner-pass-upgrade
@@ -27,6 +28,7 @@ declare -a WEEKLY_SHARDS=(
   miner-pass-upgrade-soak
   upstream-fault-matrix
   multi-miner-soak
+  miner-anchor-gap-soak
   economic-capacity
   balance-history-extended
   release-e2e
@@ -160,7 +162,7 @@ prepare_usdb_service_binaries() {
           "$ROOT_DIR/scripts/usdb/run_miner_pass_upgrade_services.sh" --prepare-only
       return
       ;;
-    nightly:go-profile | nightly:go-activation | nightly:multi-miner-delay | nightly:node-restart | nightly:node-restart-p1 | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:upstream-fault-matrix | weekly:multi-miner-soak | weekly:release-e2e)
+    nightly:go-profile | nightly:go-activation | nightly:miner-anchor-gap | weekly:miner-anchor-gap-soak | nightly:multi-miner-delay | nightly:node-restart | nightly:node-restart-p1 | nightly:indexer-protocol | nightly:indexer-reorg | nightly:indexer-validator | weekly:world-soak | weekly:upstream-fault-matrix | weekly:multi-miner-soak | weekly:release-e2e)
       # Build each package with the same selection used by its later cargo run.
       # A combined build unifies dependency features and does not warm the
       # single-package fingerprints used inside the readiness window.
@@ -176,12 +178,12 @@ prepare_usdb_service_binaries() {
           --bin balance-history
       ;;
   esac
-  if [[ "${tier}:${shard}" == weekly:upstream-fault-matrix || "$shard" == node-restart || "$shard" == node-restart-p1 || "$shard" == multi-miner-delay || "$shard" == multi-miner-soak ]]; then
+  if [[ "${tier}:${shard}" == weekly:upstream-fault-matrix || "$shard" == node-restart || "$shard" == node-restart-p1 || "$shard" == multi-miner-delay || "$shard" == multi-miner-soak || "$shard" == miner-anchor-gap || "$shard" == miner-anchor-gap-soak ]]; then
     # Keep Go compilation outside the twenty-minute fault simulation budget.
     source "$ROOT_DIR/scripts/usdb/lib/go_toolchain.sh"
     run_case go-upstream-matrix-build \
       usdb_build_geth "$ROOT_DIR" "$WORK_ROOT/upstream-matrix/bin/geth"
-    if [[ "$shard" == multi-miner-delay || "$shard" == multi-miner-soak ]]; then
+    if [[ "$shard" == multi-miner-delay || "$shard" == multi-miner-soak || "$shard" == miner-anchor-gap || "$shard" == miner-anchor-gap-soak ]]; then
       (cd "$ROOT_DIR" && run_case go-invalid-block-fixture-build \
         usdb_go build -o "$WORK_ROOT/upstream-matrix/bin/invalidblock" ./tests/common/invalidblock)
     fi
@@ -244,6 +246,17 @@ run_multi_miner_matrix() {
       bash "$ROOT_DIR/scripts/usdb/run_usdb_upstream_fault_matrix.sh"
 }
 
+run_miner_gap_matrix() {
+  local tier="$1"
+  require_regtest_tools
+  run_case "miner-anchor-gap-$tier" \
+    env USDB_REPO_DIR="$USDB_REPO_DIR" BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+      GETH_BIN="$WORK_ROOT/upstream-matrix/bin/geth" MATRIX_TIMEOUT_SEC=900 \
+      MATRIX_WORK_ROOT="$WORK_ROOT/upstream-matrix" \
+      MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/miner-anchor-gap-$tier" \
+      bash "$ROOT_DIR/scripts/usdb/run_miner_gap_matrix.sh" "$tier"
+}
+
 run_nightly() {
   local shard="$1"
   case "$shard" in
@@ -257,6 +270,9 @@ run_nightly() {
           MATRIX_TIMEOUT_SEC=1200 MATRIX_WORK_ROOT="$WORK_ROOT/upstream-matrix" \
           MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/$shard" \
           bash "$ROOT_DIR/scripts/usdb/run_usdb_upstream_fault_matrix.sh"
+      ;;
+    miner-anchor-gap)
+      run_miner_gap_matrix nightly
       ;;
     multi-miner-delay)
       run_multi_miner_matrix 1 downloader
@@ -363,6 +379,9 @@ run_nightly() {
 run_weekly() {
   local shard="$1"
   case "$shard" in
+    miner-anchor-gap-soak)
+      run_miner_gap_matrix weekly
+      ;;
     multi-miner-soak)
       run_multi_miner_matrix 3 all
       ;;

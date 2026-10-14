@@ -77,7 +77,7 @@ def validate_retry_expiry(evidence):
         require(evidence["new_session_after_exhaustion"], "no automatic downloader session after expiry")
 
 
-def validate_chain(blocks, expected_passes):
+def validate_chain(blocks, expected_passes, max_age=ANCHOR_MAX_AGE):
     """Independently check monotonic anchors and pass-to-beneficiary binding."""
     require(len(blocks) > 1, "no executed chain")
     last = None
@@ -96,7 +96,7 @@ def validate_chain(blocks, expected_passes):
                         and selector["system_state_id"] == last["system_state_id"],
                         f"same-height identity changed at {number}")
                 age = last["btc_anchor_age_blocks"] + 1
-        require(selector["btc_anchor_age_blocks"] == age <= ANCHOR_MAX_AGE,
+        require(selector["btc_anchor_age_blocks"] == age <= max_age,
                 f"invalid anchor age at {number}: {selector}")
         authors.add(author)
         last = selector
@@ -161,9 +161,16 @@ class MultiMinerMatrix(Matrix):
         super().__init__(args)
         self.a, self.b, self.c = (MiningNode(self, name, i) for i, name in enumerate("abc"))
         self.nodes = [self.a, self.b, self.c]
+        gaps = getattr(args, "anchor_gaps", "0,0,0").split(",")
+        require(len(gaps) == 3 and all(g in {"0", "1", "2"} for g in gaps), "expected three gaps in 0/1/2")
+        for node, gap in zip(self.nodes, gaps):
+            node.anchor_gap = int(gap)
         for node in self.nodes:
             for name in ("bh_gate", "indexer_gate"):
                 with socket.socket() as probe:
+                    # Match the HTTP server and shared port preflight: completed
+                    # connections in TIME_WAIT must not block the next isolated arm.
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     probe.bind(("127.0.0.1", node.ports[name]))
         script = self.a.rpc("bitcoin")("validateaddress", [args.second_owner])["scriptPubKey"]
         self.owners.append(hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex())
@@ -173,6 +180,7 @@ class MultiMinerMatrix(Matrix):
         self.connected = []
         self.report.update(schema="usdb-multi-miner-delay:v1", seal_mode="fakepow-delay-1200ms",
                            cycles=args.cycles, retry_expiry=args.retry_expiry,
+                           gaps={node.name: node.anchor_gap for node in self.nodes},
                            retry_budgets_seconds=RETRY_BUDGET_SECONDS,
                            topology=[{"node": n.name, "root": str(n.root),
                            "ports": n.ports, "miner": n.beneficiary if n.name != "c" else None} for n in self.nodes])
@@ -217,7 +225,7 @@ class MultiMinerMatrix(Matrix):
         self.wait("executed canonical convergence", converged, seconds=90)
         height = int(target["number"], 16)
         expected = [self.a.block(i) for i in range(height + 1)]
-        authors = validate_chain(expected, self.expected_passes)
+        authors = validate_chain(expected, self.expected_passes, getattr(self, "max_age", ANCHOR_MAX_AGE))
         for node in nodes:
             actual = [node.block(i) for i in range(height + 1)]
             compare_chain(expected, actual)
@@ -610,6 +618,7 @@ def main():
     parser.add_argument("--port-base", type=int, default=22400)
     parser.add_argument("--timeout-sec", type=int, default=900)
     parser.add_argument("--cycles", type=int, choices=range(1, 6), default=1)
+    parser.add_argument("--anchor-gaps", default="0,0,0", help="Explicit per-node gaps for A,B,C")
     parser.add_argument("--retry-expiry", choices=("none", "downloader", "all"), default="none",
                         help="Cross actual 2-minute downloader and optionally 30-minute fetcher limits once")
     args = parser.parse_args()
