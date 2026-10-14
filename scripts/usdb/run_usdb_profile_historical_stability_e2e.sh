@@ -410,6 +410,8 @@ EOF
   run_geth init --datadir "$NODE1_DATADIR" "$GENESIS_JSON" >/dev/null
   run_geth init --datadir "$NODE2_DATADIR" "$GENESIS_JSON" >/dev/null
 
+  # Anchor to the latest committed state before advancing or replacing it;
+  # selecting an older state would miss the intended reorg boundary.
   usdb_chain_log "Starting USDB-chain node 1 miner with USDB profile/difficulty integration"
   (
     cd "$ROOT_DIR"
@@ -428,6 +430,7 @@ EOF
       --mine \
       --miner.threads 1 \
       --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
+      --miner.usdb-anchor-gap 0 \
       --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
       --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
   ) >"$NODE1_LOG_FILE" 2>&1 &

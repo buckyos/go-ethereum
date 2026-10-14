@@ -13,6 +13,11 @@ REGISTRY_ID = "d53e9907cfc5abf5d8294e98bbaa838630ee070118eb0845ad3e770959279f08"
 ACTIVE_VERSION_SET_ID = "58a5bf5a3cfdba184c57a7ab13d6d7d6c19a359da467625ebc0392459a0f2a18"
 SNAPSHOT_ID = "11" * 32
 SYSTEM_STATE_ID = "22" * 32
+STABLE_BLOCK_HASH = "44" * 32
+LOCAL_STATE_COMMIT = "55" * 32
+# The bootstrap genesis indexes BTC from height 1. A height-zero placeholder
+# cannot supply a mineable state once anchor selection enforces that floor.
+BTC_HEIGHT = 1
 DEFAULT_USDB_MAIN = "0x1111111111111111111111111111111111111111"
 DEFAULT_TOTAL_MINER_BTC_SATS = "100000000"
 DEFAULT_COLLAB_CONTRIBUTION = "100"
@@ -35,9 +40,63 @@ def build_system_state() -> dict[str, Any]:
         "activation_registry_id": REGISTRY_ID,
         "active_version_set": ACTIVE_VERSION_SET,
         "active_version_set_id": ACTIVE_VERSION_SET_ID,
-        "local_synced_block_height": 0,
+        "local_synced_block_height": BTC_HEIGHT,
         "upstream_snapshot_id": SNAPSHOT_ID,
+        "local_state_commit": LOCAL_STATE_COMMIT,
         "system_state_id": SYSTEM_STATE_ID,
+    }
+
+
+def validate_query(raw_params: Any, method: str) -> dict[str, Any]:
+    """Reject heights and identities outside this single-state fixture."""
+    if not isinstance(raw_params, list) or len(raw_params) != 1:
+        raise ValueError(f"{method} requires one parameter object")
+    params = raw_params[0]
+    if not isinstance(params, dict):
+        raise ValueError("query parameter must be an object")
+    context = params.get("context")
+    if not isinstance(context, dict):
+        raise ValueError("query context is required")
+    expected = context.get("expected_state")
+    if not isinstance(expected, dict):
+        raise ValueError("query expected_state is required")
+    height = context.get("requested_height")
+    if (
+        type(height) is not int
+        or type(params.get("block_height")) is not int
+        or height != params["block_height"]
+    ):
+        raise ValueError("query height mismatch")
+    if height != BTC_HEIGHT:
+        raise ValueError(f"fixture only supports BTC height {BTC_HEIGHT}, have {height}")
+    for field, value in {
+        "snapshot_id": SNAPSHOT_ID,
+        "system_state_id": SYSTEM_STATE_ID,
+        "stable_block_hash": STABLE_BLOCK_HASH,
+        "local_state_commit": LOCAL_STATE_COMMIT,
+        "activation_registry_id": REGISTRY_ID,
+        "active_version_set_id": ACTIVE_VERSION_SET_ID,
+    }.items():
+        if field in expected and expected[field] != value:
+            raise ValueError(f"unexpected {field}")
+    return params
+
+
+def build_state_ref(raw_params: Any) -> dict[str, Any]:
+    """Expose the exact state reference used by the real miner query sequence."""
+    validate_query(raw_params, "get_state_ref_at_height")
+    local = build_system_state()
+    local.pop("system_state_id")
+    return {
+        "block_height": BTC_HEIGHT,
+        "snapshot_info": {
+            "local_synced_block_height": BTC_HEIGHT,
+            "balance_history_stable_height": BTC_HEIGHT,
+            "snapshot_id": SNAPSHOT_ID,
+            "stable_block_hash": STABLE_BLOCK_HASH,
+        },
+        "local_state_commit_info": local,
+        "system_state_info": build_system_state(),
     }
 
 
@@ -48,24 +107,10 @@ def build_pass_profile(
     total_miner_btc_sats: str = DEFAULT_TOTAL_MINER_BTC_SATS,
     collab_contribution: str = DEFAULT_COLLAB_CONTRIBUTION,
 ) -> dict[str, Any]:
-    if not isinstance(raw_params, list) or len(raw_params) != 1:
-        raise ValueError("get_pass_economic_profile requires one parameter object")
-    params = raw_params[0]
-    if not isinstance(params, dict):
-        raise ValueError("profile parameter must be an object")
+    params = validate_query(raw_params, "get_pass_economic_profile")
     if params.get("pass_id") != pass_id:
         raise ValueError(f"unexpected pass_id {params.get('pass_id')!r}")
-    context = params.get("context")
-    if not isinstance(context, dict):
-        raise ValueError("profile context is required")
-    expected = context.get("expected_state")
-    if not isinstance(expected, dict):
-        raise ValueError("profile expected_state is required")
-    height = context.get("requested_height")
-    if not isinstance(height, int) or height != params.get("block_height"):
-        raise ValueError("profile height mismatch")
-    if height != 0:
-        raise ValueError(f"fixture only supports BTC height 0, have {height}")
+    expected = params["context"]["expected_state"]
     expected_values = {
         "snapshot_id": SNAPSHOT_ID,
         "system_state_id": SYSTEM_STATE_ID,
@@ -78,11 +123,11 @@ def build_pass_profile(
     return {
         "view_version": "uip-0006-usdb-economic-state-view:v1",
         "external_state": {
-            "btc_height": 0,
+            "btc_height": BTC_HEIGHT,
             "snapshot_id": SNAPSHOT_ID,
-            "stable_block_hash": "44" * 32,
+            "stable_block_hash": STABLE_BLOCK_HASH,
             "stable_lag": 10,
-            "local_state_commit": "55" * 32,
+            "local_state_commit": LOCAL_STATE_COMMIT,
             "system_state_id": SYSTEM_STATE_ID,
             "balance_history_api_version": "1.0.0",
             "balance_history_semantics_version": "balance-snapshot-at-or-before:v1",
@@ -165,6 +210,8 @@ class BootstrapIndexerHandler(BaseHTTPRequestHandler):
             method = request.get("method")
             if method == "get_system_state_info":
                 result = self.server.system_state()
+            elif method == "get_state_ref_at_height":
+                result = build_state_ref(request.get("params"))
             elif method == "get_pass_economic_profile":
                 result = self.server.pass_profile(request.get("params"))
             elif method == "resolve_miner_candidate":

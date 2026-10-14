@@ -122,6 +122,8 @@ usdb_chain_start_node() {
   if [[ "$mine" == "true" ]]; then
     mining_args+=(--mine)
   fi
+  # Both energy phases compare against the latest committed BTC state. Keep
+  # this fixture independent of the production miner's default anchor gap.
   usdb_chain_log "Starting USDB-chain node: mining=${mine}"
   (
     cd "$ROOT_DIR"
@@ -141,6 +143,7 @@ usdb_chain_start_node() {
       "${mining_args[@]}" \
       --miner.threads 1 \
       --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
+      --miner.usdb-anchor-gap 0 \
       --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
       --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}"
   ) >>"$GETH_LOG_FILE" 2>&1 &

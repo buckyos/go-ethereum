@@ -264,6 +264,8 @@ usdb_chain_start_node() {
   if [[ "$append_log" != "true" ]]; then
     : >"$GETH_LOG_FILE"
   fi
+  # These profile, transition and max-age fixtures assert the latest BTC
+  # state. Historical gap selection has its own independent-node matrix.
   (
     cd "$ROOT_DIR"
     exec "${command[@]}" \
@@ -282,6 +284,7 @@ usdb_chain_start_node() {
       --mine \
       --miner.threads "$USDB_CHAIN_MINER_THREADS" \
       --miner.etherbase "$USDB_CHAIN_MINER_ADDRESS" \
+      --miner.usdb-anchor-gap 0 \
       --miner.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \
       --miner.usdb-indexer.timeout "$USDB_QUERY_TIMEOUT" \
       --ethash.usdb-indexer.rpcurl "http://127.0.0.1:${USDB_INDEXER_RPC_PORT}" \

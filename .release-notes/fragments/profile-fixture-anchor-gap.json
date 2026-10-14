@@ -1,0 +1,20 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "profile-fixture-anchor-gap",
+  "type": "fixed",
+  "scopes": ["testing"],
+  "summary": "Align profile and bootstrap acceptance fixtures with miner anchor selection",
+  "details": [
+    "Explicitly use miner anchor gap zero in profile, energy-growth and historical-state fixtures whose assertions depend on the latest committed BTC state.",
+    "Prevent startup from waiting on a state before the fixture pass was minted, and keep replacement and max-age checks anchored to the intended boundary. The production default remains two; dedicated mixed-gap acceptance is unchanged.",
+    "Expose a retained height and exact state-reference query in the test-only bootstrap indexer so SourceDAO bootstrap, restart and joiner acceptance can mine with the current query contract."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": false
+  },
+  "references": ["https://github.com/buckyos/go-ethereum/actions/runs/38608274693/job/116006618414"]
+}
