@@ -102,11 +102,12 @@ class GapEvidenceTests(unittest.TestCase):
                                      env=env, text=True, capture_output=True, check=True)
                 results[tier] = [json.loads(row) for row in run.stdout.splitlines()]
             nightly = results['nightly']
-            self.assertEqual(len(nightly), 8)
-            self.assertEqual({(r['MATRIX_GAP'], r['MATRIX_GAP_LAG']) for r in nightly[:-2]},
+            self.assertEqual(len(nightly), 9)
+            self.assertEqual({(r['MATRIX_GAP'], r['MATRIX_GAP_LAG']) for r in nightly[:6]},
                              {(str(g), str(l)) for g in range(3) for l in (1, 2)})
-            self.assertEqual((nightly[-2]['MATRIX_GAP'], nightly[-2]['MATRIX_GAP_LAG']), ('2', '3'))
-            self.assertEqual(nightly[-1]['MATRIX_GAP_CASE'], 'exhaustion')
+            self.assertEqual((nightly[6]['MATRIX_GAP'], nightly[6]['MATRIX_GAP_LAG']), ('2', '3'))
+            self.assertEqual(nightly[7]['MATRIX_GAP_CASE'], 'exhaustion')
+            self.assertEqual(nightly[8]['MATRIX_ECONOMIC_CASE'], 'lifecycle')
             weekly = results['weekly']
             self.assertEqual(weekly[0]['MATRIX_GAP_CASE'], 'mixed')
             self.assertEqual([r['MATRIX_GAP_DELAY_SECONDS'] for r in weekly[1:-1]], ['10', '30', '60', '120'])

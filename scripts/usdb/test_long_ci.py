@@ -69,6 +69,7 @@ class LongCiRunnerTests(unittest.TestCase):
                 "upstream-fault-matrix",
                 "multi-miner-soak",
                 "miner-anchor-gap-soak",
+                "miner-anchor-economics",
                 "economic-capacity",
                 "balance-history-extended",
                 "release-e2e",
@@ -267,6 +268,27 @@ run_weekly miner-anchor-gap-soak
         workflow = (WORKFLOWS / 'usdb-integration.yml').read_text()
         self.assertIn('          - miner-anchor-gap\n', workflow)
         self.assertIn('shard: miner-anchor-gap-soak', workflow)
+
+    def test_anchor_economics_uses_separate_tagged_preparation(self) -> None:
+        harness = f"""
+source {shlex.quote(str(RUNNER))}
+require_regtest_tools() {{ :; }}
+run_case() {{ printf '%s\\n' "$*"; }}
+prepare_usdb_service_binaries weekly miner-anchor-economics
+run_weekly miner-anchor-economics
+"""
+        env = dict(os.environ, BITCOIN_BIN_DIR='/isolated/core', ORD_BIN='/isolated/ord',
+                   USDB_LONG_CI_WORK_DIR='/isolated/work')
+        result = subprocess.run(['bash', '-c', harness], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = result.stdout.splitlines()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0].endswith('run_miner_gap_economic_activation.sh --prepare-only'))
+        self.assertTrue(rows[1].endswith('run_miner_gap_economic_activation.sh --run-only'))
+        self.assertTrue(all('MATRIX_WORK_ROOT=/isolated/work/gap-economic-activation' in row for row in rows))
+        workflow = (WORKFLOWS / 'usdb-integration.yml').read_text()
+        self.assertIn('shard: miner-anchor-economics', workflow)
+        self.assertIn('"${{ matrix.shard }}" == miner-anchor-economics', workflow)
 
     def test_miner_pass_upgrade_shards_prepare_once_and_isolate_each_seed(self) -> None:
         harness = f"""

@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"math/rand"
 	"os"
@@ -672,6 +673,14 @@ func TestVerifyHeaderUsesExpectedVersionAtActivationBoundary(t *testing.T) {
 }
 
 func TestPrepareAndVerifyHeaderApplySameUsdbDifficultyProfile(t *testing.T) {
+	for _, mode := range []Mode{ModeNormal, ModeFake} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			testPrepareAndVerifyHeaderApplySameUsdbDifficultyProfile(t, mode)
+		})
+	}
+}
+
+func testPrepareAndVerifyHeaderApplySameUsdbDifficultyProfile(t *testing.T, mode Mode) {
 	config := newTestUSDBChainConfig()
 	parent := &types.Header{
 		Number:     big.NewInt(0),
@@ -682,7 +691,7 @@ func TestPrepareAndVerifyHeaderApplySameUsdbDifficultyProfile(t *testing.T) {
 	chain := &stubChainHeaderReader{config: config, header: parent}
 	resolver := &stubProfileResolver{resolved: newTestUSDBDifficultyProfile(1_000_000)}
 	engine := &Ethash{
-		config:              Config{Log: log.Root()},
+		config:              Config{Log: log.Root(), PowMode: mode},
 		usdbProfileResolver: resolver,
 	}
 	header := &types.Header{
@@ -720,6 +729,14 @@ func TestPrepareAndVerifyHeaderApplySameUsdbDifficultyProfile(t *testing.T) {
 }
 
 func TestPrepareAndVerifyHeaderFailWhenProfileServiceIsUnavailable(t *testing.T) {
+	for _, mode := range []Mode{ModeNormal, ModeFake} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			testPrepareAndVerifyHeaderFailWhenProfileServiceIsUnavailable(t, mode)
+		})
+	}
+}
+
+func testPrepareAndVerifyHeaderFailWhenProfileServiceIsUnavailable(t *testing.T, mode Mode) {
 	config := newTestUSDBChainConfig()
 	parent := &types.Header{
 		Number:     big.NewInt(0),
@@ -729,7 +746,7 @@ func TestPrepareAndVerifyHeaderFailWhenProfileServiceIsUnavailable(t *testing.T)
 	}
 	chain := &stubChainHeaderReader{config: config, header: parent}
 	engine := &Ethash{
-		config:              Config{Log: log.Root()},
+		config:              Config{Log: log.Root(), PowMode: mode},
 		usdbProfileResolver: &stubProfileResolver{err: context.DeadlineExceeded},
 	}
 	newHeader := func() *types.Header {

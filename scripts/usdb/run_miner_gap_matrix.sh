@@ -23,6 +23,9 @@ if [[ "$tier" == nightly ]]; then
   done
   run_gap_case gap-2-lag-3 control 2 3 10
   run_gap_case progressive-exhaustion exhaustion 2 2 10
+  env MATRIX_SCENARIO=anchor-economics MATRIX_SKIP_BUILD=1 MATRIX_ECONOMIC_CASE=lifecycle \
+    MATRIX_OUTPUT_DIR="$output_root/pass-lifecycle" \
+    bash "$ROOT_DIR/scripts/usdb/run_usdb_upstream_fault_matrix.sh"
 else
   run_gap_case mixed-gap mixed 2 2 10
   for delay in 10 30 60 120; do

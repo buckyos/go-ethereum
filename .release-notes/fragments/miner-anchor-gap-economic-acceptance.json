@@ -1,0 +1,21 @@
+{
+  "schema_version": "usdb-change-fragment:v1",
+  "change_id": "miner-anchor-gap-economic-acceptance",
+  "type": "fixed",
+  "scopes": ["testing"],
+  "summary": "Validate historical miner economics and preserve USDB difficulty under fake PoW",
+  "details": [
+    "Make fake PoW preparation apply the same USDB historical profile and difficulty policy as header verification; only sealing is skipped. Ordinary PoW and full consensus stubs retain their behavior.",
+    "Add independent three-node acceptance for first mint, same-owner and cross-owner inheritance, fixed-pass and address-bound collaboration, rejected forced gifts, and dormant transfers at the selected BTC height.",
+    "Reconstruct owner balances from Bitcoin transactions and independently check raw energy, inheritance, collaboration, aggregate balances, difficulty and per-block payouts, including test-only BTC and USDB activation boundaries and mixed gap policies.",
+    "Run the normal-rule lifecycle in Nightly and tagged activation acceptance in a separate Weekly shard with hashed test binaries. These local fake-PoW cases do not measure public-network latency or mining profitability."
+  ],
+  "operator_actions": [],
+  "compatibility": {
+    "network_reset": false,
+    "data_rebuild": false,
+    "config_change": false,
+    "restart_required": false
+  },
+  "references": ["https://github.com/buckyos/usdb/issues/52"]
+}

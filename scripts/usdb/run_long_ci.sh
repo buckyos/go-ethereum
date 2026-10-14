@@ -29,6 +29,7 @@ declare -a WEEKLY_SHARDS=(
   upstream-fault-matrix
   multi-miner-soak
   miner-anchor-gap-soak
+  miner-anchor-economics
   economic-capacity
   balance-history-extended
   release-e2e
@@ -156,6 +157,12 @@ prepare_usdb_service_binaries() {
   local shard="$2"
 
   case "${tier}:${shard}" in
+    weekly:miner-anchor-economics)
+      run_case miner-anchor-economics-build \
+        env MATRIX_WORK_ROOT="$WORK_ROOT/gap-economic-activation" USDB_REPO_DIR="$USDB_REPO_DIR" \
+          bash "$ROOT_DIR/scripts/usdb/run_miner_gap_economic_activation.sh" --prepare-only
+      return
+      ;;
     nightly:miner-pass-upgrade | weekly:miner-pass-upgrade-soak)
       run_case miner-pass-upgrade-build \
         env UPGRADE_TOOLS_DIR="$WORK_ROOT/miner-pass-upgrade-tools" USDB_REPO_DIR="$USDB_REPO_DIR" \
@@ -379,6 +386,13 @@ run_nightly() {
 run_weekly() {
   local shard="$1"
   case "$shard" in
+    miner-anchor-economics)
+      require_regtest_tools
+      run_case miner-anchor-economics \
+        env MATRIX_WORK_ROOT="$WORK_ROOT/gap-economic-activation" MATRIX_OUTPUT_DIR="$OUTPUT_ROOT/miner-anchor-economics" \
+          USDB_REPO_DIR="$USDB_REPO_DIR" BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          bash "$ROOT_DIR/scripts/usdb/run_miner_gap_economic_activation.sh" --run-only
+      ;;
     miner-anchor-gap-soak)
       run_miner_gap_matrix weekly
       ;;

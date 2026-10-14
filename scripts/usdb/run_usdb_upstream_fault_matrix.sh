@@ -5,7 +5,7 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 USDB_REPO_DIR=${USDB_REPO_DIR:-"$ROOT_DIR/../usdb"}
 MATRIX_SCENARIO=${MATRIX_SCENARIO:-fault}
 case "$MATRIX_SCENARIO" in
-  fault | multi-miner | anchor-gap | restart | restart-p1) ;;
+  fault | multi-miner | anchor-gap | anchor-economics | restart | restart-p1) ;;
   *) echo "Unsupported MATRIX_SCENARIO: $MATRIX_SCENARIO" >&2; exit 1 ;;
 esac
 export MATRIX_SCENARIO
@@ -30,7 +30,7 @@ if [[ "${1:-}" != --execute ]]; then
     [[ -x "${GETH_BIN:-}" ]] || { echo "Missing prepared GETH_BIN" >&2; exit 1; }
   fi
   usdb_prepare_geth_binary GETH_BIN "$ROOT_DIR" "$MATRIX_WORK_ROOT/bin/geth"
-  if [[ "$MATRIX_SCENARIO" == multi-miner || "$MATRIX_SCENARIO" == anchor-gap ]]; then
+  if [[ "$MATRIX_SCENARIO" == multi-miner || "$MATRIX_SCENARIO" == anchor-gap || "$MATRIX_SCENARIO" == anchor-economics ]]; then
     if [[ "${MATRIX_SKIP_BUILD:-0}" == 1 ]]; then
       [[ -x "$MATRIX_WORK_ROOT/bin/invalidblock" ]] || { echo "Missing prepared invalidblock fixture tool" >&2; exit 1; }
     else
@@ -108,7 +108,7 @@ fi
 if [[ "$MATRIX_SCENARIO" == restart-p1 ]]; then
   matrix_driver="$ROOT_DIR/tests/node_restart_p1.py"
 fi
-if [[ "$MATRIX_SCENARIO" == multi-miner || "$MATRIX_SCENARIO" == anchor-gap ]]; then
+if [[ "$MATRIX_SCENARIO" == multi-miner || "$MATRIX_SCENARIO" == anchor-gap || "$MATRIX_SCENARIO" == anchor-economics ]]; then
   # A distinct owner and beneficiary are necessary to exercise two miners,
   # rather than two processes mining with the same pass and payout address.
   second_owner=$(regtest_get_ord_wallet_receive_address "$ORD_WALLET_NAME_B")
@@ -122,7 +122,10 @@ if [[ "$MATRIX_SCENARIO" == multi-miner || "$MATRIX_SCENARIO" == anchor-gap ]]; 
   scenario_args+=(--second-owner "$second_owner" --second-pass "$second_pass" --cycles "${MATRIX_CYCLES:-1}" --invalidblock "$MATRIX_WORK_ROOT/bin/invalidblock"
     --retry-expiry "${MATRIX_RETRY_EXPIRY:-none}" --timeout-sec "${MATRIX_TIMEOUT_SEC:-1200}")
   matrix_driver="$ROOT_DIR/tests/multi_miner_acceptance.py"
-  if [[ "$MATRIX_SCENARIO" == anchor-gap ]]; then
+  if [[ "$MATRIX_SCENARIO" == anchor-economics ]]; then
+    matrix_driver="$ROOT_DIR/tests/miner_gap_economics.py"
+    scenario_args+=(--gap-case "${MATRIX_ECONOMIC_CASE:-lifecycle}")
+  elif [[ "$MATRIX_SCENARIO" == anchor-gap ]]; then
     matrix_driver="$ROOT_DIR/tests/miner_gap_acceptance.py"
     scenario_args+=(--gap-case "${MATRIX_GAP_CASE:-control}" --gap "${MATRIX_GAP:-2}"
       --lag "${MATRIX_GAP_LAG:-2}" --delay-seconds "${MATRIX_GAP_DELAY_SECONDS:-10}")
@@ -137,6 +140,9 @@ regtest_mine_blocks 20 "$miner_address"
 regtest_wait_until_ord_server_synced_to_bitcoind
 regtest_create_balance_history_config
 regtest_create_usdb_indexer_config
+if [[ "$MATRIX_SCENARIO" == anchor-economics && "${MATRIX_ECONOMIC_CASE:-lifecycle}" == activation ]]; then
+  python3 "$ROOT_DIR/tests/miner_gap_economics.py" --configure-indexer "$USDB_INDEXER_ROOT/config.json" --usdb-repo "$USDB_REPO_DIR"
+fi
 regtest_start_balance_history
 regtest_wait_balance_history_rpc_ready
 regtest_wait_balance_history_consensus_ready

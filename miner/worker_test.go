@@ -267,7 +267,8 @@ func TestGenerateBlockAndImportEthash(t *testing.T) {
 }
 
 func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
-	w, _ := newTestWorker(t, testWorkerUSDBChainConfig(), ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
+	// Opaque builder payloads test forwarding only; use a full consensus stub.
+	w, _ := newTestWorker(t, testWorkerUSDBChainConfig(), ethash.NewFullFaker(), rawdb.NewMemoryDatabase(), 0)
 	defer w.close()
 
 	payload := bytes.Repeat([]byte{0xab}, usdb.ProfileSelectorPayloadV1Size)
@@ -299,7 +300,7 @@ func TestPrepareWorkUsesUsdbPayloadBuilderExtra(t *testing.T) {
 
 func TestPrepareInitialUSDBWorkUsesConfiguredEtherbase(t *testing.T) {
 	chainConfig := testWorkerUSDBChainConfig()
-	engine := ethash.NewFaker()
+	engine := ethash.NewFullFaker()
 	backend := newTestWorkerBackend(t, chainConfig, engine, rawdb.NewMemoryDatabase(), 0)
 	config := *testConfig
 	config.Etherbase = testBankAddress
@@ -349,7 +350,7 @@ func TestPrepareWorkUsesUSDBProfileRewardRecipient(t *testing.T) {
 	versions.CoinbaseEmissionPolicyVersion = usdb.CoinbaseEmissionPolicyVersionV1
 	versions.CollaborationEfficiencyPolicyVersion = usdb.CollaborationEfficiencyPolicyVersionV1
 	versions.PricePolicyVersion = usdb.PricePolicyVersionV1
-	w, _ := newTestWorker(t, config, ethash.NewFaker(), rawdb.NewMemoryDatabase(), 0)
+	w, _ := newTestWorker(t, config, ethash.NewFullFaker(), rawdb.NewMemoryDatabase(), 0)
 	defer w.close()
 
 	rewardRecipient := common.HexToAddress("0x0000000000000000000000000000000000007777")

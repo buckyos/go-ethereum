@@ -33,18 +33,24 @@ class GapMatrix(MultiMinerMatrix):
         for entry, node in zip(self.report['topology'], self.nodes):
             entry['miner'] = node.beneficiary if args.gap_case == 'mixed' or node is self.a else None
 
-    def baseline(self):
-        self.phase('baseline')
-        self.wait_upstream(self.a)
+    def configure_genesis(self):
+        """Pin the fixture catalog before any independent chain is initialized."""
         genesis = json.loads(subprocess.check_output([str(self.args.geth), 'dumpgenesis', '--usdb'], timeout=30))
         self.write_json(self.genesis, configure_anchor_max_age(genesis, self.max_age))
         self.command(['python3', str(self.args.usdb_repo / 'tests/common/miner_pass_regtest.py'),
                       'configure-genesis', str(self.genesis)], 'configure-v2-genesis.log')
+
+    def baseline(self):
+        self.phase('baseline')
+        self.wait_upstream(self.a)
+        self.configure_genesis()
         for node in (self.b, self.c):
             node.fresh_upstream()
         states = [self.state(node) for node in self.nodes]
         require(all(self.difference(states[0], state) is None for state in states[1:]), 'baseline stores disagree')
         for pass_id in self.expected_passes.values():
+            if pass_id is None:  # A lifecycle fixture may start before its first mint.
+                continue
             profile = states[0]['passes'][pass_id]['profile']['pass']
             require(profile['state'] == 'active' and int(profile['effective_energy']) > 0, 'unfunded baseline pass')
         for node in self.nodes:
@@ -271,7 +277,7 @@ class GapMatrix(MultiMinerMatrix):
         super().close()
 
 
-def main():
+def main(matrix_type=GapMatrix, cases=('control', 'mixed', 'exhaustion')):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('work-dir', 'output-dir', 'usdb-repo', 'geth', 'bitcoin', 'ord', 'balance-history', 'indexer', 'invalidblock'):
         parser.add_argument('--' + name, type=Path, required=True)
@@ -281,12 +287,12 @@ def main():
     parser.add_argument('--timeout-sec', type=int, default=900)
     parser.add_argument('--cycles', type=int, default=1)
     parser.add_argument('--retry-expiry', default='none')
-    parser.add_argument('--gap-case', choices=('control', 'mixed', 'exhaustion'), default='control')
+    parser.add_argument('--gap-case', choices=cases, default=cases[0])
     parser.add_argument('--gap', type=int, choices=(0, 1, 2), default=2)
     parser.add_argument('--lag', type=int, choices=(1, 2, 3), default=2)
     parser.add_argument('--delay-seconds', type=int, choices=(10, 30, 60, 120), default=10)
     args = parser.parse_args()
-    matrix = GapMatrix(args)
+    matrix = matrix_type(args)
 
     def interrupted(signum, _frame):
         raise RuntimeError(f'anchor-gap acceptance interrupted by signal {signum}')

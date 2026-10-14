@@ -77,7 +77,7 @@ def validate_retry_expiry(evidence):
         require(evidence["new_session_after_exhaustion"], "no automatic downloader session after expiry")
 
 
-def validate_chain(blocks, expected_passes, max_age=ANCHOR_MAX_AGE):
+def validate_chain(blocks, expected_passes, max_age=ANCHOR_MAX_AGE, pass_at=None):
     """Independently check monotonic anchors and pass-to-beneficiary binding."""
     require(len(blocks) > 1, "no executed chain")
     last = None
@@ -87,7 +87,8 @@ def validate_chain(blocks, expected_passes, max_age=ANCHOR_MAX_AGE):
                 f"discontinuous canonical chain at {number}")
         selector = decode_selector(block)
         author = block["miner"].lower()
-        require(expected_passes.get(author) == selector["pass_id"], f"wrong miner/pass at {number}")
+        expected = pass_at(author, selector['btc_height']) if pass_at else expected_passes.get(author)
+        require(expected == selector["pass_id"], f"wrong miner/pass at {number}")
         age = 0
         if last:
             require(selector["btc_height"] >= last["btc_height"], f"anchor regressed at {number}")
@@ -225,7 +226,8 @@ class MultiMinerMatrix(Matrix):
         self.wait("executed canonical convergence", converged, seconds=90)
         height = int(target["number"], 16)
         expected = [self.a.block(i) for i in range(height + 1)]
-        authors = validate_chain(expected, self.expected_passes, getattr(self, "max_age", ANCHOR_MAX_AGE))
+        authors = validate_chain(expected, self.expected_passes, getattr(self, "max_age", ANCHOR_MAX_AGE),
+                                 getattr(self, 'expected_pass_at', None))
         for node in nodes:
             actual = [node.block(i) for i in range(height + 1)]
             compare_chain(expected, actual)

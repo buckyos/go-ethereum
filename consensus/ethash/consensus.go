@@ -705,7 +705,9 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 	if err != nil {
 		return fmt.Errorf("invalid usdb consensus config: %w", err)
 	}
-	if activation == nil || ethash.config.PowMode == ModeFake || ethash.config.PowMode == ModeFullFake {
+	// Fake sealing skips only PoW. Prepare must apply the same USDB policy as
+	// header verification, including historical levels and activation changes.
+	if activation == nil || ethash.config.PowMode == ModeFullFake {
 		header.Difficulty = baseDifficulty
 		return nil
 	}
