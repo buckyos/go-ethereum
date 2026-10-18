@@ -11,6 +11,12 @@ role="${USDB_NODE_ROLE:-full}"
 marker_path="${data_dir}/bootstrap/usdb-init.done.json"
 genesis_validator="${USDB_GENESIS_VALIDATOR:-/opt/usdb/scripts/validate_usdb_genesis.py}"
 geth_bin="${USDB_GETH_BIN:-geth}"
+nodekey="${data_dir}/geth/nodekey"
+
+if [[ ! -f "${nodekey}" || -L "${nodekey}" || -L "${data_dir}/geth" ]]; then
+  echo "P2P_IDENTITY_REQUIRED: inspect usdb-node identity status; startup never creates or replaces nodekey" >&2
+  exit 1
+fi
 
 "${genesis_validator}" \
   --genesis "${genesis_file}" \
@@ -114,6 +120,7 @@ fi
 args=(
   --miner.usdb-anchor-gap "${anchor_gap}"
   --datadir "${data_dir}"
+  --nodekey "${nodekey}"
   --networkid "${network_id}"
   --syncmode full
   --gcmode "${state_mode}"

@@ -140,6 +140,7 @@ while True:
     def prepare_data_dir(self, name: str) -> Path:
         data_dir = self.root / name
         (data_dir / "geth" / "chaindata").mkdir(parents=True)
+        (data_dir / "geth" / "nodekey").write_text("0" * 63 + "1")
         (data_dir / "geth" / "chaindata" / "CURRENT").write_text("fixture\n")
         marker = data_dir / "bootstrap" / "usdb-init.done.json"
         marker.parent.mkdir(parents=True)

@@ -167,3 +167,53 @@ func TestNodeKeyPersistency(t *testing.T) {
 		t.Fatalf("ephemeral node key persisted to disk")
 	}
 }
+
+func TestInvalidNodeKeyIsNeverReplaced(t *testing.T) {
+	for _, contents := range []string{"", "corrupted-private-key", "0000000000000000000000000000000000000000000000000000000000000000"} {
+		t.Run(contents, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := &Config{Name: "geth", DataDir: dir}
+			path := filepath.Join(dir, "geth", "nodekey")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if key, err := cfg.nodeKey(); err == nil || key != nil {
+				t.Fatal("invalid persistent identity must fail instead of generating a key")
+			}
+			for i := 0; i < 2; i++ {
+				if stack, err := New(cfg); err == nil || stack != nil {
+					t.Fatal("node startup accepted an invalid identity")
+				}
+			}
+			actual, err := os.ReadFile(path)
+			if err != nil || string(actual) != contents {
+				t.Fatal("failed startup changed persistent identity")
+			}
+		})
+	}
+}
+
+func TestDanglingNodeKeyIsNotReplaced(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{Name: "geth", DataDir: dir}
+	path := filepath.Join(dir, "geth", "nodekey")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "missing-key")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if key, err := cfg.nodeKey(); err == nil || key != nil {
+		t.Fatal("dangling nodekey must fail instead of generating a replacement")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("nodekey generation wrote through a dangling link")
+	}
+	if actual, err := os.Readlink(path); err != nil || actual != target {
+		t.Fatal("nodekey link was modified")
+	}
+}

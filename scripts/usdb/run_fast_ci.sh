@@ -156,7 +156,7 @@ run_go_checks() {
       usdb_go_with_geth_linker_compat test -json ./eth ./eth/fetcher ./eth/downloader -run '^Test(SyncCompletion|ExternalState)' | tee "$sync_report"
       python3 "$ROOT_DIR/scripts/usdb/check_fast_go_coverage.py" \
         --required "$ROOT_DIR/scripts/usdb/fast_go_sync_required_tests.json" --report "$sync_report"
-      usdb_go_with_geth_linker_compat test ./node -run '^Test(AdminPeersWithUnresolvedDNS|PersistentNodesKeepUnresolvedDNS)$'
+      usdb_go_with_geth_linker_compat test ./node -run '^Test(AdminPeersWithUnresolvedDNS|PersistentNodesKeepUnresolvedDNS|NodeKeyPersistency|InvalidNodeKeyIsNeverReplaced|DanglingNodeKeyIsNotReplaced)$'
       usdb_go_with_geth_linker_compat test ./eth/ethconfig ./cmd/utils
       usdb_go_with_geth_linker_compat test ./cmd/geth -run "$geth_tests"
       usdb_go_with_geth_linker_compat test ./cmd/usdb-genesis-hash
@@ -192,7 +192,7 @@ run_go_checks() {
           ./internal/usdbrelease \
           ./internal/usdbupgrade \
           ./ethdb/leveldb
-        usdb_go_with_geth_linker_compat test ./node -run '^Test(AdminPeersWithUnresolvedDNS|PersistentNodesKeepUnresolvedDNS)$'
+        usdb_go_with_geth_linker_compat test ./node -run '^Test(AdminPeersWithUnresolvedDNS|PersistentNodesKeepUnresolvedDNS|NodeKeyPersistency|InvalidNodeKeyIsNeverReplaced|DanglingNodeKeyIsNotReplaced)$'
         usdb_go_with_geth_linker_compat test ./eth/ethconfig ./cmd/utils
         usdb_go_with_geth_linker_compat test ./cmd/geth \
           -run 'USDB|Usdb|Acceptance|CanonicalPositiveBigInt|ChainCommand.*USDB'
@@ -228,6 +228,7 @@ run_go_checks() {
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_profile_v2_registry.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_activation_conformance_genesis.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_runtime_query_mode.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_runtime_identity.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/scripts/usdb/test_long_ci.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_upstream_fault_matrix.py"
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_node_restart_acceptance.py"

@@ -366,38 +366,52 @@ func (c *Config) instanceDir() string {
 // first any manually set key, falling back to the one found in the configured
 // data folder. If no key can be found, a new one is generated.
 func (c *Config) NodeKey() *ecdsa.PrivateKey {
+	key, err := c.nodeKey()
+	if err != nil {
+		log.Crit("Failed to load persistent node identity", "err", err)
+	}
+	return key
+}
+
+// nodeKey never replaces an unreadable or invalid persistent identity. Managed
+// deployments also pass --nodekey to forbid creation when the file is missing.
+func (c *Config) nodeKey() (*ecdsa.PrivateKey, error) {
 	// Use any specifically configured key.
 	if c.P2P.PrivateKey != nil {
-		return c.P2P.PrivateKey
+		return c.P2P.PrivateKey, nil
 	}
 	// Generate ephemeral key if no datadir is being used.
 	if c.DataDir == "" {
-		key, err := crypto.GenerateKey()
-		if err != nil {
-			log.Crit(fmt.Sprintf("Failed to generate ephemeral node key: %v", err))
-		}
-		return key
+		return crypto.GenerateKey()
 	}
 
 	keyfile := c.ResolvePath(datadirPrivateKey)
+	if info, err := os.Lstat(keyfile); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("existing nodekey must be a regular file; preserve it for explicit recovery")
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("cannot inspect existing nodekey: %w", err)
+	}
 	if key, err := crypto.LoadECDSA(keyfile); err == nil {
-		return key
+		return key, nil
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("cannot load existing nodekey; preserve it and restore explicitly: %w", err)
 	}
 	// No persistent key found, generate and store a new one.
 	key, err := crypto.GenerateKey()
 	if err != nil {
-		log.Crit(fmt.Sprintf("Failed to generate node key: %v", err))
+		return nil, err
 	}
 	instanceDir := filepath.Join(c.DataDir, c.name())
 	if err := os.MkdirAll(instanceDir, 0700); err != nil {
-		log.Error(fmt.Sprintf("Failed to persist node key: %v", err))
-		return key
+		return nil, fmt.Errorf("cannot persist node identity: %w", err)
 	}
 	keyfile = filepath.Join(instanceDir, datadirPrivateKey)
 	if err := crypto.SaveECDSA(keyfile, key); err != nil {
-		log.Error(fmt.Sprintf("Failed to persist node key: %v", err))
+		return nil, fmt.Errorf("cannot persist node identity: %w", err)
 	}
-	return key
+	return key, nil
 }
 
 // StaticNodes returns a list of node enode URLs configured as static nodes.

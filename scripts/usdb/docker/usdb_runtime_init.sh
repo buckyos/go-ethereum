@@ -7,12 +7,21 @@ manifest_file="${USDB_GENESIS_MANIFEST_FILE:-/network/usdb-genesis.manifest.json
 chain_id="${USDB_CHAIN_ID:?USDB_CHAIN_ID is required}"
 network_id="${USDB_NETWORK_ID:?USDB_NETWORK_ID is required}"
 marker_path="${data_dir}/bootstrap/usdb-init.done.json"
+nodekey="${data_dir}/geth/nodekey"
+genesis_validator="${USDB_GENESIS_VALIDATOR:-/opt/usdb/scripts/validate_usdb_genesis.py}"
+geth_bin="${USDB_GETH_BIN:-geth}"
 
-/opt/usdb/scripts/validate_usdb_genesis.py \
+"${genesis_validator}" \
   --genesis "${genesis_file}" \
   --manifest "${manifest_file}" \
   --chain-id "${chain_id}" \
   --network-id "${network_id}"
+
+# P2P identity is provisioned by an explicit operator action, never by init.
+if [[ ! -f "${nodekey}" || -L "${nodekey}" || -L "${data_dir}/geth" ]]; then
+  echo "P2P_IDENTITY_REQUIRED: use usdb-node identity create or identity restore before startup" >&2
+  exit 1
+fi
 
 genesis_sha256="$(sha256sum "${genesis_file}" | awk '{print $1}')"
 marker_matches="false"
@@ -30,13 +39,15 @@ if [[ "${marker_matches}" == "true" && -f "${data_dir}/geth/chaindata/CURRENT" ]
   exit 0
 fi
 
-if [[ -d "${data_dir}/geth" ]] && find "${data_dir}/geth" -mindepth 1 -print -quit | grep -q .; then
+# A preserved identity is compatible with fresh chain data. Every other entry
+# still needs an explicit migration; never infer permission to discard a DB.
+if find "${data_dir}/geth" -mindepth 1 -maxdepth 1 ! -name nodekey -print -quit | grep -q .; then
   echo "Existing USDB chain data does not match the mounted genesis artifact" >&2
   exit 1
 fi
 
 mkdir -p "${data_dir}"
-geth --datadir "${data_dir}" init "${genesis_file}"
+"${geth_bin}" --datadir "${data_dir}" --nodekey "${nodekey}" init "${genesis_file}"
 
 mkdir -p "$(dirname "${marker_path}")"
 tmp_marker="${marker_path}.tmp"
