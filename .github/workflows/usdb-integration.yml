@@ -52,15 +52,25 @@ jobs:
       - name: Check out go-ethereum
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Rust for ord
-        shell: bash
-        run: |
-          set -euo pipefail
-          rustup toolchain install 1.89.0 --profile minimal
-          rustup default 1.89.0
+      - name: Check out pinned USDB release inputs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.revision_lock.outputs.usdb_repository }}
+          ref: ${{ needs.revision_lock.outputs.usdb_revision }}
+          path: usdb
 
       - name: Prepare Bitcoin Core and ord
-        run: scripts/usdb/prepare_regtest_tools.sh --output "${{ runner.temp }}/regtest-tools"
+        run: >-
+          scripts/usdb/prepare_regtest_tools.sh
+          --usdb-repo "${{ github.workspace }}/usdb"
+          --output "${{ runner.temp }}/regtest-tools"
+
+      - name: Qualify release tools with real regtest
+        run: >-
+          python3 usdb/tests/ord_release_smoke.py
+          --ord "${{ runner.temp }}/regtest-tools/ord/ord"
+          --bitcoind "${{ runner.temp }}/regtest-tools/bitcoin/bin/bitcoind"
+          --report "${{ runner.temp }}/regtest-tools/compatibility-report.json"
 
       - name: Upload pinned regtest tools
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -170,6 +180,9 @@ jobs:
           USDB_WORKSPACE_ROOT: ${{ github.workspace }}
         run: |
           chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
+          mkdir -p "$USDB_LONG_CI_OUTPUT_DIR"
+          cp "${{ runner.temp }}/regtest-tools/"{toolchain-manifest,compatibility-report}.json "$USDB_LONG_CI_OUTPUT_DIR/"
+          python3 go-ethereum/scripts/usdb/regtest_tools.py verify --usdb-repo usdb --tools "${{ runner.temp }}/regtest-tools"
           go-ethereum/scripts/usdb/run_long_ci.sh nightly "${{ matrix.shard }}"
 
       - name: Upload nightly logs and reports
@@ -339,6 +352,9 @@ jobs:
           WORLD_SOAK_SEEDS: ${{ matrix.world_soak_seeds }}
         run: |
           chmod +x "$BITCOIN_BIN_DIR/bitcoind" "$BITCOIN_BIN_DIR/bitcoin-cli" "$ORD_BIN"
+          mkdir -p "$USDB_LONG_CI_OUTPUT_DIR"
+          cp "${{ runner.temp }}/regtest-tools/"{toolchain-manifest,compatibility-report}.json "$USDB_LONG_CI_OUTPUT_DIR/"
+          python3 go-ethereum/scripts/usdb/regtest_tools.py verify --usdb-repo usdb --tools "${{ runner.temp }}/regtest-tools"
           if [[ "${{ matrix.shard }}" == world-soak ]]; then
             go-ethereum/scripts/usdb/run_long_ci.sh weekly world-soak --run-only
           elif [[ "${{ matrix.shard }}" == upstream-fault-matrix || "${{ matrix.shard }}" == multi-miner-soak || "${{ matrix.shard }}" == miner-anchor-gap-soak || "${{ matrix.shard }}" == miner-anchor-economics ]]; then

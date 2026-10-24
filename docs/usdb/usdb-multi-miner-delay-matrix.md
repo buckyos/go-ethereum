@@ -35,7 +35,7 @@ BH/indexer 延迟通过透明的 Core RPC 代理暂停特定 `getblock` 请求�
 ## 本地与 CI
 
 ```bash
-# 准备 canonical Go、Cargo、Bitcoin Core 28.1 和 Ord 0.23.3 后执行：
+# 准备 canonical Go、Cargo 及 CI lock 对应的发布工具（当前 Core 31.1 / Ord 0.29.0）后执行：
 MATRIX_SCENARIO=multi-miner \
 MATRIX_WORK_ROOT=/tmp/usdb-multi-miner \
 BITCOIN_BIN_DIR=/path/to/bitcoin/bin ORD_BIN=/path/to/ord \

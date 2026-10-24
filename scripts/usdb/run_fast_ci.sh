@@ -79,6 +79,7 @@ run_go_checks() {
   fi
 
   env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_go_modules.py"
+  env PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT_DIR/tests/test_regtest_tools.py"
 
   log "running Go toolchain policy tests"
   "$ROOT_DIR/scripts/usdb/test_go_toolchain.sh"

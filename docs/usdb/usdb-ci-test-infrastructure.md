@@ -126,8 +126,28 @@ USDB_FAST_SCOPE=sourcedao scripts/usdb/run_fast_ci.sh
 | `usdb-integration.yml` | reusable only | 校验 lock、准备固定 regtest 工具、按 shard 执行和归档 |
 
 Nightly / Weekly 始终以触发 workflow 的 Go SHA 为 coordinator，并按
-`scripts/usdb/ci-revisions.json` checkout 精确的 USDB 与 SourceDAO revision。Bitcoin Core 28.1 archive
-checksum 和 ord 0.23.3 commit 固定在 `prepare_regtest_tools.sh`，每次 run 只构建一次工具 artifact。
+`scripts/usdb/ci-revisions.json` checkout 精确的 USDB 与 SourceDAO revision。
+`prepare_regtest_tools.sh` 直接构建该 USDB revision 的发布 Docker 阶段：
+`Dockerfile.usdb-services` 的 `ord-builder` 和 `Dockerfile.bitcoin-core` 的 `verifier`。
+当前基线为 Ord 0.29.0 / Bitcoin Core 31.1；Ord 源码 SHA、审查后的 Cargo.lock、Rust 1.91.0
+及 Core 下载校验和、签名验证均复用发布配置，不再单独维护旧版 regtest 固定值。
+
+每次 run 只构建一次工具 artifact，并在分发前运行真实 regtest，覆盖铭文、规范链高度与 hash、
+reorg 和重启。`regtest_tools.py` 要求 USDB checkout 与 CI lock 一致、发布构建输入干净，
+并检查 Dockerfile、Ord 数据集版本、Cargo.lock 与 CI Rust 版本一致。
+`toolchain-manifest.json` 记录 USDB revision、Ord 源码与依赖锁 hash、Core archive hash 和工具文件 hash。
+各 Nightly/Weekly shard 在执行前校验此清单及二进制版本，拒绝旧基线或损坏产物；
+清单与 `compatibility-report.json` 同时进入 shard 日志 artifact。
+
+本地准备相同工具需要 Docker 和 Python 3.11+，使用 CI lock 指定的干净 USDB checkout：
+
+```bash
+scripts/usdb/prepare_regtest_tools.sh --usdb-repo ../usdb --output /tmp/usdb-regtest-tools
+python3 scripts/usdb/regtest_tools.py verify --usdb-repo ../usdb --tools /tmp/usdb-regtest-tools
+```
+
+升级时先提交 USDB 发布配置，再更新 Go 仓库的 CI revision lock；若 Rust 版本变化，
+同时更新 lock 的 `toolchains.rust`。Ord 工具使用临时 regtest 数据，不复用主网或旧版索引。
 
 各 shard 由统一入口运行：
 
