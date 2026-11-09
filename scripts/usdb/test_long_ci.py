@@ -358,6 +358,36 @@ run_weekly miner-pass-upgrade-soak
                 self.assertGreaterEqual(port, 1024, f"{name}: {variable}")
                 self.assertLess(port, 32768, f"{name}: {variable}")
 
+    def test_reorg_failures_archive_runtime_logs_from_isolated_cases(self) -> None:
+        for shard in ("indexer-reorg", "indexer-validator"):
+            with self.subTest(shard=shard), tempfile.TemporaryDirectory() as root:
+                base = pathlib.Path(root)
+                fixture = base / "usdb/src/btc/usdb-indexer/scripts/run_reorg_regression.sh"
+                fixture.parent.mkdir(parents=True)
+                fixture.write_text("""#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$REGTEST_WORK_ROOT/isolated-case/indexer/logs"
+printf 'recovery-state-evidence\\n' > "$REGTEST_WORK_ROOT/isolated-case/indexer/logs/usdb-indexer_rCURRENT.log"
+exit 7
+""")
+                output = base / "output"
+                output.mkdir()
+                env = dict(os.environ, USDB_REPO_DIR=str(base / "usdb"),
+                           USDB_LONG_CI_WORK_DIR=str(base / "work"),
+                           USDB_LONG_CI_OUTPUT_DIR=str(output),
+                           BITCOIN_BIN_DIR="/isolated/core", ORD_BIN="/isolated/ord")
+                harness = f"""
+source {shlex.quote(str(RUNNER))}
+require_regtest_tools() {{ :; }}
+trap collect_diagnostics EXIT
+run_nightly "$1"
+"""
+                result = subprocess.run(["bash", "-c", harness, "test", shard],
+                                        env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+                copied = output / "diagnostics" / shard / "isolated-case/indexer/logs/usdb-indexer_rCURRENT.log"
+                self.assertEqual(copied.read_text(), "recovery-state-evidence\n")
+
     def test_run_case_reports_the_command_failure_before_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             summary = pathlib.Path(root) / "summary.md"

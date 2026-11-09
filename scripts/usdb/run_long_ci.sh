@@ -362,6 +362,7 @@ run_nightly() {
       require_regtest_tools
       run_case indexer-reorg \
         env BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          REGTEST_WORK_ROOT="$WORK_ROOT/indexer-reorg" \
           RUN_SMOKE_REORG_SUITE=1 RUN_LIVE_ORD_REORG_SUITE=1 \
           RUN_PENDING_RECOVERY_SUITE=1 RUN_HISTORICAL_VALIDATION_SUITE=1 \
           RUN_VALIDATOR_BLOCK_BODY_SUITE=0 \
@@ -371,6 +372,7 @@ run_nightly() {
       require_regtest_tools
       run_case indexer-validator \
         env BITCOIN_BIN_DIR="$BITCOIN_BIN_DIR" ORD_BIN="$ORD_BIN" \
+          REGTEST_WORK_ROOT="$WORK_ROOT/indexer-validator" \
           RUN_SMOKE_REORG_SUITE=0 RUN_LIVE_ORD_REORG_SUITE=0 \
           RUN_PENDING_RECOVERY_SUITE=0 RUN_HISTORICAL_VALIDATION_SUITE=0 \
           RUN_VALIDATOR_BLOCK_BODY_SUITE=1 \
